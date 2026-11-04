@@ -295,7 +295,7 @@
 "AboutProjectSourceLink" = "Project & source code";
 "AboutReportIssueLink" = "Report an issue";
 "AboutHeritageTitle" = "Built on PocketSword";
-"AboutHeritageText" = "SimpleScripture is an independent continuation of PocketSword, originally developed by Nic Carter and the CrossWire Bible Society.";
+"AboutHeritageText" = "SimpleScripture is an independent fork of PocketSword, originally developed by Nic Carter and the CrossWire Bible Society.";
 "AboutLicenseScope" = "App software: GNU GPL v2. Study texts and fonts retain their separate licenses.";
 "AboutApplicationSection" = "Application";
 "AboutTextsSection" = "Bible & study texts";
