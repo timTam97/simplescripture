@@ -1,6 +1,7 @@
 import XCTest
 import Observation
 import UIKit
+import os
 @testable import SimpleScripture
 
 /// Collects the FTS5 expressions a `SearchModel` actually queried with.
@@ -579,11 +580,11 @@ final class AppStateStoresTests: XCTestCase {
                 notificationCenter: NotificationCenter()
             )
         )
-        var changed = false
+        let changed = OSAllocatedUnfairLock(initialState: false)
         withObservationTracking {
             _ = library.bookmarkChildren(in: nil).count
         } onChange: {
-            changed = true
+            changed.withLock { $0 = true }
         }
 
         try library.addBookmarkFolder(
@@ -592,7 +593,7 @@ final class AppStateStoresTests: XCTestCase {
             parentID: nil
         )
 
-        XCTAssertTrue(changed)
+        XCTAssertTrue(changed.withLock { $0 })
         XCTAssertEqual(library.bookmarkChildren(in: nil).first?.name, "Study")
     }
 
@@ -1663,16 +1664,16 @@ final class AppStateStoresTests: XCTestCase {
         var didStartForeground = false
 
         func enterBuild() {
-            stateLock.lock()
-            activeBuilds += 1
-            maximumActiveBuilds = max(maximumActiveBuilds, activeBuilds)
-            stateLock.unlock()
+            stateLock.withLock {
+                activeBuilds += 1
+                maximumActiveBuilds = max(maximumActiveBuilds, activeBuilds)
+            }
         }
 
         func leaveBuild() {
-            stateLock.lock()
-            activeBuilds -= 1
-            stateLock.unlock()
+            stateLock.withLock {
+                activeBuilds -= 1
+            }
         }
 
         let manager = SearchIndexBackgroundManager(
@@ -1696,9 +1697,9 @@ final class AppStateStoresTests: XCTestCase {
             buildGate: buildGate,
             buildOperation: { _, _ in
                 enterBuild()
-                stateLock.lock()
-                didStartForeground = true
-                stateLock.unlock()
+                stateLock.withLock {
+                    didStartForeground = true
+                }
                 foregroundStarted.fulfill()
                 leaveBuild()
             }
@@ -1720,10 +1721,9 @@ final class AppStateStoresTests: XCTestCase {
         coordinator.build(module: "KJV")
         try? await Task.sleep(for: .milliseconds(100))
 
-        stateLock.lock()
-        let startedBeforeRelease = didStartForeground
-        let activeBeforeRelease = maximumActiveBuilds
-        stateLock.unlock()
+        let (startedBeforeRelease, activeBeforeRelease) = stateLock.withLock {
+            (didStartForeground, maximumActiveBuilds)
+        }
         XCTAssertFalse(startedBeforeRelease)
         XCTAssertEqual(activeBeforeRelease, 1)
 
@@ -1733,9 +1733,7 @@ final class AppStateStoresTests: XCTestCase {
             timeout: 2
         )
 
-        stateLock.lock()
-        let finalMaximum = maximumActiveBuilds
-        stateLock.unlock()
+        let finalMaximum = stateLock.withLock { maximumActiveBuilds }
         XCTAssertEqual(finalMaximum, 1)
     }
 
