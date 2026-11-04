@@ -103,7 +103,6 @@
 		051F22B51737549600DDFF13 /* SILEOT.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = SILEOT.ttf; path = Resources/fonts/SILEOT.ttf; sourceTree = "<group>"; };
 		051F22B8173758AD00DDFF13 /* OFL.txt */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = OFL.txt; path = Resources/fonts/OFL.txt; sourceTree = "<group>"; };
 		051FD8B316A3F52C00E7EF2B /* SimpleScripture.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = SimpleScripture.entitlements; sourceTree = "<group>"; };
-		D61005002026000000000001 /* SimpleScripture-Distribution.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "SimpleScripture-Distribution.entitlements"; sourceTree = "<group>"; };
 		0528684E13E00D300044A388 /* Padauk.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = Padauk.ttf; path = Resources/Padauk.ttf; sourceTree = "<group>"; };
 		052B52841101A32900FFDF01 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		054509C519A5DAA900E0A702 /* libbz2.1.0.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.1.0.tbd; path = ../iPhoneOS.sdk/usr/lib/libbz2.1.0.tbd; sourceTree = SDKROOT; };
@@ -180,6 +179,7 @@
 		D2BFE5FB25E9C4FD00E04366 /* MobileCoreServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MobileCoreServices.framework; path = System/Library/Frameworks/MobileCoreServices.framework; sourceTree = SDKROOT; };
 		D2BFE5FE25E9C52100E04366 /* CoreServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreServices.framework; path = System/Library/Frameworks/CoreServices.framework; sourceTree = SDKROOT; };
 		D2CF000026D100000000A001 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = PocketSword/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		D61005002026000000000001 /* SimpleScripture-Distribution.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "SimpleScripture-Distribution.entitlements"; sourceTree = "<group>"; };
 		E9617A320FF566F300690108 /* gen_xib_strings.py */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.python; path = gen_xib_strings.py; sourceTree = "<group>"; };
 		E9617A340FF566FF00690108 /* localize_xibs.py */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.python; path = localize_xibs.py; sourceTree = "<group>"; };
 		E9BD1D530ED34003006A60E9 /* LICENSE.txt */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = LICENSE.txt; path = Resources/doc/LICENSE.txt; sourceTree = "<group>"; };
@@ -784,7 +784,7 @@
 					"$(SRCROOT)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
-				PRODUCT_MODULE_NAME = PocketSword;
+				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 			};
@@ -811,7 +811,7 @@
 					"$(SRCROOT)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
-				PRODUCT_MODULE_NAME = PocketSword;
+				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
 			};
 			name = Release;
@@ -1112,7 +1112,7 @@
 					"$(SRCROOT)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
-				PRODUCT_MODULE_NAME = PocketSword;
+				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
 			};
 			name = Distribution;
