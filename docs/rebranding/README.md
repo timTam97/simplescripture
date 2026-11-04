@@ -24,7 +24,7 @@ The editable master is `simplescripture.svg`; `simplescripture-concept.png`
 shows the concept at large and small sizes. These are provisional, original
 vector shapes, not final application assets.
 
-### Latest icon: Gilded Folio
+### Gilded Folio artwork
 
 On 5 October 2026, the user requested a maximalist, skeuomorphic direction
 inspired by the tactile character of the original PocketSword icon.
@@ -50,7 +50,7 @@ export of the user's straightened Affinity document as its base. The binding
 was widened to fill the square while preserving the cross and oval proportions.
 Book and background are separate groups; the book contains editable component
 groups. The updated PNG was checked at 60, 120, and 256 px, and the cross's
-interior was verified to contain one RGB colour. The PNG is now installed as
+interior was verified to contain one RGB colour. The PNG was installed as
 the `SimpleScriptureAbout` image set and the universal 1024 px iOS `AppIcon`
 source. Xcode generates the required device icon sizes from the approved PNG.
 
@@ -60,16 +60,66 @@ width 896 on the 1024 px canvas. The pine background still covers the full squar
 This gives the corner fittings, page edges and bookmark room inside the rounded
 mask. The native master, SVG, PNG, 640 px preview and both application asset
 copies are updated. Rounded previews using the silhouette from the user's
-About screenshot were visually checked at 60, 120 and 320 px. The new export
+About screenshot were visually checked at 60, 120 and 320 px. That export
 is 1024 × 1024, opaque RGB with its sRGB profile, and both application copies
-match it byte for byte. The application has not been rebuilt or checked on a
-device after this artwork-only change.
+matched it byte for byte at that checkpoint. The application had not been
+rebuilt or checked on a device after that artwork-only change.
+
+The current Home Screen icon source and export are in
+[`misc/icon`](../../misc/icon/README.md). The editable Affinity master uses an
+832-unit-wide book inside the 1024-unit artboard, giving it more room within
+Apple's icon shape. Its opaque 1024 px PNG matches the `AppIcon` asset byte for
+byte. The About image and launch splash retain the earlier artwork described
+above. Unused Icon Composer examples and stock Illustrator/Photoshop templates
+have been removed; the retained source files and export instructions are listed
+in the icon README.
 
 The obsolete icon sets, launch images, screenshots, `.acorn` artwork and unused
 bitmap controls have been removed from the current checkout and Xcode resources
 (170 files, 17,240,098 bytes). The SwiftUI UI uses SF Symbols plus the new About
-image; the launch storyboard is a plain background. Copyright/contributor
+image; the launch storyboard was reduced to a plain background before the splash
+described below was added. Copyright/contributor
 notices and Git history are preserved.
+
+### Launch splash
+
+Added on 6 October 2026. The system launch storyboard and SwiftUI loading view
+show the approved Gilded Folio icon above the SimpleScripture name, centered on
+the screen. System background and label colors adapt to light and dark mode.
+The app adds an accessible progress indicator while preparation runs and opens
+the reader immediately when it finishes; there is no minimum display time.
+
+`LaunchIcon.imageset` contains rounded, transparent 128 pt artwork at 1×, 2×
+and 3×. Both launch surfaces use those same images, since the system storyboard
+cannot execute custom clipping code. Regenerate them after changing the approved
+About artwork:
+
+```sh
+xcrun swift docs/rebranding/generate-launch-icon.swift
+```
+
+Keep the storyboard and `LaunchView` layout in sync: a 128 pt icon, a 24 pt gap,
+and the name in 28 pt semibold system type within a 34 pt label. Xcode previews
+in `SwiftUISupportingViews.swift` cover the loading view in both appearances and
+the compiled system storyboard.
+
+Verification on iPhone 18 Pro / iOS 27 simulator:
+
+- Xcode build-for-testing passed. All four focused tests passed without skips:
+  launch migrations, reset behavior, reading-session restoration and access to
+  all four workspaces.
+- Light and dark loading previews, landscape with the largest Dynamic Type
+  setting, and the light system-storyboard preview were visually checked.
+- Normal launch reached readable scripture, chapter navigation worked, and
+  rotating to landscape and back preserved the reference.
+- The brief system-to-app transition was not captured during a normal launch;
+  appearance was checked using the rendered previews. Physical-device launch
+  remains unverified.
+
+On 7 October 2026, after the demo/template cleanup and `Info.plist` relocation,
+Xcode build-for-testing and the same four tests passed again with zero skips.
+Asset manifests, PNG dimensions, plist/storyboard syntax and local documentation
+links also passed validation.
 
 On 5 October 2026, the primary website at
 `https://www.simplescripture.co.za/` was checked. It uses “Simple Scripture” for
@@ -149,8 +199,13 @@ Completed on 5 October 2026:
   configuration requires an Apple developer team that supports iCloud.
   The old CrossWire keychain group and hardcoded `get-task-allow` entitlement
   are removed; signing supplies the app's default identity.
-- Project/target/scheme names and the Swift module remain `PocketSword`.
-  Shared schemes and the test host point to the renamed app product.
+- Project/target/scheme names and the Swift module remained `PocketSword` at
+  this stage. On 4 November 2026, they were renamed to `SimpleScripture`,
+  `SimpleScriptureTests` and `SimpleScriptureUITests` as appropriate. Test
+  imports, app/delegate symbols, UI test names and bridging headers now use
+  the new names. The shared `SimpleScripture` scheme builds both test bundles
+  and retains `Distribution` for archives. The UI test target's application
+  selection was refreshed to `SimpleScripture` so Xcode can launch it.
 - `sword://` remains registered. Its URL-type name and the search-index
   background-task identifier now derive from the new bundle ID.
 

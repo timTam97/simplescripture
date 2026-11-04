@@ -50,11 +50,11 @@
 		5A1F70B00000000000WAVE912 /* SwiftUINativeReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B00000000000WAVE911 /* SwiftUINativeReader.swift */; };
 		5A1F70B00000000000WAVE922 /* PSEntryDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B00000000000WAVE921 /* PSEntryDocument.swift */; };
 		5A1F70B00000000000ZK002 /* PSModuleController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B00000000000ZK001 /* PSModuleController.swift */; };
-		5A1F70B00000000000ZS002 /* PocketSwordAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B00000000000ZS001 /* PocketSwordAppDelegate.swift */; };
+		5A1F70B00000000000ZS002 /* SimpleScriptureAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B00000000000ZS001 /* SimpleScriptureAppDelegate.swift */; };
 		A100000000000000000001F3 /* PSSearchEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F3 /* PSSearchEngine.swift */; };
 		A100000000000000000001F9 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F9 /* libsqlite3.tbd */; };
 		A9C105E31C4D6E9C006C755A /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A9C105E21C4D6E9C006C755A /* Security.framework */; };
-		B20000000000000000000002 /* PocketSwordUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* PocketSwordUITests.swift */; };
+		B20000000000000000000002 /* SimpleScriptureUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* SimpleScriptureUITests.swift */; };
 		B21000000000000000000011 /* AppModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000001 /* AppModels.swift */; };
 		B21000000000000000000012 /* URLRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000002 /* URLRouter.swift */; };
 		B21000000000000000000013 /* URLRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000003 /* URLRouterTests.swift */; };
@@ -66,7 +66,7 @@
 		B26000000000000000000011 /* SwiftUISearchViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26000000000000000000001 /* SwiftUISearchViews.swift */; };
 		B26000000000000000000012 /* SearchIndexBackgroundManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = B26000000000000000000002 /* SearchIndexBackgroundManager.swift */; };
 		B27000000000000000000012 /* SwiftUIReaderChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = B27000000000000000000002 /* SwiftUIReaderChrome.swift */; };
-		B280000000000000000000011 /* PocketSwordApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28000000000000000000001 /* PocketSwordApp.swift */; };
+		B280000000000000000000011 /* SimpleScriptureApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28000000000000000000001 /* SimpleScriptureApp.swift */; };
 		B280000000000000000000021 /* ReadingWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28000000000000000000002 /* ReadingWorkspace.swift */; };
 		B280000000000000000000031 /* SwiftUIStudyViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28000000000000000000003 /* SwiftUIStudyViews.swift */; };
 		B280000000000000000000041 /* PSInfoPopupContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28000000000000000000004 /* PSInfoPopupContent.swift */; };
@@ -103,7 +103,6 @@
 		051F22B51737549600DDFF13 /* SILEOT.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = SILEOT.ttf; path = Resources/fonts/SILEOT.ttf; sourceTree = "<group>"; };
 		051F22B8173758AD00DDFF13 /* OFL.txt */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = OFL.txt; path = Resources/fonts/OFL.txt; sourceTree = "<group>"; };
 		051FD8B316A3F52C00E7EF2B /* SimpleScripture.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = SimpleScripture.entitlements; sourceTree = "<group>"; };
-		D61005002026000000000001 /* SimpleScripture-Distribution.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "SimpleScripture-Distribution.entitlements"; sourceTree = "<group>"; };
 		0528684E13E00D300044A388 /* Padauk.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = Padauk.ttf; path = Resources/Padauk.ttf; sourceTree = "<group>"; };
 		052B52841101A32900FFDF01 /* Settings.bundle */ = {isa = PBXFileReference; lastKnownFileType = "wrapper.plug-in"; path = Settings.bundle; sourceTree = "<group>"; };
 		054509C519A5DAA900E0A702 /* libbz2.1.0.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libbz2.1.0.tbd; path = ../iPhoneOS.sdk/usr/lib/libbz2.1.0.tbd; sourceTree = SDKROOT; };
@@ -119,14 +118,14 @@
 		1D30AB110D05D00D00671497 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
 		1D6058910D05DD3D006BFB54 /* SimpleScripture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SimpleScripture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1DF5F4DF0D08C38300B7A737 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
-		33354D062FCD55D800252A83 /* PocketSword-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "PocketSword-Bridging-Header.h"; path = "misc/PocketSword-Bridging-Header.h"; sourceTree = "<group>"; };
+		33354D062FCD55D800252A83 /* SimpleScripture-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "SimpleScripture-Bridging-Header.h"; path = "misc/SimpleScripture-Bridging-Header.h"; sourceTree = "<group>"; };
 		5A1F70B0000000000000C001 /* AppConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConstants.swift; sourceTree = "<group>"; };
 		5A1F70B0000000000000CA01 /* PSContent.sqlite */ = {isa = PBXFileReference; lastKnownFileType = file; name = PSContent.sqlite; path = Resources/PSContent.sqlite; sourceTree = "<group>"; };
 		5A1F70B0000000000000CB01 /* Versification-KJV.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "Versification-KJV.json"; path = "Resources/Versification-KJV.json"; sourceTree = "<group>"; };
 		5A1F70B0000000000000CS01 /* PSContentStoreTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = PSContentStoreTests.swift; path = Classes/PSContentStoreTests.swift; sourceTree = "<group>"; };
 		5A1F70B0000000000000F001 /* PersistedFormatTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = PersistedFormatTests.swift; path = Classes/PersistedFormatTests.swift; sourceTree = "<group>"; };
-		5A1F70B0000000000000F003 /* PocketSwordTests-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "PocketSwordTests-Bridging-Header.h"; path = "misc/PocketSwordTests-Bridging-Header.h"; sourceTree = "<group>"; };
-		5A1F70B0000000000000F010 /* PocketSwordTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PocketSwordTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A1F70B0000000000000F003 /* SimpleScriptureTests-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "SimpleScriptureTests-Bridging-Header.h"; path = "misc/SimpleScriptureTests-Bridging-Header.h"; sourceTree = "<group>"; };
+		5A1F70B0000000000000F010 /* SimpleScriptureTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SimpleScriptureTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A1F70B0000000000000G001 /* PSBookmarkObject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PSBookmarkObject.swift; path = Classes/PSBookmarkObject.swift; sourceTree = "<group>"; };
 		5A1F70B0000000000000H001 /* PSBookmark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PSBookmark.swift; path = Classes/PSBookmark.swift; sourceTree = "<group>"; };
 		5A1F70B0000000000000I001 /* PSBookmarkFolder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PSBookmarkFolder.swift; path = Classes/PSBookmarkFolder.swift; sourceTree = "<group>"; };
@@ -150,14 +149,14 @@
 		5A1F70B00000000000WAVE911 /* SwiftUINativeReader.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = SwiftUINativeReader.swift; sourceTree = "<group>"; };
 		5A1F70B00000000000WAVE921 /* PSEntryDocument.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = PSEntryDocument.swift; sourceTree = "<group>"; };
 		5A1F70B00000000000ZK001 /* PSModuleController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PSModuleController.swift; path = Classes/PSModuleController.swift; sourceTree = "<group>"; };
-		5A1F70B00000000000ZS001 /* PocketSwordAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PocketSwordAppDelegate.swift; path = Classes/PocketSwordAppDelegate.swift; sourceTree = "<group>"; };
-		8D1107310486CEB800E47090 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = misc/Info.plist; sourceTree = "<group>"; };
+		5A1F70B00000000000ZS001 /* SimpleScriptureAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SimpleScriptureAppDelegate.swift; path = Classes/SimpleScriptureAppDelegate.swift; sourceTree = "<group>"; };
+		8D1107310486CEB800E47090 /* Info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = Info.plist; path = misc/icon/Info.plist; sourceTree = "<group>"; };
 		A100000000000000000000F3 /* PSSearchEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PSSearchEngine.swift; path = Classes/PSSearchEngine.swift; sourceTree = "<group>"; };
 		A100000000000000000000F9 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		A98A6E6C1C64A6860083ECB8 /* libpthread.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libpthread.tbd; path = usr/lib/libpthread.tbd; sourceTree = SDKROOT; };
 		A9C105E21C4D6E9C006C755A /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
-		B20000000000000000000001 /* PocketSwordUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PocketSwordUITests.swift; path = Tests/PocketSwordUITests.swift; sourceTree = "<group>"; };
-		B20000000000000000000003 /* PocketSwordUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PocketSwordUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B20000000000000000000001 /* SimpleScriptureUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SimpleScriptureUITests.swift; path = Tests/SimpleScriptureUITests.swift; sourceTree = "<group>"; };
+		B20000000000000000000003 /* SimpleScriptureUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SimpleScriptureUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B21000000000000000000001 /* AppModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModels.swift; sourceTree = "<group>"; };
 		B21000000000000000000002 /* URLRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLRouter.swift; sourceTree = "<group>"; };
 		B21000000000000000000003 /* URLRouterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = URLRouterTests.swift; path = Classes/URLRouterTests.swift; sourceTree = "<group>"; };
@@ -169,7 +168,7 @@
 		B26000000000000000000001 /* SwiftUISearchViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftUISearchViews.swift; sourceTree = "<group>"; };
 		B26000000000000000000002 /* SearchIndexBackgroundManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchIndexBackgroundManager.swift; sourceTree = "<group>"; };
 		B27000000000000000000002 /* SwiftUIReaderChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftUIReaderChrome.swift; sourceTree = "<group>"; };
-		B28000000000000000000001 /* PocketSwordApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketSwordApp.swift; sourceTree = "<group>"; };
+		B28000000000000000000001 /* SimpleScriptureApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimpleScriptureApp.swift; sourceTree = "<group>"; };
 		B28000000000000000000002 /* ReadingWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingWorkspace.swift; sourceTree = "<group>"; };
 		B28000000000000000000003 /* SwiftUIStudyViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftUIStudyViews.swift; sourceTree = "<group>"; };
 		B28000000000000000000004 /* PSInfoPopupContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSInfoPopupContent.swift; sourceTree = "<group>"; };
@@ -180,6 +179,7 @@
 		D2BFE5FB25E9C4FD00E04366 /* MobileCoreServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MobileCoreServices.framework; path = System/Library/Frameworks/MobileCoreServices.framework; sourceTree = SDKROOT; };
 		D2BFE5FE25E9C52100E04366 /* CoreServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreServices.framework; path = System/Library/Frameworks/CoreServices.framework; sourceTree = SDKROOT; };
 		D2CF000026D100000000A001 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = PocketSword/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		D61005002026000000000001 /* SimpleScripture-Distribution.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = "SimpleScripture-Distribution.entitlements"; sourceTree = "<group>"; };
 		E9617A320FF566F300690108 /* gen_xib_strings.py */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.python; path = gen_xib_strings.py; sourceTree = "<group>"; };
 		E9617A340FF566FF00690108 /* localize_xibs.py */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.script.python; path = localize_xibs.py; sourceTree = "<group>"; };
 		E9BD1D530ED34003006A60E9 /* LICENSE.txt */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; name = LICENSE.txt; path = Resources/doc/LICENSE.txt; sourceTree = "<group>"; };
@@ -319,7 +319,7 @@
 		054C55B611AD096F00633371 /* base */ = {
 			isa = PBXGroup;
 			children = (
-				5A1F70B00000000000ZS001 /* PocketSwordAppDelegate.swift */,
+				5A1F70B00000000000ZS001 /* SimpleScriptureAppDelegate.swift */,
 			);
 			name = base;
 			sourceTree = "<group>";
@@ -405,7 +405,7 @@
 				B26000000000000000000001 /* SwiftUISearchViews.swift */,
 				B26000000000000000000002 /* SearchIndexBackgroundManager.swift */,
 				B27000000000000000000002 /* SwiftUIReaderChrome.swift */,
-				B28000000000000000000001 /* PocketSwordApp.swift */,
+				B28000000000000000000001 /* SimpleScriptureApp.swift */,
 				B28000000000000000000002 /* ReadingWorkspace.swift */,
 				B28000000000000000000003 /* SwiftUIStudyViews.swift */,
 				B28000000000000000000004 /* PSInfoPopupContent.swift */,
@@ -431,8 +431,8 @@
 			isa = PBXGroup;
 			children = (
 				1D6058910D05DD3D006BFB54 /* SimpleScripture.app */,
-				5A1F70B0000000000000F010 /* PocketSwordTests.xctest */,
-				B20000000000000000000003 /* PocketSwordUITests.xctest */,
+				5A1F70B0000000000000F010 /* SimpleScriptureTests.xctest */,
+				B20000000000000000000003 /* SimpleScriptureUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -462,7 +462,7 @@
 				8D1107310486CEB800E47090 /* Info.plist */,
 				E9617A340FF566FF00690108 /* localize_xibs.py */,
 				E9617A320FF566F300690108 /* gen_xib_strings.py */,
-				33354D062FCD55D800252A83 /* PocketSword-Bridging-Header.h */,
+				33354D062FCD55D800252A83 /* SimpleScripture-Bridging-Header.h */,
 			);
 			name = misc;
 			sourceTree = "<group>";
@@ -516,7 +516,7 @@
 				5A1F70B0000000000000WAVE9T1 /* PSChapterDocumentParityTests.swift */,
 				5A1F70B0000000000000RS01 /* PSRefSemanticsTests.swift */,
 				5A1F70B000000000000SPT01 /* PSSearchIndexParityTests.swift */,
-				5A1F70B0000000000000F003 /* PocketSwordTests-Bridging-Header.h */,
+				5A1F70B0000000000000F003 /* SimpleScriptureTests-Bridging-Header.h */,
 			);
 			name = PocketSwordTests;
 			sourceTree = "<group>";
@@ -524,7 +524,7 @@
 		B20000000000000000000010 /* PocketSwordUITests */ = {
 			isa = PBXGroup;
 			children = (
-				B20000000000000000000001 /* PocketSwordUITests.swift */,
+				B20000000000000000000001 /* SimpleScriptureUITests.swift */,
 			);
 			name = PocketSwordUITests;
 			sourceTree = "<group>";
@@ -542,9 +542,9 @@
 /* End PBXHeadersBuildPhase section */
 
 /* Begin PBXNativeTarget section */
-		1D6058900D05DD3D006BFB54 /* PocketSword */ = {
+		1D6058900D05DD3D006BFB54 /* SimpleScripture */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 1D6058960D05DD3E006BFB54 /* Build configuration list for PBXNativeTarget "PocketSword" */;
+			buildConfigurationList = 1D6058960D05DD3E006BFB54 /* Build configuration list for PBXNativeTarget "SimpleScripture" */;
 			buildPhases = (
 				1D60588D0D05DD3D006BFB54 /* Resources */,
 				D2BFE54325E76FF000E04366 /* Headers */,
@@ -555,14 +555,14 @@
 			);
 			dependencies = (
 			);
-			name = PocketSword;
+			name = SimpleScripture;
 			productName = SimpleScripture;
 			productReference = 1D6058910D05DD3D006BFB54 /* SimpleScripture.app */;
 			productType = "com.apple.product-type.application";
 		};
-		5A1F70B0000000000000F020 /* PocketSwordTests */ = {
+		5A1F70B0000000000000F020 /* SimpleScriptureTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5A1F70B0000000000000F050 /* Build configuration list for PBXNativeTarget "PocketSwordTests" */;
+			buildConfigurationList = 5A1F70B0000000000000F050 /* Build configuration list for PBXNativeTarget "SimpleScriptureTests" */;
 			buildPhases = (
 				5A1F70B0000000000000F030 /* Sources */,
 				5A1F70B0000000000000F031 /* Frameworks */,
@@ -573,14 +573,14 @@
 			dependencies = (
 				5A1F70B0000000000000F041 /* PBXTargetDependency */,
 			);
-			name = PocketSwordTests;
+			name = SimpleScriptureTests;
 			productName = PocketSwordTests;
-			productReference = 5A1F70B0000000000000F010 /* PocketSwordTests.xctest */;
+			productReference = 5A1F70B0000000000000F010 /* SimpleScriptureTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		B20000000000000000000020 /* PocketSwordUITests */ = {
+		B20000000000000000000020 /* SimpleScriptureUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B20000000000000000000050 /* Build configuration list for PBXNativeTarget "PocketSwordUITests" */;
+			buildConfigurationList = B20000000000000000000050 /* Build configuration list for PBXNativeTarget "SimpleScriptureUITests" */;
 			buildPhases = (
 				B20000000000000000000030 /* Sources */,
 				B20000000000000000000031 /* Frameworks */,
@@ -591,9 +591,9 @@
 			dependencies = (
 				B20000000000000000000041 /* PBXTargetDependency */,
 			);
-			name = PocketSwordUITests;
+			name = SimpleScriptureUITests;
 			productName = PocketSwordUITests;
-			productReference = B20000000000000000000003 /* PocketSwordUITests.xctest */;
+			productReference = B20000000000000000000003 /* SimpleScriptureUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -603,7 +603,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 2700;
+				LastUpgradeCheck = 2720;
 				TargetAttributes = {
 					5A1F70B0000000000000F020 = {
 						CreatedOnToolsVersion = 26.0;
@@ -615,7 +615,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C01FCF4E08A954540054247B /* Build configuration list for PBXProject "PocketSword" */;
+			buildConfigurationList = C01FCF4E08A954540054247B /* Build configuration list for PBXProject "SimpleScripture" */;
 			compatibilityVersion = "Xcode 3.2";
 			developmentRegion = en;
 			hasScannedForEncodings = 1;
@@ -626,9 +626,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				1D6058900D05DD3D006BFB54 /* PocketSword */,
-				5A1F70B0000000000000F020 /* PocketSwordTests */,
-				B20000000000000000000020 /* PocketSwordUITests */,
+				1D6058900D05DD3D006BFB54 /* SimpleScripture */,
+				5A1F70B0000000000000F020 /* SimpleScriptureTests */,
+				B20000000000000000000020 /* SimpleScriptureUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -683,7 +683,7 @@
 				B26000000000000000000011 /* SwiftUISearchViews.swift in Sources */,
 				B26000000000000000000012 /* SearchIndexBackgroundManager.swift in Sources */,
 				B27000000000000000000012 /* SwiftUIReaderChrome.swift in Sources */,
-				B280000000000000000000011 /* PocketSwordApp.swift in Sources */,
+				B280000000000000000000011 /* SimpleScriptureApp.swift in Sources */,
 				B280000000000000000000021 /* ReadingWorkspace.swift in Sources */,
 				B280000000000000000000031 /* SwiftUIStudyViews.swift in Sources */,
 				B280000000000000000000041 /* PSInfoPopupContent.swift in Sources */,
@@ -699,7 +699,7 @@
 				5A1F70B0000000000000LR02 /* PSRefLinkRouter.swift in Sources */,
 				5A1F70B00000000000CTR102 /* PSContentStore.swift in Sources */,
 				5A1F70B00000000000CTR502 /* PSContentReader.swift in Sources */,
-				5A1F70B00000000000ZS002 /* PocketSwordAppDelegate.swift in Sources */,
+				5A1F70B00000000000ZS002 /* SimpleScriptureAppDelegate.swift in Sources */,
 				5A1F70B00000000000ZK002 /* PSModuleController.swift in Sources */,
 				A100000000000000000001F3 /* PSSearchEngine.swift in Sources */,
 				5A1F70B0000000000000O002 /* PSSearchQuery.swift in Sources */,
@@ -731,7 +731,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B20000000000000000000002 /* PocketSwordUITests.swift in Sources */,
+				B20000000000000000000002 /* SimpleScriptureUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -740,12 +740,12 @@
 /* Begin PBXTargetDependency section */
 		5A1F70B0000000000000F041 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 1D6058900D05DD3D006BFB54 /* PocketSword */;
+			target = 1D6058900D05DD3D006BFB54 /* SimpleScripture */;
 			targetProxy = 5A1F70B0000000000000F040 /* PBXContainerItemProxy */;
 		};
 		B20000000000000000000041 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 1D6058900D05DD3D006BFB54 /* PocketSword */;
+			target = 1D6058900D05DD3D006BFB54 /* SimpleScripture */;
 			targetProxy = B20000000000000000000040 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -776,7 +776,7 @@
 					"$(SDKROOT)/usr/lib",
 				);
 				GCC_OPTIMIZATION_LEVEL = 0;
-				INFOPLIST_FILE = misc/Info.plist;
+				INFOPLIST_FILE = misc/icon/Info.plist;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LIBRARY_SEARCH_PATHS = (
@@ -784,7 +784,7 @@
 					"$(SRCROOT)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
-				PRODUCT_MODULE_NAME = PocketSword;
+				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 			};
@@ -803,7 +803,7 @@
 					"$(inherited)",
 					"$(SDKROOT)/usr/lib",
 				);
-				INFOPLIST_FILE = misc/Info.plist;
+				INFOPLIST_FILE = misc/icon/Info.plist;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LIBRARY_SEARCH_PATHS = (
@@ -811,7 +811,7 @@
 					"$(SRCROOT)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
-				PRODUCT_MODULE_NAME = PocketSword;
+				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
 			};
 			name = Release;
@@ -830,7 +830,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScriptureTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				SWIFT_OBJC_BRIDGING_HEADER = "misc/PocketSwordTests-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "misc/SimpleScriptureTests-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -852,7 +852,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScriptureTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				SWIFT_OBJC_BRIDGING_HEADER = "misc/PocketSwordTests-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "misc/SimpleScriptureTests-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -874,7 +874,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScriptureTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
-				SWIFT_OBJC_BRIDGING_HEADER = "misc/PocketSwordTests-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "misc/SimpleScriptureTests-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
@@ -892,11 +892,12 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScriptureUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE = "";
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = PocketSword;
+				TEST_TARGET_NAME = SimpleScripture;
 			};
 			name = Debug;
 		};
@@ -910,11 +911,12 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScriptureUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE = "";
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = PocketSword;
+				TEST_TARGET_NAME = SimpleScripture;
 			};
 			name = Release;
 		};
@@ -928,11 +930,12 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScriptureUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE = "";
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = PocketSword;
+				TEST_TARGET_NAME = SimpleScripture;
 			};
 			name = Distribution;
 		};
@@ -940,6 +943,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
@@ -981,7 +985,7 @@
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = singlefile;
-				SWIFT_OBJC_BRIDGING_HEADER = "misc/PocketSword-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "misc/SimpleScripture-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
@@ -993,6 +997,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
@@ -1031,7 +1036,7 @@
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OBJC_BRIDGING_HEADER = "misc/PocketSword-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "misc/SimpleScripture-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
@@ -1044,6 +1049,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
 				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
@@ -1083,7 +1089,7 @@
 				SDKROOT = iphoneos;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OBJC_BRIDGING_HEADER = "misc/PocketSword-Bridging-Header.h";
+				SWIFT_OBJC_BRIDGING_HEADER = "misc/SimpleScripture-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_STRICT_CONCURRENCY = minimal;
 				SWIFT_VERSION = 5.0;
@@ -1104,7 +1110,7 @@
 					"$(inherited)",
 					"$(SDKROOT)/usr/lib",
 				);
-				INFOPLIST_FILE = misc/Info.plist;
+				INFOPLIST_FILE = misc/icon/Info.plist;
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LIBRARY_SEARCH_PATHS = (
@@ -1112,7 +1118,7 @@
 					"$(SRCROOT)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
-				PRODUCT_MODULE_NAME = PocketSword;
+				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
 			};
 			name = Distribution;
@@ -1120,7 +1126,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		1D6058960D05DD3E006BFB54 /* Build configuration list for PBXNativeTarget "PocketSword" */ = {
+		1D6058960D05DD3E006BFB54 /* Build configuration list for PBXNativeTarget "SimpleScripture" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				1D6058940D05DD3E006BFB54 /* Debug */,
@@ -1130,7 +1136,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		5A1F70B0000000000000F050 /* Build configuration list for PBXNativeTarget "PocketSwordTests" */ = {
+		5A1F70B0000000000000F050 /* Build configuration list for PBXNativeTarget "SimpleScriptureTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				5A1F70B0000000000000F051 /* Debug */,
@@ -1140,7 +1146,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B20000000000000000000050 /* Build configuration list for PBXNativeTarget "PocketSwordUITests" */ = {
+		B20000000000000000000050 /* Build configuration list for PBXNativeTarget "SimpleScriptureUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B20000000000000000000051 /* Debug */,
@@ -1150,7 +1156,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C01FCF4E08A954540054247B /* Build configuration list for PBXProject "PocketSword" */ = {
+		C01FCF4E08A954540054247B /* Build configuration list for PBXProject "SimpleScripture" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C01FCF4F08A954540054247B /* Debug */,

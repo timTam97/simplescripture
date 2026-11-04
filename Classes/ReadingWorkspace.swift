@@ -7,7 +7,7 @@
 //  `ReadingWorkspaceModel` is the coordinator. It owns the two `ReaderPaneModel`s
 //  (Bible and commentary), the chapter-load fan-out (`displayChapter`), study-popup
 //  routing, and the verse-menu / bookmark-highlight state.
-//  `ReadingModeSwitcher` in `PocketSwordApp.swift` renders whichever pane is active.
+//  `ReadingModeSwitcher` in `SimpleScriptureApp.swift` renders whichever pane is active.
 //
 //  `ReaderPaneModel` is one reading surface: the chapter document, its
 //  `ReaderChromeModel`, and the per-pane scroll/verse bookkeeping. Two exist for

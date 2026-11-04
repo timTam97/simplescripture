@@ -1,6 +1,6 @@
 //
-//  PocketSwordApp.swift
-//  PocketSword
+//  SimpleScriptureApp.swift
+//  SimpleScripture
 //
 //  The app's entry point and top-level navigation.
 //
@@ -28,7 +28,7 @@
 //
 //  The rotation-lock preference is enforced by
 //  `UIWindowSceneDelegate.supportedInterfaceOrientations(for:)`, implemented by
-//  `PocketSwordSceneOrientationDelegate`.
+//  `SimpleScriptureSceneOrientationDelegate`.
 //
 
 import BackgroundTasks
@@ -45,12 +45,12 @@ enum LaunchPhase: Equatable {
 }
 
 @main
-struct PocketSwordApp: App {
+struct SimpleScriptureApp: App {
     /// The app delegate exists for two things UIKit still owns: the
     /// `BGTaskScheduler` registration (which must happen before
     /// `didFinishLaunching` returns) and the scene-orientation hook. It holds no
     /// app state — that is all in `AppSession`.
-    @UIApplicationDelegateAdaptor(PocketSwordAppDelegate.self)
+    @UIApplicationDelegateAdaptor(SimpleScriptureAppDelegate.self)
     private var appDelegate
 
     @Environment(\.scenePhase) private var scenePhase
@@ -85,7 +85,8 @@ struct PocketSwordApp: App {
     }
 }
 
-/// Launch gate. Shows the spinner while `LaunchCoordinator` runs, then the app.
+/// Launch gate. Keeps the splash visible while `LaunchCoordinator` runs, then
+/// opens the app as soon as preparation finishes.
 private struct RootView: View {
     let session: AppSession
     let reading: ReadingWorkspaceModel

@@ -477,9 +477,10 @@ private struct ParagraphRow: View {
             // The bookmark highlight is applied by the renderer, UNDER the search
             // jacket — see `ChapterTextRenderer.text(for:style:)`.
             attributed += ChapterTextRenderer.text(for: verse, style: style)
-            out = out + Text(attributed).customAttribute(
+            let verseText = Text(attributed).customAttribute(
                 VerseTextAttribute(verse: verse.number)
             )
+            out = Text("\(out)\(verseText)")
         }
         return out
     }

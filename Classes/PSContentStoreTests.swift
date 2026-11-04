@@ -1,6 +1,6 @@
 //
 //  PSContentStoreTests.swift
-//  PocketSwordTests
+//  SimpleScriptureTests
 //
 //  Tests for the baked content store (Resources/PSContent.sqlite) and the reader
 //  on top of it. Fixtures in Tests/Fixtures were captured from the live SWORD
@@ -10,7 +10,7 @@
 
 import XCTest
 import SQLite3
-@testable import PocketSword
+@testable import SimpleScripture
 
 final class PSContentStoreTests: XCTestCase {
 

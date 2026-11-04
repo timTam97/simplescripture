@@ -1,0 +1,9 @@
+{
+  "id" : "f738af8a-7239-47af-aa5c-df820fbaa54d",
+  "targets" : [
+    {
+      "id" : "0bd62767-44b8-4461-bd68-2e4dbd05a61c",
+      "name" : "SimpleScripture"
+    }
+  ]
+}

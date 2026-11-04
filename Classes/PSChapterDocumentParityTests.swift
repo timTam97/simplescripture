@@ -1,6 +1,6 @@
 //
 //  PSChapterDocumentParityTests.swift
-//  PocketSwordTests
+//  SimpleScriptureTests
 //
 //  The native reader's DATA gate: `PSChapterDocumentBuilder` must agree with the
 //  byte-locked HTML emitter about what a chapter says.
@@ -27,7 +27,7 @@
 //
 
 import XCTest
-@testable import PocketSword
+@testable import SimpleScripture
 
 final class PSChapterDocumentParityTests: XCTestCase {
 

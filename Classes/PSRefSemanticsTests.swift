@@ -1,6 +1,6 @@
 //
 //  PSRefSemanticsTests.swift
-//  PocketSwordTests
+//  SimpleScriptureTests
 //
 //  The acceptance criterion for the versification + reference layer: it must
 //  reproduce the SWORD engine's reference semantics exactly, and the `x` /
@@ -27,7 +27,7 @@
 //
 
 import XCTest
-@testable import PocketSword
+@testable import SimpleScripture
 
 final class PSRefSemanticsTests: XCTestCase {
 

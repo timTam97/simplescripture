@@ -7,12 +7,49 @@ struct LaunchView: View {
         ZStack {
             Color(uiColor: .systemBackground)
                 .ignoresSafeArea()
+            // Match LaunchScreen.storyboard so the system-to-app handoff keeps
+            // the artwork and name in the same place.
+            VStack(spacing: 24) {
+                Image("LaunchIcon")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 128, height: 128)
+                    .accessibilityHidden(true)
+                Text(verbatim: AboutInformation.appName)
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(22.0 / 28.0)
+                    .frame(height: 34)
+            }
+            .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
+            .accessibilityIdentifier("launch.brand")
+        }
+        .overlay(alignment: .bottom) {
             ProgressView()
-                .controlSize(.large)
+                .tint(Color("AboutAccent"))
+                .padding(.bottom, 32)
                 .accessibilityLabel(Text("LaunchProgressLabel"))
                 .accessibilityIdentifier("launch.progress")
         }
     }
+}
+
+#Preview("Launch — Light") {
+    LaunchView()
+        .preferredColorScheme(.light)
+}
+
+#Preview("Launch — Dark") {
+    LaunchView()
+        .preferredColorScheme(.dark)
+}
+
+#Preview("System Launch Screen") {
+    UIStoryboard(name: "LaunchScreen", bundle: .main)
+        .instantiateInitialViewController()!
 }
 
 struct ReferencePickerBook: Identifiable, Equatable, Hashable {
