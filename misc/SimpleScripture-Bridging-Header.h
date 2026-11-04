@@ -1,6 +1,6 @@
 //
-//  PocketSword-Bridging-Header.h
-//  PocketSword
+//  SimpleScripture-Bridging-Header.h
+//  SimpleScripture
 //
 //  The app target contains no Objective-C implementation; the only thing Swift
 //  imports through here is globals.h. Keep it that way.

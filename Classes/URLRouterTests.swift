@@ -1,5 +1,5 @@
 import XCTest
-@testable import PocketSword
+@testable import SimpleScripture
 
 final class URLRouterTests: XCTestCase {
     private func router() throws -> URLRouter {

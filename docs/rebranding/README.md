@@ -199,8 +199,13 @@ Completed on 5 October 2026:
   configuration requires an Apple developer team that supports iCloud.
   The old CrossWire keychain group and hardcoded `get-task-allow` entitlement
   are removed; signing supplies the app's default identity.
-- Project/target/scheme names and the Swift module remain `PocketSword`.
-  Shared schemes and the test host point to the renamed app product.
+- Project/target/scheme names and the Swift module remained `PocketSword` at
+  this stage. On 4 November 2026, they were renamed to `SimpleScripture`,
+  `SimpleScriptureTests` and `SimpleScriptureUITests` as appropriate. Test
+  imports, app/delegate symbols, UI test names and bridging headers now use
+  the new names. The shared `SimpleScripture` scheme builds both test bundles
+  and retains `Distribution` for archives. The UI test target's application
+  selection was refreshed to `SimpleScripture` so Xcode can launch it.
 - `sword://` remains registered. Its URL-type name and the search-index
   background-task identifier now derive from the new bundle ID.
 

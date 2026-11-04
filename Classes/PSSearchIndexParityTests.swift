@@ -1,6 +1,6 @@
 //
 //  PSSearchIndexParityTests.swift
-//  PocketSwordTests
+//  SimpleScriptureTests
 //
 //  Proves the FTS index built from the baked content store is the same index the
 //  SWORD engine produced. `Tests/Fixtures/search-index-KJV.digest` holds all 31,102
@@ -17,7 +17,7 @@
 import XCTest
 import CryptoKit
 import SQLite3
-@testable import PocketSword
+@testable import SimpleScripture
 
 final class PSSearchIndexParityTests: XCTestCase {
 

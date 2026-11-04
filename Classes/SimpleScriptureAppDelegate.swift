@@ -1,9 +1,9 @@
 //
-//  PocketSwordAppDelegate.swift
-//  PocketSword
+//  SimpleScriptureAppDelegate.swift
+//  SimpleScripture
 //
 //  Reached through `@UIApplicationDelegateAdaptor`; `@main` is on
-//  `PocketSwordApp`. It owns what is genuinely delegate-shaped:
+//  `SimpleScriptureApp`. It owns what is genuinely delegate-shaped:
 //  `BGTaskScheduler.register` (must be called before `didFinishLaunching`
 //  returns), starting iCloud history sync once per process, the long-lived
 //  models, and the scene-orientation hook. URLs arrive via `onOpenURL` and are
@@ -20,7 +20,7 @@
 import UIKit
 
 @MainActor
-final class PocketSwordAppDelegate: NSObject, UIApplicationDelegate {
+final class SimpleScriptureAppDelegate: NSObject, UIApplicationDelegate {
 
     let session: AppSession
     let launchCoordinator = LaunchCoordinator()
@@ -77,7 +77,7 @@ final class PocketSwordAppDelegate: NSObject, UIApplicationDelegate {
         // preference has to be reported through
         // `supportedInterfaceOrientations(for:)`, and SwiftUI has no equivalent
         // modifier on iOS.
-        configuration.delegateClass = PocketSwordSceneOrientationDelegate.self
+        configuration.delegateClass = SimpleScriptureSceneOrientationDelegate.self
         return configuration
     }
 }
@@ -91,8 +91,8 @@ final class PocketSwordAppDelegate: NSObject, UIApplicationDelegate {
 ///
 /// The mask comes from `RotationLock`: unlocked allows all but upside-down on
 /// iPhone (all on iPad), and the two locked states pin to their orientation.
-final class PocketSwordSceneOrientationDelegate: UIResponder,
-                                                 UIWindowSceneDelegate {
+final class SimpleScriptureSceneOrientationDelegate: UIResponder,
+                                                     UIWindowSceneDelegate {
     func supportedInterfaceOrientations(
         for windowScene: UIWindowScene
     ) -> UIInterfaceOrientationMask {

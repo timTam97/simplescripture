@@ -6,7 +6,7 @@ import XCTest
 /// - Search is a workspace with `TabRole.search`.
 /// - Dictionary, Bookmarks and History are Library sections.
 /// - Settings is a workspace, with About pushed from its toolbar.
-final class PocketSwordUITests: XCTestCase {
+final class SimpleScriptureUITests: XCTestCase {
     private var app: XCUIApplication!
 
     override func setUpWithError() throws {
@@ -21,13 +21,13 @@ final class PocketSwordUITests: XCTestCase {
 
         XCTAssertTrue(
             app.wait(for: .runningForeground, timeout: 20),
-            "PocketSword did not reach the foreground."
+            "SimpleScripture did not reach the foreground."
         )
         // The reader's own controls, not a tab title: the Read workspace draws its
         // chrome with a SwiftUI NavigationStack and has no navigation-bar title.
         XCTAssertTrue(
             app.buttons["reading.reference-picker"].waitForExistence(timeout: 20),
-            "PocketSword did not finish initialization."
+            "SimpleScripture did not finish initialization."
         )
     }
 

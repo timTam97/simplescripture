@@ -4,27 +4,27 @@ Guidance for AI coding agents working in this repository.
 
 ## Project
 
-PocketSword is a GPL'd iOS Bible-study app, forked from `bitbucket.org/niccarter/pocketsword`. It ships CrossWire SWORD module *content* baked into a bundled SQLite store; there is no SWORD engine, C++ or Objective-C at runtime.
+SimpleScripture is a GPL'd iOS Bible-study app, forked from PocketSword at `bitbucket.org/niccarter/pocketsword`. It ships CrossWire SWORD module *content* baked into a bundled SQLite store; there is no SWORD engine, C++ or Objective-C at runtime.
 
 - **Pure Swift.** `Classes/` is Swift files plus one header, `globals.h` (enums + constants, imported by both bridging headers). No vendored code, no CocoaPods/SPM.
-- **SwiftUI UI.** `@main PocketSwordApp` with a four-workspace `TabView` (Read / Search / Library / Settings). No XIBs; only `LaunchScreen.storyboard`. No WebKit: the reader is a native `ScrollView` + `LazyVStack` over `AttributedString`. UIKit survives only as leaf values plus a `@UIApplicationDelegateAdaptor` for `BGTaskScheduler` registration and the orientation hook.
+- **SwiftUI UI.** `@main SimpleScriptureApp` with a four-workspace `TabView` (Read / Search / Library / Settings). No XIBs; only `LaunchScreen.storyboard`. No WebKit: the reader is a native `ScrollView` + `LazyVStack` over `AttributedString`. UIKit survives only as leaf values plus a `@UIApplicationDelegateAdaptor` for `BGTaskScheduler` registration and the orientation hook.
 - Old implementations (SWORD engine, Obj-C++ bridge, `tools/swordbake`, WebView reader) are in git history at `fa09511^`. Do not resurrect them.
 
 ## Build / run
 
-- Open `PocketSword.xcodeproj` and build the shared `PocketSword` scheme (a second scheme `PocketSword1` exists). No workspace, no package step.
-- CLI: `xcodebuild -project PocketSword.xcodeproj -scheme PocketSword -configuration Debug -sdk iphonesimulator build`, with `CODE_SIGNING_ALLOWED=NO` if there is no dev team. Prefer Xcode MCP; check `xcode-select -p` and installed destinations before using the CLI. Regular Xcode currently provides the iOS 27 SDK.
+- Open `SimpleScripture.xcodeproj` and build the shared `SimpleScripture` scheme. No workspace, no package step.
+- CLI: `xcodebuild -project SimpleScripture.xcodeproj -scheme SimpleScripture -configuration Debug -sdk iphonesimulator build`, with `CODE_SIGNING_ALLOWED=NO` if there is no dev team. Prefer Xcode MCP; check `xcode-select -p` and installed destinations before using the CLI. Regular Xcode currently provides the iOS 27 SDK.
 - A clean build should show **`CompileC` 0**. Any `CompileC` means non-Swift sources came back into the target — a regression.
-- Configurations `Debug` / `Release` / `Distribution` all build `SimpleScripture.app` with bundle ID `org.timsam.SimpleScripture` and team `7SZUJ26BQ2`. Debug/Release use empty `SimpleScripture.entitlements` so Personal Team device signing works; history and bookmarks remain local. Distribution uses `SimpleScripture-Distribution.entitlements` for iCloud key-value storage and requires a team that supports iCloud before signing. The Swift module, project, target and shared scheme remain `PocketSword`. This is a separate app identity; old PocketSword containers are not migrated. All configurations share the same new local installation.
-- `IPHONEOS_DEPLOYMENT_TARGET = 27.0` on all 4 targets × 3 configs; universal. `SWIFT_VERSION = 5.0`, `SWIFT_STRICT_CONCURRENCY = minimal`. No prefix header.
+- Configurations `Debug` / `Release` / `Distribution` all build `SimpleScripture.app` with bundle ID `org.timsam.SimpleScripture` and team `7SZUJ26BQ2`. Debug/Release use empty `SimpleScripture.entitlements` so Personal Team device signing works; history and bookmarks remain local. Distribution uses `SimpleScripture-Distribution.entitlements` for iCloud key-value storage and requires a team that supports iCloud before signing. The Swift module, project, app target and shared scheme use `SimpleScripture`; the scheme archives with `Distribution`. This is a separate app identity; old PocketSword containers are not migrated. All configurations share the same new local installation.
+- `IPHONEOS_DEPLOYMENT_TARGET = 27.0` on all 3 targets × 3 configs; universal. `SWIFT_VERSION = 5.0`, `SWIFT_STRICT_CONCURRENCY = minimal`. No prefix header.
 - zlib comes from the SDK's Clang module (`import zlib` in `PSContentStore`); no build setting needed.
 
 ## Tests
 
 Two bundles:
 
-- **`PocketSwordTests`** (app-hosted, `@testable import PocketSword`), sources in `Classes/*Tests.swift`. Expected result: **0 failures, 3 skipped** (151 tests at last count). The 3 skips are env-gated: two `PSREF_EXHAUSTIVE` tests and `PSDOC_EXHAUSTIVE`'s `testNativeDocumentMatchesHTMLForEveryChapter` (all 1,189 chapters × 2 modules × 2 option endpoints, ~30 s — run it when touching either chapter emitter).
-- **`PocketSwordUITests`** (`Tests/PocketSwordUITests.swift`): 12 XCUITests over the four workspaces.
+- **`SimpleScriptureTests`** (app-hosted, `@testable import SimpleScripture`), sources in `Classes/*Tests.swift`. Expected result: **0 failures, 3 skipped** (143 tests at last count). The 3 skips are env-gated: two `PSREF_EXHAUSTIVE` tests and `PSDOC_EXHAUSTIVE`'s `testNativeDocumentMatchesHTMLForEveryChapter` (all 1,189 chapters × 2 modules × 2 option endpoints, ~30 s — run it when touching either chapter emitter).
+- **`SimpleScriptureUITests`** (`Tests/SimpleScriptureUITests.swift`): 17 XCUITests over the four workspaces. Its Target Application is `SimpleScripture`.
 
 Rules:
 
@@ -62,8 +62,8 @@ Rules:
 
 ### Launch
 
-1. `@main PocketSwordApp` declares a `WindowGroup` around `RootView` and holds the app delegate via `@UIApplicationDelegateAdaptor`.
-2. `PocketSwordAppDelegate` does only what UIKit owns: `BGTaskScheduler` registration (**must** complete before `didFinishLaunching` returns), `HistoryStore.startCloudSync()`, `AppSession.start()`, and a scene delegate supplying `supportedInterfaceOrientations(for:)` for the rotation-lock pref.
+1. `@main SimpleScriptureApp` declares a `WindowGroup` around `RootView` and holds the app delegate via `@UIApplicationDelegateAdaptor`.
+2. `SimpleScriptureAppDelegate` does only what UIKit owns: `BGTaskScheduler` registration (**must** complete before `didFinishLaunching` returns), `HistoryStore.startCloudSync()`, `AppSession.start()`, and a scene delegate supplying `supportedInterfaceOrientations(for:)` for the rotation-lock pref.
 3. `RootView`'s `.task` runs `LaunchCoordinator.prepare()` off the main actor and moves `LaunchPhase` `.preparing → .ready` (or `.failed`). On `.ready` it calls `ReadingWorkspaceModel.start()` and replays any held `sword://` URL.
 
 **Order in step 3 is load-bearing.** Nothing may touch `PSModuleController`, the store or the reader until `prepare()` returns, because its one-shot migrations (`DefaultsLastRefValidated` in particular) can rewrite `lastRef`. That is why `AppSession` parks an incoming URL in `pendingURL`.
@@ -165,7 +165,7 @@ The split by scope is load-bearing:
 
 - Retired keys (`DefaultsKJVRemoved`, `DefaultsMHCCRemoved`, `DefaultsStrongsGreekModule`, `DefaultsStrongsHebrewModule`, `DefaultsMorphGreekModule`) stay declared so the names aren't reused; `DefaultsModuleChoiceRetired` clears them.
 - `ShownTab` ordinals may be persisted — do not renumber or delete. New code uses `ReadingMode` / `Workspace`.
-- `PocketSword-Swift.h` is not generated. `@objc` annotations on model types are inert; don't read one as evidence of an Obj-C caller. `NSObject` subclassing on persisted model types is relied on by the byte-locked formats.
+- There are no Objective-C consumers of a generated Swift interface header. `@objc` annotations on model types are inert; don't read one as evidence of an Obj-C caller. `NSObject` subclassing on persisted model types is relied on by the byte-locked formats.
 
 ### Persistence
 

@@ -1,6 +1,6 @@
 //
 //  PersistedFormatTests.swift
-//  PocketSwordTests
+//  SimpleScriptureTests
 //
 //  LOCKS the load-bearing persisted formats, including every pre-existing
 //  read/write asymmetry. They do NOT "correct" any quirk: a change to a positional
@@ -9,7 +9,7 @@
 //
 
 import XCTest
-@testable import PocketSword
+@testable import SimpleScripture
 
 final class PersistedFormatTests: XCTestCase {
 

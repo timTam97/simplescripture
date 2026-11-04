@@ -1,7 +1,7 @@
 import XCTest
 import Observation
 import UIKit
-@testable import PocketSword
+@testable import SimpleScripture
 
 /// Collects the FTS5 expressions a `SearchModel` actually queried with.
 ///
