@@ -1,0 +1,12 @@
+<?xml version='1.0' encoding='utf-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:affinity="https://www.affinity.studio/" width="1024" height="1024" viewBox="0 0 1024 1024" version="1.1" xml:space="preserve" style="fill-rule:evenodd;clip-rule:evenodd;">
+    <g id="SimpleScripture---App-Icon-1024" affinity:id="SimpleScripture — App Icon 1024" transform="translate(512 512) scale(1.219419847) translate(-512 -512)">
+        <g id="_03_Gilded_Folio" affinity:id="03_Gilded_Folio" transform="matrix(1.030046,0,0,0.832467,-30.834067,85.777042)">
+            <g id="Solid_gold_cross" transform="matrix(0.808184,0,0,1,101.086957,0)">
+                <path id="Solid_gold_face" d="M492,316L562,316L562,410L656,410L656,482L562,482L562,653L492,653L492,482L398,482L398,410L492,410L492,316Z" style="fill:rgb(227,188,103);stroke:rgb(109,84,45);stroke-width:1.4px;stroke-linejoin:round;" />
+            </g>
+            </g>
+    </g>
+    <defs>
+        </defs>
+</svg>

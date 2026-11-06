@@ -22,6 +22,7 @@
 		05F84EE7191F4EF0003350DE /* libicucore.A.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 05F84EE6191F4EF0003350DE /* libicucore.A.tbd */; settings = {ATTRIBUTES = (Weak, ); }; };
 		1D60589F0D05DD5A006BFB54 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1D30AB110D05D00D00671497 /* Foundation.framework */; };
 		1DF5F4E00D08C38300B7A737 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1DF5F4DF0D08C38300B7A737 /* UIKit.framework */; settings = {ATTRIBUTES = (Required, ); }; };
+		339FDC97309D68B000CA6C28 /* SimpleScripture App Icon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 339FDC96309D68B000CA6C28 /* SimpleScripture App Icon.icon */; };
 		5A1F70B0000000000000C002 /* AppConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000C001 /* AppConstants.swift */; };
 		5A1F70B0000000000000CA02 /* PSContent.sqlite in Resources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000CA01 /* PSContent.sqlite */; };
 		5A1F70B0000000000000CB02 /* Versification-KJV.json in Resources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000CB01 /* Versification-KJV.json */; };
@@ -119,6 +120,7 @@
 		1D6058910D05DD3D006BFB54 /* SimpleScripture.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SimpleScripture.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1DF5F4DF0D08C38300B7A737 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		33354D062FCD55D800252A83 /* SimpleScripture-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "SimpleScripture-Bridging-Header.h"; path = "misc/SimpleScripture-Bridging-Header.h"; sourceTree = "<group>"; };
+		339FDC96309D68B000CA6C28 /* SimpleScripture App Icon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = "SimpleScripture App Icon.icon"; sourceTree = "<group>"; };
 		5A1F70B0000000000000C001 /* AppConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConstants.swift; sourceTree = "<group>"; };
 		5A1F70B0000000000000CA01 /* PSContent.sqlite */ = {isa = PBXFileReference; lastKnownFileType = file; name = PSContent.sqlite; path = Resources/PSContent.sqlite; sourceTree = "<group>"; };
 		5A1F70B0000000000000CB01 /* Versification-KJV.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "Versification-KJV.json"; path = "Resources/Versification-KJV.json"; sourceTree = "<group>"; };
@@ -440,6 +442,7 @@
 		29B97314FDCFA39411CA2CEA /* PocketSword */ = {
 			isa = PBXGroup;
 			children = (
+				339FDC96309D68B000CA6C28 /* SimpleScripture App Icon.icon */,
 				051FD8B316A3F52C00E7EF2B /* SimpleScripture.entitlements */,
 				D61005002026000000000001 /* SimpleScripture-Distribution.entitlements */,
 				E9A6CF9C0FF5508400399E78 /* Localizable.strings */,
@@ -643,6 +646,7 @@
 				E9BD1D540ED34003006A60E9 /* LICENSE.txt in Resources */,
 				B29000000000000000000012 /* Notices in Resources */,
 				E9A6CF9D0FF5508400399E78 /* Localizable.strings in Resources */,
+				339FDC97309D68B000CA6C28 /* SimpleScripture App Icon.icon in Resources */,
 				052B52851101A32900FFDF01 /* Settings.bundle in Resources */,
 				050CB77D19D16A1200415A27 /* Images.xcassets in Resources */,
 				D2CF000126D100000000A001 /* LaunchScreen.storyboard in Resources */,
@@ -765,7 +769,7 @@
 		1D6058940D05DD3E006BFB54 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "SimpleScripture App Icon";
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CODE_SIGN_ENTITLEMENTS = SimpleScripture.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -777,23 +781,31 @@
 				);
 				GCC_OPTIMIZATION_LEVEL = 0;
 				INFOPLIST_FILE = misc/icon/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SimpleScripture;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
 		1D6058950D05DD3E006BFB54 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "SimpleScripture App Icon";
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CODE_SIGN_ENTITLEMENTS = SimpleScripture.entitlements;
 				CODE_SIGN_STYLE = Automatic;
@@ -804,15 +816,23 @@
 					"$(SDKROOT)/usr/lib",
 				);
 				INFOPLIST_FILE = misc/icon/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SimpleScripture;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -1100,7 +1120,7 @@
 		E982FA660ED9D6100028DFEC /* Distribution */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_APPICON_NAME = "SimpleScripture App Icon";
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CODE_SIGN_ENTITLEMENTS = "SimpleScripture-Distribution.entitlements";
 				CODE_SIGN_STYLE = Automatic;
@@ -1111,15 +1131,23 @@
 					"$(SDKROOT)/usr/lib",
 				);
 				INFOPLIST_FILE = misc/icon/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = SimpleScripture;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.reference";
 				INFOPLIST_KEY_UILaunchStoryboardName = LaunchScreen;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
+				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Distribution;
 		};

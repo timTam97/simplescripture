@@ -19,3 +19,7 @@ Build PocketSword_*.txt
 
 # Affinity document session locks
 *.af~lock~
+
+# Regenerable Icon Composer artwork and local previews
+/misc/icon/composer-layers/
+/misc/icon/composer-previews/
