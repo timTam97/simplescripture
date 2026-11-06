@@ -26,6 +26,7 @@
 		5A1F70B0000000000000C002 /* AppConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000C001 /* AppConstants.swift */; };
 		5A1F70B0000000000000CA02 /* PSContent.sqlite in Resources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000CA01 /* PSContent.sqlite */; };
 		5A1F70B0000000000000CB02 /* Versification-KJV.json in Resources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000CB01 /* Versification-KJV.json */; };
+		5A1F70B0000000000000CB04 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000CB03 /* PrivacyInfo.xcprivacy */; };
 		5A1F70B0000000000000CS02 /* PSContentStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000CS01 /* PSContentStoreTests.swift */; };
 		5A1F70B0000000000000F002 /* PersistedFormatTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000F001 /* PersistedFormatTests.swift */; };
 		5A1F70B0000000000000G002 /* PSBookmarkObject.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1F70B0000000000000G001 /* PSBookmarkObject.swift */; };
@@ -124,6 +125,7 @@
 		5A1F70B0000000000000C001 /* AppConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppConstants.swift; sourceTree = "<group>"; };
 		5A1F70B0000000000000CA01 /* PSContent.sqlite */ = {isa = PBXFileReference; lastKnownFileType = file; name = PSContent.sqlite; path = Resources/PSContent.sqlite; sourceTree = "<group>"; };
 		5A1F70B0000000000000CB01 /* Versification-KJV.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; name = "Versification-KJV.json"; path = "Resources/Versification-KJV.json"; sourceTree = "<group>"; };
+		5A1F70B0000000000000CB03 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = Resources/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		5A1F70B0000000000000CS01 /* PSContentStoreTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = PSContentStoreTests.swift; path = Classes/PSContentStoreTests.swift; sourceTree = "<group>"; };
 		5A1F70B0000000000000F001 /* PersistedFormatTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = PersistedFormatTests.swift; path = Classes/PersistedFormatTests.swift; sourceTree = "<group>"; };
 		5A1F70B0000000000000F003 /* SimpleScriptureTests-Bridging-Header.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = "SimpleScriptureTests-Bridging-Header.h"; path = "misc/SimpleScriptureTests-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -481,6 +483,7 @@
 				052851B8122660F600A99ECD /* img */,
 				5A1F70B0000000000000CA01 /* PSContent.sqlite */,
 				5A1F70B0000000000000CB01 /* Versification-KJV.json */,
+				5A1F70B0000000000000CB03 /* PrivacyInfo.xcprivacy */,
 			);
 			name = Resources;
 			sourceTree = "<group>";
@@ -643,6 +646,7 @@
 			files = (
 				5A1F70B0000000000000CA02 /* PSContent.sqlite in Resources */,
 				5A1F70B0000000000000CB02 /* Versification-KJV.json in Resources */,
+				5A1F70B0000000000000CB04 /* PrivacyInfo.xcprivacy in Resources */,
 				E9BD1D540ED34003006A60E9 /* LICENSE.txt in Resources */,
 				B29000000000000000000012 /* Notices in Resources */,
 				E9A6CF9D0FF5508400399E78 /* Localizable.strings in Resources */,
@@ -789,7 +793,7 @@
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
@@ -824,7 +828,7 @@
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
@@ -1139,7 +1143,7 @@
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
-				MARKETING_VERSION = 0.1.1;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
