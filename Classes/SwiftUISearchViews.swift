@@ -199,6 +199,13 @@ private struct SearchWorkspaceContent: View {
                 )
             }
         }
+        // Fill the stack, deliberately: `SearchView` pins the scope picker with
+        // `safeAreaInset(edge: .top)` on this view, so the picker rides this
+        // view's top edge, not the screen's. `ContentUnavailableView` and `List`
+        // are greedy, but the index-build progress view and the bare searching
+        // `ProgressView` size to fit, so without this the content was centred and
+        // dragged the picker (and its bar background) down the middle of the screen.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
