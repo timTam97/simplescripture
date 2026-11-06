@@ -374,11 +374,7 @@ private struct SettingsWorkspace: View {
         NavigationStack {
             SettingsView(
                 settings: session.settings,
-                // The iPad's larger reading pane takes a larger maximum, as it
-                // always has.
-                maximumFontSize: UIDevice.current.userInterfaceIdiom == .phone
-                    ? 20
-                    : 36
+                maximumFontSize: 36
             )
             .navigationTitle("PreferencesTitle")
             .navigationBarTitleDisplayMode(.inline)

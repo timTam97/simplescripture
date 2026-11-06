@@ -191,7 +191,7 @@ typedef enum {
 #define StrongsFontName								@"Times New Roman"
 #define PSGreekStrongsFontName						@"Gentium Plus"
 #define PSHebrewStrongsFontName						@"Ezra SIL"
-#define PSDefaultFontName							@"Helvetica Neue"
+#define PSDefaultFontName							@"Georgia"
 #define PSFolderSeparatorString						@":::"
 #define PSHistoryMaxEntries							100
 #define PSHistoryName								@"bibleHistory"

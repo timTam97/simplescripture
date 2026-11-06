@@ -126,11 +126,11 @@ enum AppConstants {
     static let strongsFontName        = "Times New Roman"   // macro StrongsFontName
     static let greekStrongsFontName   = "Gentium Plus"      // macro PSGreekStrongsFontName
     static let hebrewStrongsFontName  = "Ezra SIL"          // macro PSHebrewStrongsFontName
-    static let defaultFontName        = "Helvetica Neue"    // macro PSDefaultFontName
+    static let defaultFontName        = "Georgia"           // macro PSDefaultFontName
     /// The reading font size used when `fontSizePreference` is absent — the single
     /// fallback for both Settings and the renderers, so they cannot disagree after
     /// `LaunchCoordinator.resetPreferences()` removes the key. Swift-only.
-    static let defaultFontSize        = 12
+    static let defaultFontSize        = 20
     static let folderSeparatorString  = ":::"               // macro PSFolderSeparatorString
     static let historyMaxEntries      = 100                 // macro PSHistoryMaxEntries (Int)
     static let historyName            = "bibleHistory"      // macro PSHistoryName
@@ -194,8 +194,16 @@ extension UserDefaults {
     /// Composite key "<pref>_<mod>" — exact reproduction of "%@_%@" (pref, mod).
     func psModuleKey(_ pref: String, _ mod: String) -> String { "\(pref)_\(mod)" }
 
+    /// Per-module toggles that read as ON when the key is absent (fresh install,
+    /// or after `resetPreferences()`). An explicit stored value always wins.
+    static let psDefaultOnPrefs: Set<String> = [Defaults.vplPreference]
+
     func psBool(_ pref: String, forModule mod: String) -> Bool {
-        bool(forKey: psModuleKey(pref, mod))
+        let key = psModuleKey(pref, mod)
+        guard object(forKey: key) != nil else {
+            return Self.psDefaultOnPrefs.contains(pref)
+        }
+        return bool(forKey: key)
     }
 
     func psString(_ pref: String, forModule mod: String) -> String? {
