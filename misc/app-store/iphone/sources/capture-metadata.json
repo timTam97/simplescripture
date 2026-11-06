@@ -1,0 +1,71 @@
+{
+  "captured_date": "2026-11-06",
+  "device": "iPhone 17 simulator",
+  "os": "iOS 27.2",
+  "device_uuid": "5E8D2D0C-09F9-4501-9DE5-CDA99898637E",
+  "commit": "e06cffe7f17b50422b07060bbbaab9a2c9da1585",
+  "app_version": "0.1.1",
+  "app_build": "20",
+  "build_verification": "Xcode BuildProject succeeded for current checkout and iPhone 17 on 2026-11-06; installed fresh build with simctl before capture.",
+  "capture_method": "xcrun simctl io <device> screenshot; native pixel dimensions; no image scaling or modifications.",
+  "appearance": "Light; status bar overridden to 09:41, full Wi-Fi, 100% charged battery. Overrides cleared after capture.",
+  "font": "Georgia, 18pt via temporary per-launch UserDefaults arguments for reading, commentary, and dictionary content. Native system fonts retained where the app chooses them.",
+  "notes": [
+    "Initial iPhone 18 Pro Max workspace capture session failed to connect; it was closed and the simulator shut down. Final sources use iPhone 17.",
+    "Macintosh HD intermittently reported out of space while writing capture logs; system space recovered before final captures. No user files were deleted.",
+    "Unrelated observed UI issue: at Georgia 18, MHCC John 3 displayed its chapter heading but its long first entry was visually blank in two captures about 16 seconds apart despite a 5055-point text element being present in the hierarchy. This was not tested across relaunches. Final commentary screenshot uses the README’s Genesis 1 passage, which rendered correctly."
+  ],
+  "files": [
+    {
+      "file": "reading.png",
+      "description": "KJV John 3:12–18; red-letter and verse-per-line enabled; Strong’s numbers disabled.",
+      "width": 1206,
+      "height": 2622,
+      "mode": "RGBA",
+      "sha256": "f41e8041227bdb2eb8f4d3d9cd1a4bbb31449d9513ca70f58067e9d5a0ee9066"
+    },
+    {
+      "file": "commentary.png",
+      "description": "Matthew Henry’s Concise Commentary, Genesis 1:1–2, beginning of first entry.",
+      "width": 1206,
+      "height": 2622,
+      "mode": "RGBA",
+      "sha256": "e15c9fc874d9a5607c7f676db21ee989da4e3e1b007627f987994e5bde2e359e"
+    },
+    {
+      "file": "search.png",
+      "description": "KJV search for light; All scope; 235 actual results; keyboard dismissed.",
+      "width": 1206,
+      "height": 2622,
+      "mode": "RGBA",
+      "sha256": "ed398707e645a81b9b38652c6063411f2aafeae7eae59f5b119695429e1ef371"
+    },
+    {
+      "file": "word-study.png",
+      "description": "KJV John 3:16 with Strong’s numbers enabled and Greek G25 agapáō definition popup open; sheet settled; Find all occurrences action visible.",
+      "width": 1206,
+      "height": 2622,
+      "mode": "RGBA",
+      "sha256": "58ed90a479947e56a60685ccf19a3af3bd62ca7ec6c31e061fc2d450ae55d67d"
+    },
+    {
+      "file": "library.png",
+      "description": "User-provided Library Bookmarks view with the section selector open, showing Bookmarks, History and Dictionary, plus saved bookmarks and a study folder.",
+      "width": 1206,
+      "height": 2622,
+      "mode": "RGBA",
+      "sha256": "21d4ba31750cafb341ef346ba327f210d6344df4f54f1cbd51132fbf2c54bfd4",
+      "origin": "user-provided",
+      "original_path": "/Users/timsam/Library/Containers/com.apple.dt.Devices/Data/Documents/Screenshot iPhone 17 06-11-2026 at 14.20.12.png"
+    },
+    {
+      "file": "library-entry.png",
+      "description": "Optional alternative Library screenshot: Hebrew Strong’s H430 (elohim) definition.",
+      "width": 1206,
+      "height": 2622,
+      "mode": "RGBA",
+      "sha256": "781d17d73b0fb9e38a60e7069ef14779a6c2f36dbe8f9ebc45649cd08b286db3"
+    }
+  ],
+  "provenance_scope": "Session details above apply to the original captures. library.png was replaced with the user-provided screenshot identified in its file record; its app build and capture settings were not independently checked."
+}
