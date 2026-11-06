@@ -1,0 +1,108 @@
+{
+  "format": "PNG",
+  "mode": "RGB",
+  "profile": "sRGB",
+  "background": "#173F35",
+  "text_colour": "#FAFCF8",
+  "font": "San Francisco, semibold 600, display optical size 96",
+  "icon_source": "misc/app-store/creative/sources/app-icon-light.png",
+  "icon_source_sha256": "2929edbc90cf839b259b4419939edbee25f9552b82cabe2b71bc031235dd2185",
+  "icon_source_pixels": [
+    2048,
+    2048
+  ],
+  "icon_rendition": "Default (light), iOS design generation 27",
+  "guidance_checked": "2026-11-06",
+  "exports": [
+    {
+      "file": "simplescripture-universal-5244x2950.png",
+      "pixels": [
+        5244,
+        2950
+      ],
+      "bytes": 255872,
+      "sha256": "e8b76bc27c4a655271c5a4ada4b865929fcdc6f669a2ba064343bbe566287232",
+      "safe_area": [
+        1921,
+        660,
+        3323,
+        1622
+      ],
+      "template": "https://developer.apple.com/go/?id=photoshop-universal-asset-template",
+      "text": "SimpleScripture",
+      "font_pixels": 100,
+      "text_bounds": [
+        2002,
+        1096,
+        2721,
+        1186
+      ],
+      "icon_bounds": [
+        2803,
+        921,
+        3243,
+        1361
+      ]
+    },
+    {
+      "file": "simplescripture-header-3840x1646.png",
+      "pixels": [
+        3840,
+        1646
+      ],
+      "bytes": 297472,
+      "sha256": "2bdadb9bc95afdbfa6cc18623bcc7535038941f1461726d82e11a0539053dcbd",
+      "safe_area": [
+        1097,
+        493,
+        2743,
+        1154
+      ],
+      "template": "https://developer.apple.com/go/?id=photoshop-product-page-header-template",
+      "text": "SimpleScripture",
+      "font_pixels": 117,
+      "text_bounds": [
+        1198,
+        771,
+        2029,
+        876
+      ],
+      "icon_bounds": [
+        2125,
+        565,
+        2642,
+        1082
+      ]
+    },
+    {
+      "file": "simplescripture-search-3840x2560.png",
+      "pixels": [
+        3840,
+        2560
+      ],
+      "bytes": 498252,
+      "sha256": "802b292630dcb263acc8043965e1839a4358a72a9fa1ae31466a67010b84add0",
+      "safe_area": [
+        836,
+        765,
+        3004,
+        1795
+      ],
+      "template": "https://developer.apple.com/go/?id=photoshop-search-results-template",
+      "text": "SimpleScripture",
+      "font_pixels": 155,
+      "text_bounds": [
+        966,
+        1210,
+        2068,
+        1349
+      ],
+      "icon_bounds": [
+        2195,
+        940,
+        2875,
+        1620
+      ]
+    }
+  ]
+}

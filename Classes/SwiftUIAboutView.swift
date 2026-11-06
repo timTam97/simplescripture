@@ -130,7 +130,6 @@ private struct AboutHeader: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 112, height: 112)
-                .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .accessibilityHidden(true)
                 .padding(.bottom, 8)
             Text(verbatim: AboutInformation.appName)

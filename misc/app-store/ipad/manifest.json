@@ -1,0 +1,219 @@
+{
+  "format": "PNG",
+  "mode": "RGB",
+  "profile": "sRGB",
+  "device_group": "iPad 13\" display",
+  "orientation": "portrait",
+  "exports": [
+    {
+      "file": "2064x2752/01-reading.png",
+      "pixels": [
+        2064,
+        2752
+      ],
+      "bytes": 1232090,
+      "sha256": "c3c8696d162edef7eca07073e449dd03f7092a2df1c049f8deec0081d4c2c6f8",
+      "source": "reading.png",
+      "source_sha256": "90b78d395ef3b7060a2b353d5a98c0155e02bae3eabe9abbdd42b50e38c65192",
+      "source_pixels": [
+        2064,
+        2752
+      ],
+      "screen_bounds": [
+        189,
+        440,
+        1875,
+        2688
+      ],
+      "screen_scale": 0.81686,
+      "text_bounds": [
+        {
+          "text": "SimpleScripture",
+          "bounds": [
+            189,
+            88,
+            1218,
+            217
+          ]
+        },
+        {
+          "text": "A simple Bible reader",
+          "bounds": [
+            189,
+            250,
+            1534,
+            379
+          ]
+        }
+      ]
+    },
+    {
+      "file": "2064x2752/02-search.png",
+      "pixels": [
+        2064,
+        2752
+      ],
+      "bytes": 751832,
+      "sha256": "2881a4d5bacb799f640f9f11d31b66d64542cce3702111c5b965e3a9ed8cdf49",
+      "source": "search.png",
+      "source_sha256": "efdb0e43903296f15866224e234cea925d86bd5f8ac0d0bf0b382907e4fc02b1",
+      "source_pixels": [
+        2064,
+        2752
+      ],
+      "screen_bounds": [
+        189,
+        440,
+        1875,
+        2688
+      ],
+      "screen_scale": 0.81686,
+      "text_bounds": [
+        {
+          "text": "Search the Bible,",
+          "bounds": [
+            189,
+            88,
+            1263,
+            213
+          ]
+        },
+        {
+          "text": "English and Greek",
+          "bounds": [
+            189,
+            250,
+            1342,
+            380
+          ]
+        }
+      ]
+    },
+    {
+      "file": "2064x2752/03-commentary.png",
+      "pixels": [
+        2064,
+        2752
+      ],
+      "bytes": 1271135,
+      "sha256": "e528fc9867d4f9770d6bb4285cfc93c75edddac2591fb3fe094142bec0861d9f",
+      "source": "commentary.png",
+      "source_sha256": "f6a8a28082bbf3cc500441dafa01b0a4ce2cc8d25dd4e467fdae630cd3ef3597",
+      "source_pixels": [
+        2064,
+        2752
+      ],
+      "screen_bounds": [
+        189,
+        440,
+        1875,
+        2688
+      ],
+      "screen_scale": 0.81686,
+      "text_bounds": [
+        {
+          "text": "MHCC Commentary",
+          "bounds": [
+            189,
+            88,
+            1481,
+            216
+          ]
+        },
+        {
+          "text": "Included",
+          "bounds": [
+            189,
+            250,
+            743,
+            353
+          ]
+        }
+      ]
+    },
+    {
+      "file": "2064x2752/04-word-study.png",
+      "pixels": [
+        2064,
+        2752
+      ],
+      "bytes": 1744704,
+      "sha256": "afc58d185422d83fa5b717f1da2e7bf211ce68e21ba72ddd47ab715c430dfdd5",
+      "source": "word-study.png",
+      "source_sha256": "c79cc15a4002ad5624117f35c7118af124559da7ec7ef9ce74d9ef75a54e5325",
+      "source_pixels": [
+        2064,
+        2752
+      ],
+      "screen_bounds": [
+        189,
+        440,
+        1875,
+        2688
+      ],
+      "screen_scale": 0.81686,
+      "text_bounds": [
+        {
+          "text": "Strong's Concordance",
+          "bounds": [
+            189,
+            88,
+            1623,
+            217
+          ]
+        },
+        {
+          "text": "Word by Word",
+          "bounds": [
+            189,
+            250,
+            1108,
+            377
+          ]
+        }
+      ]
+    },
+    {
+      "file": "2064x2752/05-library.png",
+      "pixels": [
+        2064,
+        2752
+      ],
+      "bytes": 170246,
+      "sha256": "0e66789c59d505d39866f5bb962687e85026e16f36384d8abf9df0a448d5f164",
+      "source": "library.png",
+      "source_sha256": "b748bbb92c3b26a6750e0e0b315ca593b83f55003de888832bbcc68a3382d915",
+      "source_pixels": [
+        2064,
+        2752
+      ],
+      "screen_bounds": [
+        189,
+        440,
+        1875,
+        2688
+      ],
+      "screen_scale": 0.81686,
+      "text_bounds": [
+        {
+          "text": "A library for",
+          "bounds": [
+            189,
+            88,
+            927,
+            217
+          ]
+        },
+        {
+          "text": "deeper study",
+          "bounds": [
+            189,
+            250,
+            1029,
+            377
+          ]
+        }
+      ]
+    }
+  ]
+}

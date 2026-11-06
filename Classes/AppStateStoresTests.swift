@@ -76,14 +76,14 @@ final class AppStateStoresTests: XCTestCase {
         let initial = store.snapshot()
 
         XCTAssertEqual(initial.fontName, AppConstants.defaultFontName)
-        XCTAssertEqual(initial.fontSize, 12)
+        XCTAssertEqual(initial.fontSize, 20)
         XCTAssertFalse(initial.keepScreenAwake)
         XCTAssertEqual(initial.rotationLock, .unlocked)
         XCTAssertNil(defaults.object(forKey: Defaults.fontSizePreference))
 
         store.ensureFontSizeDefault()
 
-        XCTAssertEqual(defaults.integer(forKey: Defaults.fontSizePreference), 12)
+        XCTAssertEqual(defaults.integer(forKey: Defaults.fontSizePreference), 20)
     }
 
     @MainActor
@@ -992,7 +992,7 @@ final class AppStateStoresTests: XCTestCase {
         wait(for: [handled], timeout: 5)
 
         XCTAssertEqual(settings.fontName, AppConstants.defaultFontName)
-        XCTAssertEqual(settings.fontSize, 12)
+        XCTAssertEqual(settings.fontSize, 20)
         XCTAssertFalse(settings.keepScreenAwake)
         XCTAssertTrue(library.history.isEmpty)
         XCTAssertEqual(session.reading.reference?.chapterRef, "Genesis 1")

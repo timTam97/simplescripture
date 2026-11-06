@@ -120,7 +120,7 @@ Rules:
   - Launch offset restore: the reader's size settles in steps during launch, so the rotation hook fires; `restoreAfterSizeChange` prefers an outstanding offset restore. The first geometry publish is an unlaid-out scroll view and must not be persisted. `ReaderScrollSample` + `outstandingOffsetRestore` give `scrollOffsetChanged` a three-way gate (drop unlaid-out samples; clear on landing within 2 pt; give up at `maxOffset` when unreachable), released by `userBeganScrolling()`. Pinned by `testUnlaidOutGeometryDoesNotOverwriteThePersistedScrollOffset` and `testUnreachableOffsetRestoreGivesUpAtTheScrollViewsMaximum`.
   - Known residual: ~1 launch in 4 the toolbar title keeps `…:1` after a correct restore; self-corrects on first scroll. Don't assert on the nav-bar title in XCUITests here — assert on reader content.
   - The prose row set is cached on `ReaderPaneModel.paragraphs` (invalidated by `document`'s `didSet`). Never call `ChapterDocument.paragraphs` from a view body. The cache is on the model, not the value type, to keep `ChapterDocument`'s synthesized `Equatable` and memberwise init that the parity tests use.
-- **Verse layout honours verse-per-line.** VPL off (default): prose, breaking at the KJV's pilcrows (all at verse starts). VPL on: one row per verse. A commentary always breaks per verse (MHCC has no pilcrows).
+- **Verse layout honours verse-per-line.** VPL off: prose, breaking at the KJV's pilcrows (all at verse starts). VPL on (default — an absent `vplPreference_<module>` reads as on via `UserDefaults.psBool`): one row per verse. A commentary always breaks per verse (MHCC has no pilcrows).
 
 ### Dictionary
 
@@ -156,7 +156,7 @@ The split by scope is load-bearing:
   - **KJV shows exactly six rows**: Strong's, Morph, Headings, Footnotes, Red Letter, Verse Per Line. **No cross-references** — KJV has no scripref feature. Don't "fix" this.
   - **MHCC has no rows**; the section is omitted. Both asserted by `AppStateStoresTests.testDisplayTogglesMatchBakedFeatureSets`.
 - **Global**: font name + size and device options, in `SettingsView` (`SwiftUISupportingViews.swift`). **One font for the whole app**: `ChapterTextRenderer.Style.current()` reads only unsuffixed `fontNamePreference` / `fontSizePreference`.
-- `EntryTextView` honours the same keys, with a legibility floor `EntryTextView.minimumBodySize` (14). The Strong's arm uses the system face (`usesSystemFace`). `AppConstants.defaultFontSize` (12) is the single absent-key fallback (Swift-only; `globals.h` has no counterpart).
+- `EntryTextView` honours the same keys, with a legibility floor `EntryTextView.minimumBodySize` (14). The Strong's arm uses the system face (`usesSystemFace`). `AppConstants.defaultFontSize` (20; default face Georgia) is the single absent-key fallback (Swift-only; `globals.h` has no counterpart).
 - Code2000 is no longer bundled or offered. Existing saved font preferences are not migrated.
 
 ### Constants: `globals.h` ↔ `AppConstants.swift`

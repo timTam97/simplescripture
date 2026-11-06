@@ -65,14 +65,13 @@ is 1024 × 1024, opaque RGB with its sRGB profile, and both application copies
 matched it byte for byte at that checkpoint. The application had not been
 rebuilt or checked on a device after that artwork-only change.
 
-The current Home Screen icon source and export are in
-[`misc/icon`](../../misc/icon/README.md). The editable Affinity master uses an
-832-unit-wide book inside the 1024-unit artboard, giving it more room within
-Apple's icon shape. Its opaque 1024 px PNG matches the `AppIcon` asset byte for
-byte. The About image and launch splash retain the earlier artwork described
-above. Unused Icon Composer examples and stock Illustrator/Photoshop templates
-have been removed; the retained source files and export instructions are listed
-in the icon README.
+The current icon is the project's
+[`SimpleScripture App Icon.icon`](<../../SimpleScripture App Icon.icon>).
+It contains the enlarged book, separate artwork layers, and customized dark
+and tinted appearances. The launch and About images are native Icon Composer
+renders of that same document, including light and dark variants. The retained
+Affinity artwork and layer export instructions are in
+[`misc/icon`](../../misc/icon/README.md).
 
 The obsolete icon sets, launch images, screenshots, `.acorn` artwork and unused
 bitmap controls have been removed from the current checkout and Xcode resources
@@ -90,13 +89,22 @@ The app adds an accessible progress indicator while preparation runs and opens
 the reader immediately when it finishes; there is no minimum display time.
 
 `LaunchIcon.imageset` contains rounded, transparent 128 pt artwork at 1×, 2×
-and 3×. Both launch surfaces use those same images, since the system storyboard
-cannot execute custom clipping code. Regenerate them after changing the approved
-About artwork:
+and 3× in both Default and Dark appearances. Both launch surfaces use those
+same images, since the system storyboard cannot execute custom rendering code.
+`SimpleScriptureAbout.imageset` contains corresponding 112 pt renders for the
+About header. The asset catalog selects the appearance automatically; the About
+view does not apply a second mask over the rendered icon.
+
+Regenerate both image sets after editing the project's Icon Composer document:
 
 ```sh
 xcrun swift docs/rebranding/generate-launch-icon.swift
 ```
+
+The script uses the selected Xcode installation's bundled Icon Composer
+renderer, with iOS design generation 27, and requires no third-party packages.
+It renders static artwork for these in-app surfaces; Home Screen tint and
+motion effects remain system-managed app icon behavior.
 
 Keep the storyboard and `LaunchView` layout in sync: a 128 pt icon, a 24 pt gap,
 and the name in 28 pt semibold system type within a 34 pt label. Xcode previews
