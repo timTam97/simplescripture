@@ -1,0 +1,69 @@
+{
+  "captured_date": "2026-11-06",
+  "device": "iPad Pro 13-inch (M5) simulator",
+  "os": "iPadOS 27.2 (24B8117)",
+  "device_uuid": "58984F55-90E2-48F1-B9C4-7A8CD85272E2",
+  "orientation": "Portrait",
+  "commit": "63381875d4f9c685a4720ccf8b4d123def6c097d",
+  "app_version": "0.1.1",
+  "app_build": "20",
+  "bundle_identifier": "org.timsam.SimpleScripture",
+  "build_verification": "Xcode DeviceInteractionInstallAndRun initiated a successful build of the current checkout on 2026-11-06, confirmed by GetBuildLog. The workspace launch session failed to connect; the resulting Debug-iphonesimulator/SimpleScripture.app was then installed and launched successfully using simctl.",
+  "capture_method": "xcrun simctl io <device> screenshot; native 2064 × 2752 pixel PNGs; no image scaling or modifications. Xcode DeviceInteractionSynthesize was used to inspect accessibility hierarchy and navigate, but its reduced-resolution screenshots are not the final sources.",
+  "appearance": "Light; status bar overridden to 09:41, full Wi-Fi and 100% charged battery. Overrides cleared and this simulator shut down after capture.",
+  "font": "Temporary per-launch fontNamePreference=Georgia and fontSizePreference arguments, with individual sizes recorded per file. Native system fonts retained where chosen by the app.",
+  "notes": [
+    "No app source, entitlements, Info.plist or scheme configuration edits were made for these captures.",
+    "Temporary disk exhaustion initially prevented screenshot/hierarchy writes and delayed the device service. Capture resumed after space recovered. All final sources were reopened and their exact dimensions verified.",
+    "The initial 24pt commentary capture exposed the raw baked cross-reference marker #1Jo 5:20| in Genesis 1:3–5. The delivered 32pt view focuses on the first Genesis 1:1–2 entry, matching the iPhone subject; no app content was altered.",
+    "The standalone device session reports applicationState=NotRun because it is not bound to an Xcode launch; the running app and content were verified through the accessibility hierarchy and native screenshots.",
+    "All device sessions were closed and Xcode run destination restored to Any iOS Device (arm64). Only capture simulator 58984F55-90E2-48F1-B9C4-7A8CD85272E2 was shut down; the pre-existing 16GB iPad simulator was left running."
+  ],
+  "files": [
+    {
+      "file": "reading.png",
+      "description": "KJV John 3:12 onward; red-letter and verse-per-line enabled; Strong’s numbers disabled.",
+      "font": "Georgia, 24pt",
+      "width": 2064,
+      "height": 2752,
+      "mode": "RGBA",
+      "sha256": "90b78d395ef3b7060a2b353d5a98c0155e02bae3eabe9abbdd42b50e38c65192"
+    },
+    {
+      "file": "search.png",
+      "description": "KJV search for light, All scope, 235 real results with matching text highlighted; search index built through the app and keyboard dismissed by scrolling.",
+      "font": "Native system search-result font; app reading preference 24pt",
+      "width": 2064,
+      "height": 2752,
+      "mode": "RGBA",
+      "sha256": "efdb0e43903296f15866224e234cea925d86bd5f8ac0d0bf0b382907e4fc02b1"
+    },
+    {
+      "file": "commentary.png",
+      "description": "Matthew Henry’s Concise Commentary, Genesis 1:1–2, beginning of first entry.",
+      "font": "Georgia, 32pt",
+      "width": 2064,
+      "height": 2752,
+      "mode": "RGBA",
+      "sha256": "f6a8a28082bbf3cc500441dafa01b0a4ce2cc8d25dd4e467fdae630cd3ef3597"
+    },
+    {
+      "file": "word-study.png",
+      "description": "KJV John 3:16 with Strong’s numbers enabled and Greek G25 agapáō definition popover open; complete definition and Find all occurrences action visible.",
+      "font": "Georgia, 32pt in reader; native system face at 32pt in Strong’s definition",
+      "width": 2064,
+      "height": 2752,
+      "mode": "RGBA",
+      "sha256": "c79cc15a4002ad5624117f35c7118af124559da7ec7ef9ce74d9ef75a54e5325"
+    },
+    {
+      "file": "library.png",
+      "description": "Library Bookmarks with section selector open showing Bookmarks, History and Dictionary; two example bookmarks (God’s love / John 3:16 and How to be saved / Romans 10:9), plus green For further study folder, all created through normal app UI in this simulator.",
+      "font": "Native system Library font; app reading preference 32pt",
+      "width": 2064,
+      "height": 2752,
+      "mode": "RGBA",
+      "sha256": "b748bbb92c3b26a6750e0e0b315ca593b83f55003de888832bbcc68a3382d915"
+    }
+  ]
+}
