@@ -6,8 +6,6 @@ MHCC built in, plus Greek and Hebrew word-study tools. iOS 27+ required.
 
 ### Screenshots
 
-Light mode on an iPhone 18 Pro simulator.
-
 | Bible reading | Commentary | Search |
 | :---: | :---: | :---: |
 | <img src="docs/screenshots/reading.png" alt="Bible reading in SimpleScripture" width="240"> | <img src="docs/screenshots/commentary.png" alt="Matthew Henry's Concise Commentary" width="240"> | <img src="docs/screenshots/search.png" alt="Bible search results" width="240"> |
