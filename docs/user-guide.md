@@ -48,7 +48,8 @@ bookmarks, preferences or history from an existing PocketSword installation.
 
 ## Settings and About
 
-Choose a reading font and text size, keep the display awake while reading,
+Choose a reading font and text size, choose whether Library opens to
+Bookmarks, History or Dictionary, keep the display awake while reading,
 or lock the reading orientation. Open About for the project link, feedback,
 upstream credits and complete offline licence notices.
 

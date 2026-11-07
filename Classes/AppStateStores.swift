@@ -16,6 +16,7 @@ struct SettingsSnapshot: Equatable {
     let fontSize: Int
     let keepScreenAwake: Bool
     let rotationLock: RotationLock
+    let librarySection: LibrarySection
 }
 
 final class SettingsStore {
@@ -36,7 +37,10 @@ final class SettingsStore {
             keepScreenAwake: defaults.bool(forKey: Defaults.insomniaPreference),
             rotationLock: RotationLock(
                 rawValue: defaults.integer(forKey: Defaults.rotationLockPosition)
-            ) ?? .unlocked
+            ) ?? .unlocked,
+            librarySection: defaults.string(
+                forKey: Defaults.librarySectionPreference
+            ).flatMap(LibrarySection.init(rawValue:)) ?? .bookmarks
         )
     }
 
@@ -70,6 +74,11 @@ final class SettingsStore {
             NSNumber(value: Int32(value.rawValue)),
             forKey: Defaults.rotationLockPosition
         )
+        defaults.synchronize()
+    }
+
+    func saveLibrarySection(_ value: LibrarySection) {
+        defaults.set(value.rawValue, forKey: Defaults.librarySectionPreference)
         defaults.synchronize()
     }
 }

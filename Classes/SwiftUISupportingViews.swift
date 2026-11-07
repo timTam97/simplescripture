@@ -690,6 +690,7 @@ struct SettingsView: View {
                 maximumFontSize: maximumFontSize,
                 showFontPicker: { showingFontPicker = true }
             )
+            LibrarySettingsSection(settings: settings)
             DeviceSettingsSection(
                 settings: settings,
                 currentOrientation: currentOrientation
@@ -868,6 +869,30 @@ private struct FontSelectionButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("settings.font")
+    }
+}
+
+private struct LibrarySettingsSection: View {
+    let settings: SettingsModel
+
+    var body: some View {
+        @Bindable var settings = settings
+
+        Section("WorkspaceLibrary") {
+            Picker(selection: $settings.librarySection) {
+                ForEach(LibrarySection.allCases) { section in
+                    Label(section.title, systemImage: section.systemImage)
+                        .tag(section)
+                }
+            } label: {
+                SettingsIconLabel(
+                    title: "PreferencesLibraryOpensToTitle",
+                    systemImage: "books.vertical",
+                    tint: .indigo
+                )
+            }
+            .accessibilityIdentifier("settings.library-section")
+        }
     }
 }
 

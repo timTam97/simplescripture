@@ -16,6 +16,7 @@ final class SimpleScriptureUITests: XCTestCase {
         app.launchArguments += [
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
+            "-librarySectionPreference", "bookmarks",
         ]
         app.launch()
 
@@ -461,6 +462,29 @@ final class SimpleScriptureUITests: XCTestCase {
         selectLibrarySection("Bookmarks")
         XCTAssertTrue(
             app.buttons["bookmarks.add-folder"].waitForExistence(timeout: 5)
+        )
+    }
+
+    @MainActor
+    func testLibraryOpensToTheSectionChosenInSettings() throws {
+        app.terminate()
+        app.launchArguments += ["-librarySectionPreference", "history"]
+        app.launch()
+
+        selectWorkspace("Library")
+        XCTAssertTrue(app.buttons["history.clear"].waitForExistence(timeout: 5))
+
+        selectWorkspace("Settings")
+        let picker = app.buttons["settings.library-section"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5))
+        picker.tap()
+        let dictionary = app.buttons["Dictionary"].firstMatch
+        XCTAssertTrue(dictionary.waitForExistence(timeout: 5))
+        dictionary.tap()
+
+        selectWorkspace("Library")
+        XCTAssertTrue(
+            app.searchFields["Search Dictionary"].waitForExistence(timeout: 5)
         )
     }
 
