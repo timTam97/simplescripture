@@ -1,0 +1,54 @@
+1. Physical-device demonstration
+
+Recording: [RECORDING URL]
+Device: [PHYSICAL DEVICE MODEL]
+Operating system: [OS VERSION]
+App version/build: [VERSION (BUILD)]
+
+Testing and quality assurance of the submitted build have been completed on physical hardware.
+
+2. Purpose and audience
+
+SimpleScripture is an offline Bible study app for the general public, including Bible readers, students and study groups. It combines the King James Version, Matthew Henry's Concise Commentary, Strong's Greek/Hebrew dictionaries and Robinson's Greek morphology. Users can read, search, study original-language words and save passages without an internet connection.
+
+3. Setup and main features
+
+All study resources are bundled. No app account, login credentials, sample files or content downloads are required.
+
+- Read: Tap the passage reference and choose a book, chapter and verse, e.g. John 3:16. Navigate with chapter arrows; switch between Bible and Commentary.
+- Word study: Enable Strong's Numbers in the Bible display menu, then tap a number to open its dictionary entry. Morphological Tags shows Greek analysis where available.
+- Search: Choose Bible or commentary. If prompted, tap Build Index and wait; this builds locally, with no download. Search for "love" and open a result.
+- Library: Tap a verse number > Add Bookmark, then find it in Library. Library also contains history and dictionaries.
+- Settings: Adjust font and size; open About > Credits & licenses for offline notices.
+
+There is no app registration/login, so no app account-deletion flow. There are no in-app purchases, subscriptions or paid unlocks. Bookmarks and descriptions are personal; there is no public posting or messaging service and no content-reporting or user-blocking flow.
+
+4. External services and content providers
+
+Core features run on-device using bundled content from CrossWire's SWORD project. No live CrossWire connection is required.
+
+Apple iCloud key-value storage supports reading-history sync through the device's Apple Account when available. Core features work without iCloud; bookmarks are local.
+
+GitHub hosts source and optional support. About links open GitHub, where feedback may require a GitHub account. GitHub access is not required for app use. Core features use no external authentication, payment or AI services.
+
+5. Regional behaviour
+
+The same resources and core features are provided in every enabled storefront, with no regional content or feature gating. Optional iCloud sync depends on device and service availability.
+
+[UK AVAILABILITY: Confirm the final storefront configuration after resolving the KJV permission item below.]
+
+6. Third-party material
+
+This is an educational reference app with no regulated services. It is an independent PocketSword continuation, distributed under GNU GPLv2. MHCC and Strong's carry public-domain notices. Robinson is CC BY-SA 3.0 with attribution and a conversion notice. Gentium Plus and Ezra SIL carry OFL 1.1 notices; Ezra also includes MIT/X11.
+
+CrossWire's KJV electronic-text grant is preserved. The KJV notice separately acknowledges Crown rights in the base text in the UK.
+
+[UK KJV: Insert written authorization and its document/link if retaining UK availability. Otherwise, confirm that the UK storefront has been excluded and update section 5.]
+
+Content and font documentation:
+https://github.com/timTam97/simplescripture/tree/main/Resources/Notices
+
+Application licence:
+https://github.com/timTam97/simplescripture/blob/main/Resources/doc/LICENSE.txt
+
+The same notices are accessible offline at Settings > About > Credits & licenses.
