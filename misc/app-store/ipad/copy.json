@@ -7,7 +7,7 @@
   {
     "id": "02-search",
     "source": "search.png",
-    "headline": ["Search the Bible,", "English and Greek"]
+    "headline": ["Search the Bible, with", "Greek and Hebrew too"]
   },
   {
     "id": "03-commentary",
@@ -22,6 +22,6 @@
   {
     "id": "05-library",
     "source": "library.png",
-    "headline": ["A library for", "deeper study"]
+    "headline": ["A library for your", "deeper study"]
   }
 ]

@@ -11,7 +11,7 @@
         2622
       ],
       "bytes": 839827,
-      "sha256": "a013e86b7bc2b849e3fd8e7714f3b7049390cc75a2348aea5510340856c7a35f",
+      "sha256": "4be23d7b7b18959b3d23cb7a05f9d662ecdd21b97c17045f3bb1a52251c785bb",
       "source": "reading.png",
       "source_sha256": "f41e8041227bdb2eb8f4d3d9cd1a4bbb31449d9513ca70f58067e9d5a0ee9066",
       "source_pixels": [
@@ -52,8 +52,8 @@
         1206,
         2622
       ],
-      "bytes": 601766,
-      "sha256": "106fe327c6555f3fb7afa237e4639d71ad2a43e5842baf72fbdc7b85d346a3e8",
+      "bytes": 604301,
+      "sha256": "dd208757b655f2a2db282d60d70b2fb9b50c7bd48dba103266dae11236a5d83f",
       "source": "search.png",
       "source_sha256": "ed398707e645a81b9b38652c6063411f2aafeae7eae59f5b119695429e1ef371",
       "source_pixels": [
@@ -69,21 +69,21 @@
       "screen_scale": 0.843284,
       "text_bounds": [
         {
-          "text": "Search the Bible,",
+          "text": "Search the Bible, with",
           "bounds": [
             95,
             80,
-            851,
+            1065,
             169
           ]
         },
         {
-          "text": "English and Greek",
+          "text": "Greek and Hebrew too",
           "bounds": [
             95,
             196,
-            909,
-            288
+            1102,
+            270
           ]
         }
       ]
@@ -95,7 +95,7 @@
         2622
       ],
       "bytes": 970295,
-      "sha256": "f5ba8e87dd2a7ec51f3a52504c0f2d911e891bfc77d614800ebffeb962d8a7c9",
+      "sha256": "08d11436d49d27b2a36c10da20a71b43f4964f3d93ce9e09fe9ccbd0d09b2bf1",
       "source": "commentary.png",
       "source_sha256": "e15c9fc874d9a5607c7f676db21ee989da4e3e1b007627f987994e5bde2e359e",
       "source_pixels": [
@@ -137,7 +137,7 @@
         2622
       ],
       "bytes": 1156986,
-      "sha256": "f203e9afc58552ff8374638489503acb698c9e7b27abf9650d7e7874d2395d15",
+      "sha256": "6460dfb208e573ce55863e6b6ecb2021085c826dc4df8cd3201d2de053a5455e",
       "source": "word-study.png",
       "source_sha256": "58ed90a479947e56a60685ccf19a3af3bd62ca7ec6c31e061fc2d450ae55d67d",
       "source_pixels": [
@@ -178,8 +178,8 @@
         1206,
         2622
       ],
-      "bytes": 222775,
-      "sha256": "b95c6e98d4ad25200bc1af92825663575b51e83f33277414650f490d983f340c",
+      "bytes": 223606,
+      "sha256": "f5d96f1e0c185b3fe827ee7c73d38b0ed740756ac12b730577d0776dfb5f234f",
       "source": "library.png",
       "source_sha256": "21d4ba31750cafb341ef346ba327f210d6344df4f54f1cbd51132fbf2c54bfd4",
       "source_pixels": [
@@ -195,11 +195,11 @@
       "screen_scale": 0.843284,
       "text_bounds": [
         {
-          "text": "A library for",
+          "text": "A library for your",
           "bounds": [
             95,
             80,
-            614,
+            836,
             171
           ]
         },
@@ -221,7 +221,7 @@
         2868
       ],
       "bytes": 938985,
-      "sha256": "93f5dc7556f616a24cbaf611772c804001736e0e9f0016d0d8539d544935033d",
+      "sha256": "dede9da9280c6f7d68b0001ccb144358a91105580935371a01ee41f458a401ec",
       "source": "reading.png",
       "source_sha256": "f41e8041227bdb2eb8f4d3d9cd1a4bbb31449d9513ca70f58067e9d5a0ee9066",
       "source_pixels": [
@@ -262,8 +262,8 @@
         1320,
         2868
       ],
-      "bytes": 670667,
-      "sha256": "8a2a89fd4adfc662120ec09a53825b78bf68e79e132453f77b92e3b9fcea9731",
+      "bytes": 673556,
+      "sha256": "739cbe9592622404335637da37d2749eb71a65175c74d02268f0167aa349130a",
       "source": "search.png",
       "source_sha256": "ed398707e645a81b9b38652c6063411f2aafeae7eae59f5b119695429e1ef371",
       "source_pixels": [
@@ -279,21 +279,21 @@
       "screen_scale": 0.922056,
       "text_bounds": [
         {
-          "text": "Search the Bible,",
+          "text": "Search the Bible, with",
           "bounds": [
             104,
             88,
-            932,
+            1167,
             185
           ]
         },
         {
-          "text": "English and Greek",
+          "text": "Greek and Hebrew too",
           "bounds": [
             104,
             214,
-            996,
-            315
+            1208,
+            295
           ]
         }
       ]
@@ -305,7 +305,7 @@
         2868
       ],
       "bytes": 1088878,
-      "sha256": "a253fe12a49a7f0a7b914e671ae873e167e17cab31e8c201b293a94c1bb39354",
+      "sha256": "743afe82f31a52e39dd7ef137f0e88d49371495e2d097fc2a9e63166df34372a",
       "source": "commentary.png",
       "source_sha256": "e15c9fc874d9a5607c7f676db21ee989da4e3e1b007627f987994e5bde2e359e",
       "source_pixels": [
@@ -347,7 +347,7 @@
         2868
       ],
       "bytes": 1299917,
-      "sha256": "fae8b15c84f35c66a849a590af5ec98f23422bd9cfa8487b8c9b42249b21fda1",
+      "sha256": "40aa41d84058b7a9b4a506ea8b89a484ac6274d0015d0a37dde690a149b3bf8a",
       "source": "word-study.png",
       "source_sha256": "58ed90a479947e56a60685ccf19a3af3bd62ca7ec6c31e061fc2d450ae55d67d",
       "source_pixels": [
@@ -388,8 +388,8 @@
         1320,
         2868
       ],
-      "bytes": 244362,
-      "sha256": "a9dacfcb93d6024f156d00682b83535e2babdfb9b6fc23256afb1e506c4c0950",
+      "bytes": 245278,
+      "sha256": "98f492a608ad4db3faeb0439d3a4dc7a29d27681668c3cdc758ce67029cf1e49",
       "source": "library.png",
       "source_sha256": "21d4ba31750cafb341ef346ba327f210d6344df4f54f1cbd51132fbf2c54bfd4",
       "source_pixels": [
@@ -405,11 +405,11 @@
       "screen_scale": 0.922056,
       "text_bounds": [
         {
-          "text": "A library for",
+          "text": "A library for your",
           "bounds": [
             104,
             88,
-            673,
+            917,
             188
           ]
         },

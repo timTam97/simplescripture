@@ -11,8 +11,8 @@
         2064,
         2752
       ],
-      "bytes": 1232090,
-      "sha256": "c3c8696d162edef7eca07073e449dd03f7092a2df1c049f8deec0081d4c2c6f8",
+      "bytes": 1232091,
+      "sha256": "dec65502e24a11c94d951515620816ad07b06b7c38d79a48d26ac6370fa154e6",
       "source": "reading.png",
       "source_sha256": "90b78d395ef3b7060a2b353d5a98c0155e02bae3eabe9abbdd42b50e38c65192",
       "source_pixels": [
@@ -53,8 +53,8 @@
         2064,
         2752
       ],
-      "bytes": 751832,
-      "sha256": "2881a4d5bacb799f640f9f11d31b66d64542cce3702111c5b965e3a9ed8cdf49",
+      "bytes": 756259,
+      "sha256": "8423acb04be3a1301dd12762beb65a9a34afc5637dbb78ac1682afaa6fdd8892",
       "source": "search.png",
       "source_sha256": "efdb0e43903296f15866224e234cea925d86bd5f8ac0d0bf0b382907e4fc02b1",
       "source_pixels": [
@@ -70,21 +70,21 @@
       "screen_scale": 0.81686,
       "text_bounds": [
         {
-          "text": "Search the Bible,",
+          "text": "Search the Bible, with",
           "bounds": [
             189,
             88,
-            1263,
+            1567,
             213
           ]
         },
         {
-          "text": "English and Greek",
+          "text": "Greek and Hebrew too",
           "bounds": [
             189,
             250,
-            1342,
-            380
+            1614,
+            355
           ]
         }
       ]
@@ -95,8 +95,8 @@
         2064,
         2752
       ],
-      "bytes": 1271135,
-      "sha256": "e528fc9867d4f9770d6bb4285cfc93c75edddac2591fb3fe094142bec0861d9f",
+      "bytes": 1271136,
+      "sha256": "229ba11f80efcc0367630814b8ba6be2b81e89ac5992a2ac4c00f533421dd869",
       "source": "commentary.png",
       "source_sha256": "f6a8a28082bbf3cc500441dafa01b0a4ce2cc8d25dd4e467fdae630cd3ef3597",
       "source_pixels": [
@@ -137,8 +137,8 @@
         2064,
         2752
       ],
-      "bytes": 1744704,
-      "sha256": "afc58d185422d83fa5b717f1da2e7bf211ce68e21ba72ddd47ab715c430dfdd5",
+      "bytes": 1744705,
+      "sha256": "65b232f86634a29b347ea600abc462f6e547c24d38c04bcb2af802db7cc89ba2",
       "source": "word-study.png",
       "source_sha256": "c79cc15a4002ad5624117f35c7118af124559da7ec7ef9ce74d9ef75a54e5325",
       "source_pixels": [
@@ -179,8 +179,8 @@
         2064,
         2752
       ],
-      "bytes": 170246,
-      "sha256": "0e66789c59d505d39866f5bb962687e85026e16f36384d8abf9df0a448d5f164",
+      "bytes": 171421,
+      "sha256": "0152597465e5e7c990dfae10c602865500beb4902f6bca291b45aafaf24b4106",
       "source": "library.png",
       "source_sha256": "b748bbb92c3b26a6750e0e0b315ca593b83f55003de888832bbcc68a3382d915",
       "source_pixels": [
@@ -196,11 +196,11 @@
       "screen_scale": 0.81686,
       "text_bounds": [
         {
-          "text": "A library for",
+          "text": "A library for your",
           "bounds": [
             189,
             88,
-            927,
+            1242,
             217
           ]
         },
