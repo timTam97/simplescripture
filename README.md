@@ -4,6 +4,8 @@
 SimpleScripture is a lightweight offline Bible reader for iOS with KJV and
 MHCC built in, plus Greek and Hebrew word-study tools. iOS 27+ required.
 
+<a href="https://apps.apple.com/au/app/simplescripture/id6830668465"><img src="docs/app-store-badge.svg" alt="Download on the App Store" height="40"></a>
+
 ### Screenshots
 
 | Bible reading | Commentary | Search |
