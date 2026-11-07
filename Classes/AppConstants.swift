@@ -97,6 +97,8 @@ enum Defaults {
     static let glossesPreference           = "glossesPreference"
 
     static let rotationLockPosition        = "rotationLockedPosition"        // macro ROTATION_LOCK_POSITION
+    /// The `LibrarySection` raw value the Library opens to. Swift-only.
+    static let librarySectionPreference    = "librarySectionPreference"
 }
 
 // MARK: - Bundled modules

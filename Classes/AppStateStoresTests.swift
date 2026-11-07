@@ -79,6 +79,7 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(initial.fontSize, 20)
         XCTAssertFalse(initial.keepScreenAwake)
         XCTAssertEqual(initial.rotationLock, .unlocked)
+        XCTAssertEqual(initial.librarySection, .bookmarks)
         XCTAssertNil(defaults.object(forKey: Defaults.fontSizePreference))
 
         store.ensureFontSizeDefault()
@@ -102,6 +103,7 @@ final class AppStateStoresTests: XCTestCase {
         model.fontSize = 18
         model.keepScreenAwake = true
         model.rotationLock = .landscape
+        model.librarySection = .dictionary
 
         XCTAssertEqual(
             defaults.string(forKey: Defaults.fontNamePreference),
@@ -113,8 +115,27 @@ final class AppStateStoresTests: XCTestCase {
             defaults.integer(forKey: Defaults.rotationLockPosition),
             RotationLock.landscape.rawValue
         )
+        XCTAssertEqual(
+            defaults.string(forKey: Defaults.librarySectionPreference),
+            "dictionary"
+        )
         XCTAssertEqual(appearanceChanges, 2)
         XCTAssertEqual(idleTimerValues, [true])
+    }
+
+    @MainActor
+    func testSettingsModelRestoresLibrarySection() {
+        defaults.set("history", forKey: Defaults.librarySectionPreference)
+        XCTAssertEqual(
+            SettingsModel(store: SettingsStore(defaults: defaults)).librarySection,
+            .history
+        )
+
+        defaults.set("unknown", forKey: Defaults.librarySectionPreference)
+        XCTAssertEqual(
+            SettingsModel(store: SettingsStore(defaults: defaults)).librarySection,
+            .bookmarks
+        )
     }
 
     @MainActor

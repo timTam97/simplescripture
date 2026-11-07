@@ -271,36 +271,47 @@ private struct LibraryWorkspace: View {
     let session: AppSession
     let reading: ReadingWorkspaceModel
 
-    @State private var section: LibrarySection = .bookmarks
+    @State private var section: LibrarySection
+
+    init(session: AppSession, reading: ReadingWorkspaceModel) {
+        self.session = session
+        self.reading = reading
+        _section = State(initialValue: session.settings.librarySection)
+    }
 
     var body: some View {
-        switch section {
-        case .bookmarks:
-            BookmarksView(
-                library: session.library,
-                section: $section,
-                openBookmark: { reference in
-                    reading.openLibraryReference(reference, module: nil)
-                    session.selectedWorkspace = .read
-                }
-            )
-        case .history:
-            HistoryView(
-                library: session.library,
-                section: $section,
-                openHistoryEntry: { entry in
-                    reading.openLibraryReference(
-                        entry.reference ?? "",
-                        module: entry.moduleName
-                    )
-                    session.selectedWorkspace = .read
-                }
-            )
-        case .dictionary:
-            DictionaryView(
-                library: session.library,
-                section: $section
-            )
+        Group {
+            switch section {
+            case .bookmarks:
+                BookmarksView(
+                    library: session.library,
+                    section: $section,
+                    openBookmark: { reference in
+                        reading.openLibraryReference(reference, module: nil)
+                        session.selectedWorkspace = .read
+                    }
+                )
+            case .history:
+                HistoryView(
+                    library: session.library,
+                    section: $section,
+                    openHistoryEntry: { entry in
+                        reading.openLibraryReference(
+                            entry.reference ?? "",
+                            module: entry.moduleName
+                        )
+                        session.selectedWorkspace = .read
+                    }
+                )
+            case .dictionary:
+                DictionaryView(
+                    library: session.library,
+                    section: $section
+                )
+            }
+        }
+        .onChange(of: session.settings.librarySection) { _, newValue in
+            section = newValue
         }
     }
 }
