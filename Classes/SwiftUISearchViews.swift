@@ -199,6 +199,7 @@ private struct SearchWorkspaceContent: View {
                 )
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
