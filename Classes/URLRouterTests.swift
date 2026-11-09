@@ -63,6 +63,25 @@ final class URLRouterTests: XCTestCase {
         XCTAssertNil(router.route(for: URL(string: "sword://KJV/Nonsense+9:9")))
     }
 
+    func testDevelopmentLinksPreserveRoutingAndBundledLinks() throws {
+        let development = try XCTUnwrap(URLRouter(externalScheme: "sword-dev"))
+        let developmentURL = try XCTUnwrap(URL(string: "sword-dev://KJV/John+3:16"))
+        let external = try XCTUnwrap(development.route(for: developmentURL))
+        let bundled = try XCTUnwrap(development.route(
+            for: URL(string: "sword://KJV/John+3:16")
+        ))
+
+        XCTAssertEqual(external.sourceURL, developmentURL)
+        XCTAssertEqual(external.destination, bundled.destination)
+        XCTAssertEqual(external.reference, bundled.reference)
+        XCTAssertEqual(external.persistedChapterRef, bundled.persistedChapterRef)
+        XCTAssertEqual(external.versePosition, bundled.versePosition)
+
+        let production = try XCTUnwrap(URLRouter(externalScheme: "sword"))
+        XCTAssertNil(production.route(for: developmentURL))
+        XCTAssertNil(development.route(for: URL(string: "https://KJV/John+3:16")))
+    }
+
     @MainActor
     func testAppSessionMirrorsAcceptedRoute() throws {
         let route = try XCTUnwrap(try router().route(

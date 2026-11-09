@@ -19,10 +19,18 @@ struct URLRouter {
     private let parser: PSRefParser
     private let resolver: PSBookOSISResolver
     private let moduleTypeProvider: ModuleTypeProvider
+    private let externalScheme: String
+
+    private static var registeredScriptureScheme: String {
+        let types = Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes")
+            as? [[String: Any]]
+        return (types?.first?["CFBundleURLSchemes"] as? [String])?.first ?? "sword"
+    }
 
     init?(
         parser: PSRefParser? = PSRefParser(),
         resolver: PSBookOSISResolver? = PSBookOSISResolver.shared,
+        externalScheme: String = URLRouter.registeredScriptureScheme,
         moduleTypeProvider: @escaping ModuleTypeProvider = {
             PSContentStore.shared?.moduleMeta($0, key: "type")
         }
@@ -32,11 +40,14 @@ struct URLRouter {
         }
         self.parser = parser
         self.resolver = resolver
+        self.externalScheme = externalScheme
         self.moduleTypeProvider = moduleTypeProvider
     }
 
     func route(for url: URL?) -> URLRoute? {
-        guard let url, url.scheme == "sword" else {
+        // Bundled study texts keep using sword:// internally, while the
+        // development app registers sword-dev:// for links opened by iOS.
+        guard let url, url.scheme == "sword" || url.scheme == externalScheme else {
             return nil
         }
 
