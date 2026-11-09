@@ -1,0 +1,108 @@
+{
+  "captured_date": "2026-11-07",
+  "status": "Outer display complete; inner display incomplete. Device interaction stopped after user reported repeated SpringBoard crashes.",
+  "device": "iPhone Duo simulator",
+  "os": "iOS 27.2",
+  "device_uuid": "663A529E-D1E2-4BD8-889E-694DDDB9F986",
+  "orientation": "Portrait",
+  "commit": "5fa67f07c0c06ee77cc15ff666da4ca44ac37a90",
+  "app_version": "0.3.1",
+  "app_build": "20",
+  "bundle_identifier": "org.timsam.SimpleScripture",
+  "build_verification": "Xcode DeviceInteractionInstallAndRun successfully built, installed and launched this checkout on 2026-11-07. GetBuildLog confirmed success and no warning entries. Installed app metadata independently confirmed 0.3.1 (20).",
+  "capture_method": "xcrun simctl io 663A529E-D1E2-4BD8-889E-694DDDB9F986 screenshot --display=1 <file>; native 1398 × 2034 outer-display PNGs, copied directly without scaling or image modifications. Xcode DeviceInteractionSynthesize provided hierarchy-based navigation and visual checks; its reduced-resolution images are not these source files.",
+  "appearance": "Light; status bar overridden to 09:41, full Wi-Fi and 100% charged battery for all completed sources.",
+  "font": "Temporary per-launch fontNamePreference=Georgia and fontSizePreference=18 arguments. Native system typography retained where selected by app.",
+  "display_discovery": {
+    "outer": {
+      "screen_id": 1,
+      "native_pixels": [
+        1398,
+        2034
+      ]
+    },
+    "inner": {
+      "screen_id": 3,
+      "native_pixels": [
+        2007,
+        2853
+      ],
+      "capture_status": "No usable app captures; only temporary black diagnostic images outside repository were taken."
+    }
+  },
+  "notes": [
+    "No app source, entitlements, Info.plist or scheme files were edited.",
+    "All five outer captures were complete and visually checked before attempts to switch to the inner display.",
+    "The workspace interaction session was reported missing after its successful install/run, so capture continued with a standalone device session. Standalone applicationState=NotRun did not indicate app failure; actual app UI and process were present and verified.",
+    "An observed app navigation issue occurred during bookmark setup: navigating to Romans 10:9 by sword URL and the reference picker updated the title but retained a viewport around verses 17 onward. Manual scrolling reached verse 9; the saved bookmark was verified as Romans 10:9. This did not affect the final source scenes.",
+    "After completing the outer set, simctl screenConfig powered screen 1 off and screen 3 on, but the inner display stayed black. Device Hub Open/Closed hinge controls and restoration of screen 1 power did not recover it. A reboot of capture simulator 663A529E-D1E2-4BD8-889E-694DDDB9F986 was attempted before user reported repeated SpringBoard crashes. Further capture and display-switch attempts then stopped.",
+    "Read-only inspection found 12 SpringBoard reports with capture times between 14:18:02 and 14:20:22 +1100. All reports identify capture simulator 663A529E-D1E2-4BD8-889E-694DDDB9F986 in coalitionName. Repeated SIGABRT reports involve SBMainDisplayConfigurationTransformer transformDisplayConfiguration; SIGTRAP reports involve FBSDisplayMode initialization during classic-mode display-configuration processing. This establishes display-configuration failure context, not a proven app-source defect.",
+    "Device Hub temporarily showed the other pre-existing simulator after an external UI change; its identifier was rechecked and the capture simulator was reselected before further deliberate hinge actions. No app or data changes were deliberately made on the pre-existing simulator."
+  ],
+  "cleanup": {
+    "status": "Capture simulator shut down to stop the crash loop; original Xcode run destination restored. No inner-display retries performed.",
+    "initial_xcode_destination": "iPhone Duo (A86E051A-5593-4009-9FE4-D9B5701464AA)",
+    "initial_capture_device_state": "Shutdown",
+    "initial_other_duo_state": "A86E051A-5593-4009-9FE4-D9B5701464AA already booted",
+    "last_read_only_device_state": "Capture simulator 663A529E-D1E2-4BD8-889E-694DDDB9F986 is Shutdown. Only the pre-existing A86E051A-5593-4009-9FE4-D9B5701464AA Duo remains Booted.",
+    "interaction_session_keys": [
+      "iPhone Duo Marketing Capture",
+      "Duo Native Screens"
+    ],
+    "session_observation": "DeviceInteractionEndSession was called for both keys during cleanup; both returned Session doesn't exist anymore.",
+    "status_bar_override": "Applied during capture; not explicitly cleared before shutdown. Simulator was not restarted for further cleanup.",
+    "display_configuration": "Power and hinge state were changed during the failed inner-display attempt. Shutdown stopped the crash loop; a subsequent boot or inner-display recovery was not verified."
+  },
+  "files": [
+    {
+      "file": "outer/reading.png",
+      "display": "outer",
+      "description": "KJV John 3:12 onward, red letters and verse-per-line enabled, Strong’s numbers disabled; native Duo outer-display vertical controls.",
+      "font": "Georgia, 18pt reading preference; native system type for search, library and Strong’s definition",
+      "width": 1398,
+      "height": 2034,
+      "mode": "RGBA",
+      "sha256": "4ba1a197a904566001c2052e75434787fd60b08cea4f1055acd347b160f5f9fb"
+    },
+    {
+      "file": "outer/search.png",
+      "display": "outer",
+      "description": "KJV search for light, All scope, 235 real results with highlighted matches; search index built through app UI and keyboard dismissed.",
+      "font": "Georgia, 18pt reading preference; native system type for search, library and Strong’s definition",
+      "width": 1398,
+      "height": 2034,
+      "mode": "RGBA",
+      "sha256": "436bbbb5bf4682ca395c47f353636cddc01820d3ccd6c8847cf7ff37b3cf083c"
+    },
+    {
+      "file": "outer/commentary.png",
+      "display": "outer",
+      "description": "Matthew Henry’s Concise Commentary, Genesis 1:1–2, beginning of first entry below the chapter introduction.",
+      "font": "Georgia, 18pt reading preference; native system type for search, library and Strong’s definition",
+      "width": 1398,
+      "height": 2034,
+      "mode": "RGBA",
+      "sha256": "34f6bd8144b13401cde55d744896e8e4d72a7d113bc0fef31e0a998a18b69133"
+    },
+    {
+      "file": "outer/word-study.png",
+      "display": "outer",
+      "description": "KJV John 3:16 with Strong’s numbers enabled and settled Greek G25 agapáō definition sheet; complete definition and Find all occurrences action visible.",
+      "font": "Georgia, 18pt reading preference; native system type for search, library and Strong’s definition",
+      "width": 1398,
+      "height": 2034,
+      "mode": "RGBA",
+      "sha256": "d6cca6dd386d9327cc6a35b85319b625b3a256cf8e333a6a9123fbc24997facd"
+    },
+    {
+      "file": "outer/library.png",
+      "display": "outer",
+      "description": "Library Bookmarks with section selector open showing Bookmarks, History and Dictionary; God’s love / John 3:16, How to be saved / Romans 10:9, and green For further study folder, all created through normal app UI in this simulator.",
+      "font": "Georgia, 18pt reading preference; native system type for search, library and Strong’s definition",
+      "width": 1398,
+      "height": 2034,
+      "mode": "RGBA",
+      "sha256": "43593b7b3d6e45c92ab7ee89ccf7fc2f8e32f617e1514a9b8505461c39d967fe"
+    }
+  ]
+}
