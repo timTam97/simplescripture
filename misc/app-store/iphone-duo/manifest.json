@@ -1,0 +1,234 @@
+{
+  "format": "PNG",
+  "mode": "RGB",
+  "profile": "sRGB",
+  "device_group": "iPhone Duo",
+  "orientation": "portrait",
+  "displays": [
+    "outer"
+  ],
+  "specifications_url": "https://developer.apple.com/help/app-store-connect/reference/app-information/screenshot-specifications",
+  "specifications_checked": "2026-11-07",
+  "exports": [
+    {
+      "file": "1398x2034/01-reading.png",
+      "display": "outer",
+      "pixels": [
+        1398,
+        2034
+      ],
+      "bytes": 760163,
+      "sha256": "096b3c69a86990ce1e6a2222d5d5eea3ac40325d1b3b814821c47aecb27d8881",
+      "source": "outer/reading.png",
+      "source_sha256": "4ba1a197a904566001c2052e75434787fd60b08cea4f1055acd347b160f5f9fb",
+      "source_pixels": [
+        1398,
+        2034
+      ],
+      "screen_bounds": [
+        117,
+        298,
+        1281,
+        1991
+      ],
+      "screen_scale": 0.832618,
+      "corner_radius": 49,
+      "text_bounds": [
+        {
+          "text": "SimpleScripture",
+          "bounds": [
+            117,
+            60,
+            817,
+            148
+          ]
+        },
+        {
+          "text": "A simple Bible reader",
+          "bounds": [
+            117,
+            169,
+            1033,
+            257
+          ]
+        }
+      ]
+    },
+    {
+      "file": "1398x2034/02-search.png",
+      "display": "outer",
+      "pixels": [
+        1398,
+        2034
+      ],
+      "bytes": 520477,
+      "sha256": "86f02f5e9d422ec938cd756d4c17d1cbdbf44d97cf8a8a11b5f7c15ca2877b78",
+      "source": "outer/search.png",
+      "source_sha256": "436bbbb5bf4682ca395c47f353636cddc01820d3ccd6c8847cf7ff37b3cf083c",
+      "source_pixels": [
+        1398,
+        2034
+      ],
+      "screen_bounds": [
+        117,
+        298,
+        1281,
+        1991
+      ],
+      "screen_scale": 0.832618,
+      "corner_radius": 49,
+      "text_bounds": [
+        {
+          "text": "Search the Bible, with",
+          "bounds": [
+            117,
+            60,
+            1055,
+            145
+          ]
+        },
+        {
+          "text": "Greek and Hebrew too",
+          "bounds": [
+            117,
+            169,
+            1093,
+            241
+          ]
+        }
+      ]
+    },
+    {
+      "file": "1398x2034/03-commentary.png",
+      "display": "outer",
+      "pixels": [
+        1398,
+        2034
+      ],
+      "bytes": 789320,
+      "sha256": "9d22d9e2f1cc2e1c1660466ccec5a4d90fb97dd1275e6492346b351f1f5df02b",
+      "source": "outer/commentary.png",
+      "source_sha256": "34f6bd8144b13401cde55d744896e8e4d72a7d113bc0fef31e0a998a18b69133",
+      "source_pixels": [
+        1398,
+        2034
+      ],
+      "screen_bounds": [
+        117,
+        298,
+        1281,
+        1991
+      ],
+      "screen_scale": 0.832618,
+      "corner_radius": 49,
+      "text_bounds": [
+        {
+          "text": "MHCC Commentary",
+          "bounds": [
+            117,
+            60,
+            998,
+            148
+          ]
+        },
+        {
+          "text": "Included",
+          "bounds": [
+            117,
+            169,
+            494,
+            239
+          ]
+        }
+      ]
+    },
+    {
+      "file": "1398x2034/04-word-study.png",
+      "display": "outer",
+      "pixels": [
+        1398,
+        2034
+      ],
+      "bytes": 1170258,
+      "sha256": "99126227061f8fbe7f0df674ee10e5b084e497fdbc99dbf34cb23a607b2df2de",
+      "source": "outer/word-study.png",
+      "source_sha256": "d6cca6dd386d9327cc6a35b85319b625b3a256cf8e333a6a9123fbc24997facd",
+      "source_pixels": [
+        1398,
+        2034
+      ],
+      "screen_bounds": [
+        117,
+        298,
+        1281,
+        1991
+      ],
+      "screen_scale": 0.832618,
+      "corner_radius": 49,
+      "text_bounds": [
+        {
+          "text": "Strong's Concordance",
+          "bounds": [
+            117,
+            60,
+            1097,
+            149
+          ]
+        },
+        {
+          "text": "Word by Word",
+          "bounds": [
+            117,
+            169,
+            743,
+            256
+          ]
+        }
+      ]
+    },
+    {
+      "file": "1398x2034/05-library.png",
+      "display": "outer",
+      "pixels": [
+        1398,
+        2034
+      ],
+      "bytes": 242288,
+      "sha256": "1a140380da3168c67834e944c458bfde83a55afdd0f598218448a390dc6b8ea1",
+      "source": "outer/library.png",
+      "source_sha256": "43593b7b3d6e45c92ab7ee89ccf7fc2f8e32f617e1514a9b8505461c39d967fe",
+      "source_pixels": [
+        1398,
+        2034
+      ],
+      "screen_bounds": [
+        117,
+        298,
+        1281,
+        1991
+      ],
+      "screen_scale": 0.832618,
+      "corner_radius": 49,
+      "text_bounds": [
+        {
+          "text": "A library for your",
+          "bounds": [
+            117,
+            60,
+            833,
+            148
+          ]
+        },
+        {
+          "text": "deeper study",
+          "bounds": [
+            117,
+            169,
+            692,
+            255
+          ]
+        }
+      ]
+    }
+  ]
+}

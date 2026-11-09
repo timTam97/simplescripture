@@ -1,0 +1,27 @@
+[
+  {
+    "id": "01-reading",
+    "source": "reading.png",
+    "headline": ["SimpleScripture", "A simple Bible reader"]
+  },
+  {
+    "id": "02-search",
+    "source": "search.png",
+    "headline": ["Search the Bible, with", "Greek and Hebrew too"]
+  },
+  {
+    "id": "03-commentary",
+    "source": "commentary.png",
+    "headline": ["MHCC Commentary", "Included"]
+  },
+  {
+    "id": "04-word-study",
+    "source": "word-study.png",
+    "headline": ["Strong's Concordance", "Word by Word"]
+  },
+  {
+    "id": "05-library",
+    "source": "library.png",
+    "headline": ["A library for your", "deeper study"]
+  }
+]
