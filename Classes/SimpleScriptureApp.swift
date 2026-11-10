@@ -271,36 +271,59 @@ private struct LibraryWorkspace: View {
     let session: AppSession
     let reading: ReadingWorkspaceModel
 
+    /// The section on screen. Seeded from the "Default Library Tab" preference
+    /// on first appearance, then owned by the section menu.
     @State private var section: LibrarySection = .bookmarks
+    /// The preference value `section` was last seeded from; `nil` until the
+    /// workspace first appears.
+    @State private var appliedPreference: LibrarySection?
 
     var body: some View {
-        switch section {
-        case .bookmarks:
-            BookmarksView(
-                library: session.library,
-                section: $section,
-                openBookmark: { reference in
-                    reading.openLibraryReference(reference, module: nil)
-                    session.selectedWorkspace = .read
-                }
-            )
-        case .history:
-            HistoryView(
-                library: session.library,
-                section: $section,
-                openHistoryEntry: { entry in
-                    reading.openLibraryReference(
-                        entry.reference ?? "",
-                        module: entry.moduleName
-                    )
-                    session.selectedWorkspace = .read
-                }
-            )
-        case .dictionary:
-            DictionaryView(
-                library: session.library,
-                section: $section
-            )
+        Group {
+            // Read the preference only until it has been applied once. A read
+            // here (or in an `init`, which runs inside `WorkspaceTabs.body`)
+            // subscribes that body to the preference, and a Settings pick then
+            // re-evaluates it underneath the picker's own menu animation.
+            switch appliedPreference == nil
+                ? session.settings.librarySection : section
+            {
+            case .bookmarks:
+                BookmarksView(
+                    library: session.library,
+                    section: $section,
+                    openBookmark: { reference in
+                        reading.openLibraryReference(reference, module: nil)
+                        session.selectedWorkspace = .read
+                    }
+                )
+            case .history:
+                HistoryView(
+                    library: session.library,
+                    section: $section,
+                    openHistoryEntry: { entry in
+                        reading.openLibraryReference(
+                            entry.reference ?? "",
+                            module: entry.moduleName
+                        )
+                        session.selectedWorkspace = .read
+                    }
+                )
+            case .dictionary:
+                DictionaryView(
+                    library: session.library,
+                    section: $section
+                )
+            }
+        }
+        .onAppear { applyPreferenceIfChanged() }
+        // A changed preference is applied when the Library is next SELECTED,
+        // not when it changes. This workspace stays alive behind Settings, and
+        // swapping a whole `NavigationStack` there stalls the main thread for
+        // the length of the Settings picker's menu dismissal, which leaves the
+        // picker's value blank until the swap finishes.
+        .onChange(of: session.selectedWorkspace) { _, workspace in
+            guard workspace == .library else { return }
+            applyPreferenceIfChanged()
         }
     }
 }
@@ -360,6 +383,15 @@ struct LibrarySectionPicker: View {
             .foregroundStyle(.primary)
         }
         .accessibilityIdentifier("library.section")
+    }
+}
+
+private extension LibraryWorkspace {
+    func applyPreferenceIfChanged() {
+        let preference = session.settings.librarySection
+        guard preference != appliedPreference else { return }
+        section = preference
+        appliedPreference = preference
     }
 }
 

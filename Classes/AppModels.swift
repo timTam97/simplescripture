@@ -131,6 +131,12 @@ final class SettingsModel {
             store.saveRotationLock(rotationLock)
         }
     }
+    var librarySection: LibrarySection {
+        didSet {
+            guard !isReloading, librarySection != oldValue else { return }
+            store.saveLibrarySection(librarySection)
+        }
+    }
     var fontSizeValue: Double {
         get { Double(fontSize) }
         set { fontSize = Int(newValue) }
@@ -155,6 +161,7 @@ final class SettingsModel {
         self.fontSize = snapshot.fontSize
         self.keepScreenAwake = snapshot.keepScreenAwake
         self.rotationLock = snapshot.rotationLock
+        self.librarySection = snapshot.librarySection
     }
 
     func ensureFontSizeDefault() {
@@ -168,6 +175,7 @@ final class SettingsModel {
         fontSize = snapshot.fontSize
         keepScreenAwake = snapshot.keepScreenAwake
         rotationLock = snapshot.rotationLock
+        librarySection = snapshot.librarySection
         isReloading = false
     }
 }
