@@ -67,10 +67,22 @@ struct URLRouter {
             return nil
         }
 
+        // The link's own spelling is kept when the reader can resolve it ("Jn 3"
+        // stays "Jn 3"); anything else is stored as the parser's canonical ref.
+        //
+        // The munge comes BEFORE that test, because the munged string is the one
+        // stored and the munge can break a ref that resolved without it: the
+        // book lookup ignores case, `createRefString` does not, and it turns
+        // "MALACHI 3" into "MALACH1 3". Tested as given, that was persisted, and
+        // the reader came up blank (a trap in Debug) at every launch until some
+        // other navigation replaced it. `chapterRef` is the `name` form, which
+        // the munge leaves alone.
+        let mungedChapter = PSRefHelper.createRefString(chapter)
         let chapterResolvesAsGiven = reference.hadExplicitChapter
-            && resolver.resolve(ref: chapter) != nil
-        let chapterToShow = chapterResolvesAsGiven ? chapter : reference.chapterRef
-        let persistedChapterRef = PSRefHelper.createRefString(chapterToShow)
+            && resolver.resolve(ref: mungedChapter) != nil
+        let persistedChapterRef = chapterResolvesAsGiven
+            ? mungedChapter
+            : reference.chapterRef
         let versePosition = Int(firstNumericPrefix(in: verseRaw)).map(String.init) ?? "1"
         let type = queryValue(named: "type", in: url)
 

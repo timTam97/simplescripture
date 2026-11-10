@@ -365,10 +365,14 @@ final class PSRefSemanticsTests: XCTestCase {
     /// parser's canonical form rather than persist the unrenderable "Gen. 1".
     ///
     /// Asserted over every spelling of every book in all three shapes the parser
-    /// accepts, reproducing `AppSession.open(_:)`'s choice of what to write.
+    /// accepts, through `URLRouter.route(for:)` itself. This test used to carry its
+    /// own copy of the router's choice of what to write, and the copy left out the
+    /// `createRefString` step the router finishes with — the step that turned a
+    /// resolvable "MALACHI 3" into "MALACH1 3". `URLRouterTests` sweeps the casings.
     func testEveryParseableRefPersistsSomethingTheReaderCanResolve() throws {
         let resolver = try resolver()
         let parser = try parser()
+        guard let router = URLRouter() else { throw XCTSkip("no router") }
 
         var checked = 0, fellBackToCanonical = 0
         for book in resolver.books {
@@ -379,17 +383,23 @@ final class PSRefSemanticsTests: XCTestCase {
                                   spelling + ".",
                                   spelling.replacingOccurrences(of: " ", with: "")] {
                     let asGiven = "\(candidate) 1"
-                    guard let parsed = parser.parse(asGiven) else { continue }
+                    guard parser.parse(asGiven) != nil else { continue }
                     checked += 1
 
-                    // `AppSession.open(_:)`'s rule, verbatim.
-                    let resolvesAsGiven = parsed.hadExplicitChapter
-                        && resolver.resolve(ref: asGiven) != nil
-                    let persisted = resolvesAsGiven ? asGiven : parsed.chapterRef
-                    if !resolvesAsGiven { fellBackToCanonical += 1 }
+                    // The URL `openLibraryReference` would build for it.
+                    var components = URLComponents()
+                    components.scheme = "sword"
+                    components.host = "Bible"
+                    components.path = "/\(asGiven)"
+                    guard let persisted = router.route(for: components.url)?.persistedChapterRef else {
+                        XCTFail("'\(asGiven)' parses but does not route")
+                        return
+                    }
+                    // The spelling as given is kept only where the reader resolves it.
+                    if persisted != PSRefHelper.createRefString(asGiven) { fellBackToCanonical += 1 }
 
                     XCTAssertNotNil(resolver.resolve(ref: persisted),
-                                    "'\(asGiven)' would persist '\(persisted)', which the reader cannot resolve")
+                                    "'\(asGiven)' persists '\(persisted)', which the reader cannot resolve")
                     guard resolver.resolve(ref: persisted) != nil else { return }
                 }
             }
