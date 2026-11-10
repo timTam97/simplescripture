@@ -353,6 +353,72 @@ final class SimpleScriptureUITests: XCTestCase {
         XCTAssertTrue(app.searchFields["Search"].waitForExistence(timeout: 5))
     }
 
+    /// Tapping a search result while the keyboard is still up opens the reader ON
+    /// that verse.
+    ///
+    /// The ordinary way to open a result — type, tap — leaves the keyboard up. If
+    /// it is still up when the Read workspace appears, the reader is laid out once
+    /// at the keyboard's height and again without it, which `ReaderScreen` takes
+    /// for a rotation: its size hook re-anchors on the offset the reader was at
+    /// BEFORE the result was opened, over the top of the scroll to the result's
+    /// verse. MEASURED (iOS 27.2): the title read "Gen 5:29" over verses 2–4.
+    ///
+    /// The reader has to start part-way down a chapter. From the top there is no
+    /// earlier offset to replay, and the hook re-issues the verse instead.
+    ///
+    /// Asserts on reader CONTENT, not the navigation-bar title: the title was
+    /// right even when the position was wrong.
+    @MainActor
+    func testOpeningASearchResultWithTheKeyboardUpLandsOnItsVerse() throws {
+        selectWorkspace("Read")
+        selectReadingMode("Bible")
+        selectGenesisChapter(1)
+        // One row per verse, so verse 29's link exists only once the reader has
+        // actually scrolled to it.
+        setVersePerLine(true)
+        selectGenesisChapter(5, verse: 3)
+
+        selectWorkspace("Search")
+        let buildIndex = app.buttons["search.index-build"]
+        if buildIndex.waitForExistence(timeout: 2) {
+            buildIndex.tap()
+            XCTAssertTrue(
+                app.staticTexts["Search Scripture"].waitForExistence(timeout: 60),
+                "The search index did not finish building."
+            )
+        }
+
+        let field = app.searchFields["Search"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        field.typeText("Noah")
+
+        // The first match in canonical order: "And he called his name Noah".
+        let result = app.buttons["search.result.Genesis 5:29"]
+        XCTAssertTrue(
+            result.waitForExistence(timeout: 10),
+            "Search did not produce Genesis 5:29 for 'Noah'."
+        )
+        XCTAssertTrue(
+            app.keyboards.firstMatch.exists,
+            "The keyboard has to be up for this to test anything."
+        )
+        result.tap()
+
+        let verse = app.links["pslink://versemenu/29"]
+        XCTAssertTrue(
+            verse.waitForExistence(timeout: 5),
+            "The reader did not scroll to the result's verse."
+        )
+        let navigationBarBottom = app.navigationBars.firstMatch.frame.maxY
+        let tabBarTop = app.tabBars.firstMatch.frame.minY
+        XCTAssertGreaterThanOrEqual(verse.frame.minY, navigationBarBottom - 1)
+        XCTAssertLessThan(
+            verse.frame.minY, tabBarTop,
+            "Verse 29 is in the hierarchy but not on screen."
+        )
+    }
+
     @MainActor
     func testSearchResultKeyboardAndCopyInteractions() throws {
         selectWorkspace("Search")

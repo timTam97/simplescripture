@@ -99,4 +99,46 @@ final class URLRouterTests: XCTestCase {
         XCTAssertEqual(session.reading.commentaryVerse, 4)
         XCTAssertEqual(session.reading.commentaryModule, "MHCC")
     }
+
+    /// Leaving the Search workspace dismisses the keyboard — only leaving it, and
+    /// BEFORE the selection moves.
+    ///
+    /// The order is the point (see `AppSession.selectedWorkspace`): dismissed
+    /// after the change, the workspace being shown is still laid out against the
+    /// keyboard. So the closure records the selection it ran under.
+    @MainActor
+    func testLeavingSearchDismissesTheKeyboardBeforeTheSelectionMoves() throws {
+        var dismissedUnder: [Workspace] = []
+        var session: AppSession!
+        session = AppSession(
+            selectedWorkspace: .read,
+            dismissKeyboard: { dismissedUnder.append(session.selectedWorkspace) }
+        )
+
+        // Not between other workspaces, and not on the way INTO Search.
+        session.selectedWorkspace = .library
+        session.selectedWorkspace = .settings
+        session.selectedWorkspace = .search
+        XCTAssertEqual(dismissedUnder, [])
+
+        // Reselecting Search focuses the field; it must not put it away again.
+        let focusRequests = session.searchFocusRequest
+        session.selectedWorkspace = .search
+        XCTAssertEqual(session.searchFocusRequest, focusRequests + 1)
+        XCTAssertEqual(dismissedUnder, [])
+
+        // Leaving by the tab bar: once, while Search is still the selection.
+        session.selectedWorkspace = .library
+        XCTAssertEqual(dismissedUnder, [.search])
+        XCTAssertEqual(session.selectedWorkspace, .library)
+
+        // Leaving by a route — how a search result opens — takes the same path.
+        session.selectedWorkspace = .search
+        let route = try XCTUnwrap(try router().route(
+            for: URL(string: "sword://Bible/Genesis+5:29")
+        ))
+        session.apply(route)
+        XCTAssertEqual(dismissedUnder, [.search, .search])
+        XCTAssertEqual(session.selectedWorkspace, .read)
+    }
 }
