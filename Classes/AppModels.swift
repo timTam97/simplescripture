@@ -716,11 +716,33 @@ final class SearchModel {
     ///
     /// Deliberately does NOT read persisted match/fuzzy options: a Strong's lookup
     /// is an exact lemma query, and inheriting a stale "any word" or fuzzy setting
-    /// makes it return the wrong thing. It sets the three options the query needs
-    /// and leaves the rest alone.
+    /// makes it return the wrong thing. It sets what the lookup needs — the query,
+    /// Strong's mode, a module that carries Strong's numbers and the whole-Bible
+    /// scope — and leaves the rest alone.
+    ///
+    /// The module and the scope are the two things Search may NOT keep from its
+    /// last text search: either one turns a number with thousands of occurrences
+    /// into "No Results" (see the notes in the body).
     func startStrongsQuery(_ term: String, currentBookName: String?) {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        // Only a module that carries Strong's numbers can answer the lookup, and
+        // Search may be on one that does not. Its module is sticky for the launch:
+        // the commentary if Search first appeared while the reader was on the
+        // commentary, or if it was picked in the menu. Left there, the mode below
+        // came out off and the commentary was searched for the literal text
+        // "H430" — and picking the Bible by hand afterwards did not turn the mode
+        // back on.
+        //
+        // `module != nil`: before `configure(...)` nothing is resolved, and
+        // `configure` prefers the reader's pane — the Bible, the only place this is
+        // offered from. `!isOperationActive` mirrors `selectModule`: the module
+        // must not change under a running index build.
+        if module != nil, !strongsAvailable, !indexCoordinator.isOperationActive,
+           let capable = modules.first(where: { moduleCarriesStrongs($0.id) }) {
+            applyModule(capable, clearExistingResults: true)
+        }
 
         withInternalInputMutation {
             query = trimmed
@@ -735,6 +757,17 @@ final class SearchModel {
             // `applyModule` clears the mode during `configure(...)` before the search
             // runs.
             strongsSearch = module == nil || strongsAvailable
+
+            // "Find ALL occurrences": the whole Bible, whatever scope the last text
+            // search left. The scope is saved across launches, so a saved New
+            // Testament scope listed nothing for a Hebrew number and a saved Book
+            // scope silently listed one book's share.
+            //
+            // Inside this block on purpose. As a model-originated write it moves
+            // the scope on screen without persisting it — the saved scope stays the
+            // one the user chose, until they next change an option — and it does
+            // not schedule a second search of its own.
+            range = .AllRange
         }
 
         self.currentBookName = currentBookName
@@ -933,14 +966,21 @@ final class SearchModel {
         return terms
     }
 
+    /// Whether a module carries Strong's numbers, so its index has lemmas for a
+    /// Strong's query to match. Either baked feature name counts; KJV advertises
+    /// both, MHCC neither.
+    private func moduleCarriesStrongs(_ name: String) -> Bool {
+        featureProvider(name, "Strongs")
+            || featureProvider(name, "StrongsNumbers")
+    }
+
     private func applyModule(
         _ choice: SearchModuleChoice,
         clearExistingResults: Bool
     ) {
         module = choice.id
         moduleKind = choice.kind
-        strongsAvailable = featureProvider(choice.id, "Strongs")
-            || featureProvider(choice.id, "StrongsNumbers")
+        strongsAvailable = moduleCarriesStrongs(choice.id)
         if !strongsAvailable {
             withInternalInputMutation {
                 strongsSearch = false

@@ -1942,6 +1942,150 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(collector.snapshot(), ["John", "Romans"])
     }
 
+    /// A `SearchModel` over a ready index that records, for every query it runs,
+    /// `module|expression|scope|book` — everything that decides which verses a
+    /// "Find all occurrences" lists.
+    @MainActor
+    private func strongsLookupModel(
+        recordingInto collector: ExpressionCollector,
+        strongsModules: Set<String> = ["KJV"]
+    ) -> SearchModel {
+        SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { module, feature in
+                strongsModules.contains(module)
+                    && (feature == "Strongs" || feature == "StrongsNumbers")
+            },
+            queryOperation: { module, expression, range, bookName, _ in
+                collector.record(
+                    "\(module)|\(expression)|\(range.rawValue)|\(bookName ?? "-")"
+                )
+                return []
+            }
+        )
+    }
+
+    /// "Find all occurrences" is offered from the Bible, and only a module that
+    /// carries Strong's numbers can answer it.
+    ///
+    /// Search's module is sticky for the launch: it is the commentary if Search
+    /// first appeared while the reader was on the commentary, or if the user
+    /// picked it in the menu. The lookup then switched Strong's mode off and
+    /// searched MHCC for the literal text "H430" — no results for a number the
+    /// KJV has in 2,249 verses — and picking KJV by hand afterwards did not
+    /// help, because nothing switched the mode back on.
+    @MainActor
+    func testStrongsQueryMovesSearchToTheModuleThatCarriesStrongs() async {
+        let collector = ExpressionCollector()
+        let model = strongsLookupModel(recordingInto: collector)
+        model.configure(
+            modules: [
+                SearchModuleChoice(id: "KJV", kind: .bible),
+                SearchModuleChoice(id: "MHCC", kind: .commentary),
+            ],
+            preferredModule: "MHCC",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+        XCTAssertEqual(model.module, "MHCC")
+        XCTAssertFalse(model.strongsAvailable)
+
+        model.startStrongsQuery("H430", currentBookName: "Genesis")
+
+        XCTAssertEqual(model.module, "KJV")
+        // What a tapped result opens in.
+        XCTAssertEqual(model.moduleKind, .bible)
+        XCTAssertTrue(model.strongsSearch)
+        await collector.wait(forCount: 1, in: self)
+        XCTAssertEqual(
+            collector.snapshot(),
+            ["KJV|lemmas:((\"H430\" OR \"H0430\"))|0|-"]
+        )
+    }
+
+    /// "Find ALL occurrences" searches the whole Bible, whatever scope the last
+    /// text search left.
+    ///
+    /// The scope is saved across launches. Under a saved New Testament scope a
+    /// Hebrew number listed nothing, and under Book the list was silently
+    /// confined to the book being read (189 of H430's 2,249 verses in Genesis).
+    ///
+    /// The last assertion pins the other half of the decision: the lookup moves
+    /// the scope on screen and does NOT rewrite the saved one. A text search on
+    /// the next launch gets the scope the user chose, not one a lookup picked.
+    @MainActor
+    func testStrongsQuerySearchesTheWholeBibleWhateverScopeWasSaved() async {
+        for saved in [PSSearchRange.NTRange, .BookRange] {
+            defaults.set(saved.rawValue, forKey: Defaults.lastSearchRange)
+            let collector = ExpressionCollector()
+            let model = strongsLookupModel(recordingInto: collector)
+            model.configure(
+                modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+                preferredModule: "KJV",
+                currentBookName: "Genesis",
+                restoring: nil
+            )
+            XCTAssertEqual(model.range, saved)
+
+            model.startStrongsQuery("H430", currentBookName: "Genesis")
+
+            XCTAssertEqual(
+                model.range,
+                .AllRange,
+                "The lookup kept saved scope \(saved.rawValue)."
+            )
+            XCTAssertNil(model.bookName)
+            await collector.wait(forCount: 1, in: self)
+            XCTAssertEqual(
+                collector.snapshot(),
+                ["KJV|lemmas:((\"H430\" OR \"H0430\"))|0|-"]
+            )
+            XCTAssertEqual(
+                defaults.integer(forKey: Defaults.lastSearchRange),
+                saved.rawValue,
+                "The lookup rewrote the saved scope."
+            )
+        }
+    }
+
+    /// The same lookup made before the Search workspace has ever appeared: the
+    /// scope it set has to survive the `configure(...)` that follows, which is
+    /// what runs the search.
+    @MainActor
+    func testStrongsQuerySeededBeforeSearchAppearsSearchesTheWholeBible() async {
+        defaults.set(
+            PSSearchRange.NTRange.rawValue,
+            forKey: Defaults.lastSearchRange
+        )
+        let collector = ExpressionCollector()
+        let model = strongsLookupModel(recordingInto: collector)
+
+        model.startStrongsQuery("H430", currentBookName: "Genesis")
+        model.configure(
+            modules: [
+                SearchModuleChoice(id: "KJV", kind: .bible),
+                SearchModuleChoice(id: "MHCC", kind: .commentary),
+            ],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        await collector.wait(forCount: 1, in: self)
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(
+            collector.snapshot(),
+            ["KJV|lemmas:((\"H430\" OR \"H0430\"))|0|-"]
+        )
+        XCTAssertTrue(model.strongsSearch)
+        XCTAssertEqual(model.range, .AllRange)
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []
