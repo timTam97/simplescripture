@@ -15,8 +15,11 @@ is no catalogue of additional translations or module downloads.
 
 Use the reference picker to choose a book, chapter and verse. The chapter
 arrows move backward and forward, and so does swiping the text: swipe left
-for the next chapter, right for the previous one. Switch between Bible and
-Commentary to read the passage or Matthew Henry's notes.
+for the next chapter, right for the previous one. The new chapter slides in
+from the side you are moving towards, and a swipe gives a light tap as the
+page turns. With Reduce Motion turned on in iOS Settings, chapters fade
+instead of sliding. Switch between Bible and Commentary to read the passage
+or Matthew Henry's notes.
 
 Reading options include red-letter text, headings, footnotes, Strong's numbers
 and morphology where the selected resource supplies them. Enable Strong's

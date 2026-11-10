@@ -237,8 +237,14 @@ extension Color {
 struct ChapterTextView: View {
     let pane: ReaderPaneModel
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         @Bindable var pane = pane
+        // The scroll view this body describes. Captured so each callback below can
+        // say which scroll view it is reporting for: a page turn leaves the old one
+        // on screen, still live, until its slide ends — see `scrollSurface`.
+        let surface = pane.scrollSurface
 
         GeometryReader { proxy in
             ScrollView(.vertical) {
@@ -249,12 +255,13 @@ struct ChapterTextView: View {
                         ForEach(pane.document.verses) { verse in
                             VerseRow(verse: verse, pane: pane, style: pane.textStyle)
                                 .id(verse.number)
-                                .tracksTopmostVerse(verse.number, pane: pane)
+                                .tracksTopmostVerse(verse.number, pane: pane,
+                                                    surface: surface)
                         }
                     } else {
                         ForEach(pane.paragraphs) { paragraph in
                             ParagraphRow(paragraph: paragraph, pane: pane,
-                                         style: pane.textStyle)
+                                         surface: surface, style: pane.textStyle)
                                 .id(paragraph.id)
                         }
                     }
@@ -304,7 +311,7 @@ struct ChapterTextView: View {
                     containerHeight: geometry.containerSize.height
                 )
             } action: { _, sample in
-                pane.scrollOffsetChanged(sample)
+                pane.scrollOffsetChanged(sample, from: surface)
             }
             .onScrollPhaseChange { _, newPhase in
                 // A finger on the reader abandons any restore still in flight, which
@@ -316,8 +323,19 @@ struct ChapterTextView: View {
             // A chapter the reader pages to gets a NEW scroll view, not the old one
             // scrolled to the top — see `ReaderPaneModel.scrollSurface`. After every
             // scroll modifier, so the identity covers the scroll view they configure.
-            .id(pane.scrollSurface)
+            .id(surface)
+            // The swap is the page turn, and this is its slide.
+            .transition(ChapterPageTransition(
+                pane: pane,
+                reduceMotion: reduceMotion,
+                overhang: proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing
+            ))
         }
+        // Animates the swap only when THIS pane turned a page while showing. A
+        // deferred page drained on a Bible/commentary switch bumps the surface
+        // without a `pageTurn`, and is swapped in place.
+        .animation(ChapterPageTransition.animation(reduceMotion: reduceMotion),
+                   value: pane.pageTurn.count)
         // The identifier the XCUITests match on.
         .accessibilityIdentifier("reading.chapter-content")
     }
@@ -335,7 +353,8 @@ private extension View {
     /// Lives in the VIEW because only the view knows where a row sits. Without
     /// it `bibleVersePosition` would stay stale while the reader scrolls, taking
     /// the toolbar title and `.verse` relaunch restoration with it.
-    func tracksTopmostVerse(_ verse: Int, pane: ReaderPaneModel) -> some View {
+    func tracksTopmostVerse(_ verse: Int, pane: ReaderPaneModel,
+                            surface: Int) -> some View {
         onGeometryChange(for: Bool.self) { proxy in
             // The row covers the top of the reading area (in the scroll view's own
             // space, where 0 is the top of the visible content).
@@ -343,7 +362,7 @@ private extension View {
             return frame.minY <= 1 && frame.maxY > 1
         } action: { _, isTopmost in
             guard isTopmost else { return }
-            pane.topmostVerseChanged(verse)
+            pane.topmostVerseChanged(verse, from: surface)
         }
     }
 
@@ -351,7 +370,8 @@ private extension View {
     func tracksTopmostVerse(
         fallbackVerse: Int,
         layoutStore: VerseLayoutStore,
-        pane: ReaderPaneModel
+        pane: ReaderPaneModel,
+        surface: Int
     ) -> some View {
         onGeometryChange(for: CGFloat?.self) { proxy in
             let frame = proxy.frame(in: .scrollView)
@@ -360,7 +380,8 @@ private extension View {
         } action: { _, offset in
             guard let offset else { return }
             pane.topmostVerseChanged(
-                layoutStore.verse(at: offset, fallback: fallbackVerse)
+                layoutStore.verse(at: offset, fallback: fallbackVerse),
+                from: surface
             )
         }
     }
@@ -450,6 +471,8 @@ private struct VerseTrackingTextRenderer: TextRenderer {
 private struct ParagraphRow: View {
     let paragraph: ChapterParagraph
     let pane: ReaderPaneModel
+    /// The scroll surface this row belongs to — see `ChapterTextView.body`.
+    let surface: Int
     let style: ChapterTextRenderer.Style
 
     @State private var verseLayoutStore = VerseLayoutStore()
@@ -468,7 +491,8 @@ private struct ParagraphRow: View {
                 .tracksTopmostVerse(
                     fallbackVerse: paragraph.verses.first?.number ?? 1,
                     layoutStore: verseLayoutStore,
-                    pane: pane
+                    pane: pane,
+                    surface: surface
                 )
                 .padding(.bottom, style.fontSize * 0.55)
         }

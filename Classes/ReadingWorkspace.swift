@@ -24,7 +24,10 @@
 //  * **Chapter paging restores no position in either direction** — do not
 //    "restore" a verse position on `previousChapter`. It also starts the new
 //    chapter on a NEW scroll view (`ReaderPaneModel.scrollSurface`) rather than
-//    scrolling the old one to the top, which did not land reliably.
+//    scrolling the old one to the top, which did not land reliably. The swap is
+//    also what the page-turn slide animates (`ReaderPaneModel.pageTurn`), so the
+//    scroll view being left stays on screen for the length of the slide — which
+//    is why every scroll callback names the surface it came from.
 //  * **`bibleScrollPosition` / `commentaryScrollPosition`** are raw `UserDefaults`
 //    string keys with no `Defaults` constant, written as `"%d"` of a `CGFloat`.
 //    They are persisted; `displayChapter`'s `.scroll` arm reads them back into an
@@ -208,7 +211,34 @@ final class ReaderPaneModel {
     ///
     /// Only paging takes this path. Every other restore keeps its scroll view, so a
     /// display toggle or a font change does not flash or lose its place.
+    ///
+    /// The scroll view being replaced does not go at once: it slides out
+    /// (`pageTurn`), and until it has it is still live. `scrollOffsetChanged` and
+    /// `topmostVerseChanged` take the surface reporting for that reason.
     private(set) var scrollSurface = 0
+
+    /// A page turn for `ChapterTextView` to animate: the slide from the scroll
+    /// surface being left to the new one.
+    struct PageTurn: Equatable {
+        /// How many times this pane has paged WHILE IT WAS SHOWING. The view
+        /// animates when this changes, and only then.
+        var count = 0
+        /// Which way the last one went. Forward brings the new chapter in from the
+        /// right; back, from the left.
+        var forward = true
+    }
+
+    /// Separate from `scrollSurface` on purpose. The surface is also bumped when a
+    /// DEFERRED page is drained — the reader paged the Bible and then switched to
+    /// the commentary — and that pane is appearing, not turning a page: sliding it
+    /// in would animate a chapter change the user made some time ago.
+    private(set) var pageTurn = PageTurn()
+
+    /// Called by the workspace for the pane a page turn is rendered into, before
+    /// it renders.
+    func notePageTurn(forward: Bool) {
+        pageTurn = PageTurn(count: pageTurn.count + 1, forward: forward)
+    }
 
     @ObservationIgnored private var currentShownVerse = 1
     @ObservationIgnored private var verseToShow = 0
@@ -447,8 +477,16 @@ final class ReaderPaneModel {
     /// A scroll came to rest at `offset`: work out which verse that is and persist
     /// it. `ScrollPosition` does not expose the topmost id, so the offset is kept
     /// and the verse only advanced when the reader actually moves.
-    func scrollOffsetChanged(_ sample: ReaderScrollSample) {
-        guard !isRestoringAfterTransition else { return }
+    ///
+    /// `surface` is the scroll view reporting — `scrollSurface` as `ChapterTextView`
+    /// captured it — and a report from one that has been replaced is dropped. A
+    /// page turn leaves the scroll view of the chapter being left on screen until
+    /// its slide ends, still coasting on whatever flick it had, and it goes on
+    /// reporting. MEASURED on iOS 27.2, paging straight after a flick: 26 offsets
+    /// and topmost verses from the old chapter in the 420 ms AFTER the new one's
+    /// position was persisted, any of which would have overwritten it.
+    func scrollOffsetChanged(_ sample: ReaderScrollSample, from surface: Int) {
+        guard surface == scrollSurface, !isRestoringAfterTransition else { return }
         // A scroll view with no content has not answered the question: its 0 is not
         // the top of the chapter, and persisting it would clobber the saved offset.
         guard sample.isLaidOut else { return }
@@ -498,7 +536,10 @@ final class ReaderPaneModel {
     /// The verse and the offset are persisted from two different places because only
     /// the view knows which row is at the top — see `tracksTopmostVerse`. Both write
     /// through `persistPosition`, so the pair stays consistent whichever moves first.
-    func topmostVerseChanged(_ verse: Int) {
+    ///
+    /// Dropped when `surface` has been replaced — see `scrollOffsetChanged`.
+    func topmostVerseChanged(_ verse: Int, from surface: Int) {
+        guard surface == scrollSurface else { return }
         // The clamp lives in `persistPosition`, so comparing the RAW value here
         // would let verse 0 through as "changed" forever (0 != 1) and rewrite the
         // position on every layout pass.
@@ -1106,19 +1147,24 @@ final class ReadingWorkspaceModel {
     /// commentary pane has no module, so `page(forward:)` is never reached there.
     /// A swipe has no disabled state, so it is gated on the same flags — otherwise
     /// a swipe that goes nowhere would still clear the search highlight.
-    func page(_ swipe: ChapterSwipe) {
+    ///
+    /// Returns whether the chapter changed. A swipe's haptic is the only
+    /// confirmation it gets, so it must not fire for a swipe that went nowhere.
+    @discardableResult
+    func page(_ swipe: ChapterSwipe) -> Bool {
         let chrome = activePane.chrome
         switch swipe {
         case .next:
-            guard chrome.isNextEnabled else { return }
-            nextChapter()
+            guard chrome.isNextEnabled else { return false }
+            return page(forward: true)
         case .previous:
-            guard chrome.isPreviousEnabled else { return }
-            previousChapter()
+            guard chrome.isPreviousEnabled else { return false }
+            return page(forward: false)
         }
     }
 
-    private func page(forward: Bool) {
+    @discardableResult
+    private func page(forward: Bool) -> Bool {
         // Paging away from a search result's chapter ends that result's highlight;
         // otherwise it follows the reader through every later chapter.
         activePane.searchHighlightTerms = []
@@ -1127,21 +1173,25 @@ final class ReadingWorkspaceModel {
         let boundary = forward
             ? PSModuleController.getLastRefAvailable()
             : PSModuleController.getFirstRefAvailable()
-        guard current != boundary else { return }
+        guard current != boundary else { return false }
 
         guard let controller = PSModuleController.default(),
               let ref = forward
                 ? controller.setToNextChapter()
                 : controller.setToPreviousChapter() else {
-            return
+            return false
         }
 
+        // Only the pane on screen turns a page. The other one is handed the same
+        // chapter start, but drains it when it next appears, without the slide.
+        activePane.notePageTurn(forward: forward)
         displayChapter(
             ref,
             polling: mode == .bible ? .bible : .commentary,
             restore: .none
         )
         session?.library.recordHistory(mode: mode)
+        return true
     }
 
     // MARK: Reference selection

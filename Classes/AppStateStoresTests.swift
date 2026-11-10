@@ -2257,7 +2257,8 @@ final class AppStateStoresTests: XCTestCase {
             pane.applyPendingWork()
 
             pane.scrollOffsetChanged(
-                ReaderScrollSample(offset: 0, contentHeight: 0, containerHeight: 0)
+                ReaderScrollSample(offset: 0, contentHeight: 0, containerHeight: 0),
+                from: pane.scrollSurface
             )
             XCTAssertEqual(
                 standard.string(forKey: scrollKey), "500",
@@ -2266,7 +2267,8 @@ final class AppStateStoresTests: XCTestCase {
             )
 
             pane.scrollOffsetChanged(
-                ReaderScrollSample(offset: 0, contentHeight: 2138, containerHeight: 675)
+                ReaderScrollSample(offset: 0, contentHeight: 2138, containerHeight: 675),
+                from: pane.scrollSurface
             )
             XCTAssertEqual(
                 standard.string(forKey: scrollKey), "500",
@@ -2275,7 +2277,8 @@ final class AppStateStoresTests: XCTestCase {
             )
 
             pane.scrollOffsetChanged(
-                ReaderScrollSample(offset: 500, contentHeight: 2138, containerHeight: 675)
+                ReaderScrollSample(offset: 500, contentHeight: 2138, containerHeight: 675),
+                from: pane.scrollSurface
             )
             XCTAssertEqual(
                 standard.string(forKey: scrollKey), "500",
@@ -2283,7 +2286,8 @@ final class AppStateStoresTests: XCTestCase {
             )
 
             pane.scrollOffsetChanged(
-                ReaderScrollSample(offset: 700, contentHeight: 2138, containerHeight: 675)
+                ReaderScrollSample(offset: 700, contentHeight: 2138, containerHeight: 675),
+                from: pane.scrollSurface
             )
             XCTAssertEqual(
                 standard.string(forKey: scrollKey), "700",
@@ -2309,7 +2313,8 @@ final class AppStateStoresTests: XCTestCase {
             pane.applyPendingWork()
 
             pane.scrollOffsetChanged(
-                ReaderScrollSample(offset: 1463, contentHeight: 2138, containerHeight: 675)
+                ReaderScrollSample(offset: 1463, contentHeight: 2138, containerHeight: 675),
+                from: pane.scrollSurface
             )
             XCTAssertEqual(
                 standard.string(forKey: scrollKey), "1463",
@@ -2318,7 +2323,8 @@ final class AppStateStoresTests: XCTestCase {
             )
 
             pane.scrollOffsetChanged(
-                ReaderScrollSample(offset: 1200, contentHeight: 2138, containerHeight: 675)
+                ReaderScrollSample(offset: 1200, contentHeight: 2138, containerHeight: 675),
+                from: pane.scrollSurface
             )
             XCTAssertEqual(
                 standard.string(forKey: scrollKey), "1200",
@@ -2367,6 +2373,22 @@ final class AppStateStoresTests: XCTestCase {
     /// scroll surface — on the pane it renders now and on the one it defers into.
     @MainActor
     func testPagingDefersAChapterStartIntoTheOtherPane() {
+        withPreservedReadingKeys { standard in
+            let workspace = ReadingWorkspaceModel()
+            let surface = workspace.bible.scrollSurface
+
+            workspace.displayChapter("Genesis 2", polling: .bible, restore: .none)
+
+            XCTAssertEqual(workspace.bible.scrollSurface, surface + 1)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
+            XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "0")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1")
+        }
+    }
+
+    /// Everything a page turn through the workspace writes: the reference and
+    /// both panes' positions.
+    private func withPreservedReadingKeys(_ body: (UserDefaults) -> Void) {
         let standard = UserDefaults.standard
         let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
                     Defaults.commentaryVersePosition,
@@ -2381,15 +2403,79 @@ final class AppStateStoresTests: XCTestCase {
                 }
             }
         }
-        let workspace = ReadingWorkspaceModel()
-        let surface = workspace.bible.scrollSurface
+        body(standard)
+    }
 
-        workspace.displayChapter("Genesis 2", polling: .bible, restore: .none)
+    // MARK: Page-turn slide
 
-        XCTAssertEqual(workspace.bible.scrollSurface, surface + 1)
-        XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
-        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "0")
-        XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1")
+    /// The scroll view a page turn leaves stays on screen until its slide ends,
+    /// still coasting on any flick it had, and keeps reporting where it is — in
+    /// the chapter being LEFT. Measured on the simulator, paging straight after a
+    /// flick: 26 such reports in the 420 ms after the new chapter's position was
+    /// persisted. One of them getting through reopens the new chapter at the old
+    /// one's offset, and titles it with the old one's verse.
+    @MainActor
+    func testAScrollViewBeingLeftCannotOverwriteTheNewChaptersPosition() {
+        withPreservedPanePositionKeys { standard, scrollKey in
+            let pane = ReaderPaneModel(mode: .bible)
+            let leaving = pane.scrollSurface
+            pane.pendingRestore = .chapterStart
+            pane.applyPendingWork()
+
+            pane.scrollOffsetChanged(
+                ReaderScrollSample(offset: 1594, contentHeight: 2138, containerHeight: 675),
+                from: leaving
+            )
+            pane.topmostVerseChanged(10, from: leaving)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "0",
+                           "The scroll view being left persisted its offset.")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1",
+                           "The scroll view being left persisted its verse.")
+
+            // The scroll view that replaced it reports as usual.
+            pane.scrollOffsetChanged(
+                ReaderScrollSample(offset: 300, contentHeight: 2138, containerHeight: 675),
+                from: pane.scrollSurface
+            )
+            pane.topmostVerseChanged(4, from: pane.scrollSurface)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "300")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "4")
+        }
+    }
+
+    /// The slide is keyed on `pageTurn`, and only the pane on screen gets one.
+    ///
+    /// The other pane is handed the same chapter start and bumps its scroll
+    /// surface when it is next shown. That is a pane appearing, not a page
+    /// turning: were the slide keyed on the surface, switching Bible ⇄ commentary
+    /// after paging would slide in a chapter change made some time ago.
+    @MainActor
+    func testOnlyThePaneOnScreenTurnsAPage() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 2", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+
+            workspace.nextChapter()
+            XCTAssertEqual(workspace.bible.pageTurn,
+                           ReaderPaneModel.PageTurn(count: 1, forward: true))
+            workspace.previousChapter()
+            XCTAssertEqual(workspace.bible.pageTurn,
+                           ReaderPaneModel.PageTurn(count: 2, forward: false))
+            XCTAssertEqual(workspace.commentary.pageTurn.count, 0)
+
+            // Draining the deferred page swaps the commentary's scroll view...
+            let surface = workspace.commentary.scrollSurface
+            workspace.mode = .commentary
+            XCTAssertEqual(workspace.commentary.scrollSurface, surface + 1)
+            // ...without a page turn to animate.
+            XCTAssertEqual(workspace.commentary.pageTurn.count, 0)
+
+            // Paging the commentary is its own page turn, and not the Bible's.
+            workspace.nextChapter()
+            XCTAssertEqual(workspace.commentary.pageTurn,
+                           ReaderPaneModel.PageTurn(count: 1, forward: true))
+            XCTAssertEqual(workspace.bible.pageTurn.count, 2)
+        }
     }
 
     // MARK: Chapter swipe
@@ -2449,5 +2535,31 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(workspace.bible.searchHighlightTerms, ["beginning"])
         XCTAssertEqual(standard.string(forKey: Defaults.lastRef), lastRef,
                        "A gated swipe changed the persisted reference.")
+    }
+
+    /// A swipe's haptic fires on what `page(_:)` returns, so it has to be true
+    /// exactly when the chapter changed. A tap for a swipe that went nowhere says
+    /// the page turned when it did not.
+    @MainActor
+    func testASwipeReportsWhetherItTurnedThePage() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+
+            // Nothing precedes Genesis 1. The chevron flags have not been computed
+            // for this workspace, so this is the boundary check answering, not the gate.
+            XCTAssertFalse(workspace.page(.previous))
+            workspace.bible.chrome.isNextEnabled = false
+            XCTAssertFalse(workspace.page(.next))
+            XCTAssertEqual(workspace.bible.pageTurn.count, 0,
+                           "A swipe that went nowhere turned a page.")
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 1")
+
+            workspace.bible.chrome.isNextEnabled = true
+            XCTAssertTrue(workspace.page(.next))
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 2")
+            XCTAssertTrue(workspace.page(.previous))
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 1")
+        }
     }
 }
