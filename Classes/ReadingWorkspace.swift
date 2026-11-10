@@ -21,6 +21,9 @@
 //    that it applies when it next becomes active. That is what lets a verse's
 //    "commentary" action land on the right verse without rendering MHCC on every
 //    Bible chapter change. `applyPendingWork()`'s branch order is load-bearing.
+//    A deferral only ever waits on a HIDDEN pane: `mode`'s `didSet` drains a pane
+//    as it appears, `displayChapter` drains the pane on screen at once when that
+//    is not the one it polled, and a pane that renders drops its own.
 //  * **Chapter paging restores no position in either direction** — do not
 //    "restore" a verse position on `previousChapter`. It also starts the new
 //    chapter on a NEW scroll view (`ReaderPaneModel.scrollSurface`) rather than
@@ -412,7 +415,8 @@ final class ReaderPaneModel {
         }
     }
 
-    /// Applies deferred work when the pane becomes active.
+    /// Applies deferred work: when the pane becomes active, and straight away if
+    /// it is handed some while it already is (see `displayChapter`).
     ///
     /// The order is load-bearing: a pending ref wins over a pending restore, which
     /// wins over a pending verse scroll. Collapsing these into "do whatever is set"
@@ -952,11 +956,11 @@ final class ReadingWorkspaceModel {
 
     /// Loads `ref` into one pane and defers it into the other. Deliberate:
     ///
-    ///  1. **Only the polled pane renders.** The other is handed `refToShow` +
-    ///     `pendingRestore` and renders when it next becomes active, which stops
-    ///     every Bible chapter change from also rendering MHCC. An inbound
-    ///     `sword://` route must DISCARD that deferral rather than drain it — see
-    ///     `showRoutedMode(_:)`.
+    ///  1. **Only the polled pane renders, unless the other one is on screen.** A
+    ///     hidden pane is handed `refToShow` + `pendingRestore` and renders when it
+    ///     next becomes active, which stops every Bible chapter change from also
+    ///     rendering MHCC. An inbound `sword://` route must DISCARD that deferral
+    ///     rather than drain it — see `showRoutedMode(_:)`.
     ///  2. **Each pane's restore is built from its own verse-position pref**; they
     ///     track position independently.
     ///  3. **Each pane's title verse comes from that pane's OWN verse-position
@@ -1002,20 +1006,42 @@ final class ReadingWorkspaceModel {
             commentaryRestore = .chapterStart
         }
 
+        // The pane that renders drops whatever it had deferred. This render is the
+        // newer instruction, and a deferral left behind it is replayed over it the
+        // next time the pane appears: the reader pages on, switches away and back,
+        // and is returned — `lastRef` included — to the chapter they had left.
+        let polledPane: ReaderPaneModel?
         switch polling {
         case .bible:
+            polledPane = bible
+            bible.refToShow = nil
+            bible.pendingRestore = nil
             bible.render(ref: ref, restore: bibleRestore)
             commentary.refToShow = ref
             commentary.pendingRestore = commentaryRestore
         case .commentary:
+            polledPane = commentary
+            commentary.refToShow = nil
+            commentary.pendingRestore = nil
             commentary.render(ref: ref, restore: commentaryRestore)
             bible.refToShow = ref
             bible.pendingRestore = bibleRestore
         case .none:
+            polledPane = nil
             bible.refToShow = ref
             bible.pendingRestore = bibleRestore
             commentary.refToShow = ref
             commentary.pendingRestore = commentaryRestore
+        }
+
+        // `mode`'s `didSet` drains a pane when it APPEARS; this drains one that is
+        // already showing. Nothing else would: a deferral handed to the pane on
+        // screen waits for the reader to switch away and back, with the old chapter
+        // on screen under the new one's title until they do. Most callers poll the
+        // pane on screen and never get here. A bookmark change and a reset poll the
+        // Bible whichever pane is showing.
+        if activePane !== polledPane {
+            activePane.applyPendingWork()
         }
 
         var bibleVerse = bibleVersePosition ?? "1"
@@ -1106,9 +1132,10 @@ final class ReadingWorkspaceModel {
     /// `SettingsModel.onReadingAppearanceChanged`): re-render the pane the user is
     /// on, and leave the other one's deferral alone.
     ///
-    /// Must poll the ACTIVE pane: both panes stay in the hierarchy and `mode`'s
-    /// `didSet` is the only drain, so polling neither would leave the change
-    /// invisible until the user switched Bible ⇄ commentary.
+    /// Polls the ACTIVE pane so that it is the only one rendered. Polling the
+    /// other would still reach this one — `displayChapter` drains a deferral
+    /// handed to the pane on screen — but would render the hidden pane as well,
+    /// for a change the reader cannot see there yet.
     private func redisplayWithDefaults() {
         redisplay(pane: mode, restore: .verse)
     }
@@ -1117,6 +1144,10 @@ final class ReadingWorkspaceModel {
     /// not its verse — the user has not navigated, only recoloured. The highlight
     /// is a property of the document, so re-rendering both adds and removes it.
     /// This is the ONLY `bookmarksChanged` re-render.
+    ///
+    /// It polls the Bible even when the commentary is showing (a bookmark edited
+    /// in the Library). `displayChapter` then re-renders the commentary as well,
+    /// at its own offset, rather than leaving it a deferral it would not drain.
     private func redisplayAfterBookmarksChange() {
         bible.refToShow = nil
         bible.pendingRestore = nil

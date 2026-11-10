@@ -2407,6 +2407,101 @@ final class AppStateStoresTests: XCTestCase {
         body(standard)
     }
 
+    /// The chapter the commentary pane renders for `ref`, built the way the pane
+    /// builds it: what a test compares the pane's document against to say WHICH
+    /// chapter it is showing.
+    @MainActor
+    private func commentaryChapter(_ ref: String) throws -> ChapterDocument {
+        let module = try XCTUnwrap(PSModuleController.default()?.primaryCommentaryName)
+        let document = try XCTUnwrap(PSContentReader.shared.chapterDocument(
+            module: module, ref: ref, kind: .commentary
+        ))
+        XCTAssertFalse(document.verses.isEmpty, "No commentary text for \(ref).")
+        return document
+    }
+
+    /// A chapter load renders the pane it polls and defers into the other, and a
+    /// deferral is drained when its pane APPEARS — which a pane already on screen
+    /// never does.
+    ///
+    /// A bookmark edit in the Library is such a load: it re-renders the Bible
+    /// whichever pane is showing. Made while the commentary was up, it left the
+    /// commentary owing the chapter it was already on, and paging on did not
+    /// clear that. The next Bible → commentary switch then rendered the OLD
+    /// chapter and wrote it back to `lastRef`, under a Bible pane still showing
+    /// the new one — where Add Bookmark saved the wrong chapter.
+    @MainActor
+    func testARedisplayOfTheHiddenPaneLeavesNoDeferralOnThePaneOnScreen() throws {
+        let john4 = try commentaryChapter("John 4")
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter("John 3", polling: .bible, restore: .scroll)
+            workspace.mode = .commentary
+            XCTAssertNil(workspace.commentary.refToShow)
+
+            // What `bookmarksChanged` runs, here with the commentary showing.
+            workspace.displayChapter("John 3", polling: .bible, restore: .scroll)
+            XCTAssertNil(workspace.commentary.refToShow,
+                         "The pane on screen was left owing a render nothing will ask for.")
+            XCTAssertNil(workspace.commentary.pendingRestore)
+
+            workspace.nextChapter()
+            workspace.mode = .bible
+            workspace.mode = .commentary
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "John 4",
+                           "Switching back to the commentary returned the reader to "
+                               + "the chapter it had paged away from.")
+            XCTAssertTrue(workspace.commentary.document == john4,
+                          "The commentary is not showing the chapter it paged to.")
+        }
+    }
+
+    /// The other half: a pane that renders drops whatever it had deferred. The
+    /// render is the newer instruction, and a deferral left behind it is replayed
+    /// over it at the next switch.
+    @MainActor
+    func testRenderingAPaneDropsWhateverItHadDeferred() {
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            workspace.mode = .commentary
+            workspace.commentary.refToShow = "John 3"
+            workspace.commentary.pendingRestore = .offset(800)
+
+            workspace.nextChapter()
+
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "John 4")
+            XCTAssertNil(workspace.commentary.refToShow,
+                         "The commentary paged to John 4 and still owes John 3.")
+            XCTAssertNil(workspace.commentary.pendingRestore)
+        }
+    }
+
+    /// The same trap from a reset. `resetPreferences()` posts
+    /// `.redisplayPrimaryBible` whichever pane is showing; on a warm resume into
+    /// the commentary that rendered the hidden Bible and left the commentary on
+    /// the old chapter, under a "Genesis 1" title.
+    @MainActor
+    func testAResetWhileTheCommentaryShowsRerendersTheCommentary() throws {
+        let genesis1 = try commentaryChapter("Genesis 1")
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter("John 3", polling: .bible, restore: .scroll)
+            workspace.mode = .commentary
+
+            // The reset: `lastRef` falls back to Genesis 1, and this call is the
+            // `.redisplayPrimaryBible` observer's body.
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            workspace.redisplay(pane: .bible, restore: .verse)
+
+            XCTAssertNil(workspace.commentary.refToShow)
+            XCTAssertTrue(workspace.commentary.document == genesis1,
+                          "The commentary on screen kept the chapter from before the reset.")
+        }
+    }
+
     // MARK: Page-turn slide
 
     /// The scroll view a page turn leaves stays on screen until its slide ends,
