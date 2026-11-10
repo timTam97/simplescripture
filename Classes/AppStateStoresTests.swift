@@ -1826,6 +1826,122 @@ final class AppStateStoresTests: XCTestCase {
         )
     }
 
+    /// The Book scope means the book the reader is in NOW, each time Search is
+    /// entered.
+    ///
+    /// `SearchView` configures the model once per launch, so the book it took
+    /// then went stale as soon as the reader moved: open Search at Genesis, read
+    /// on to John, come back, and a Book-scoped "love" listed Genesis's 3 verses
+    /// instead of John's 19 — for the rest of the launch. The reader can only
+    /// move while another workspace is selected, so
+    /// `AppSession.selectedWorkspace`'s setter hands the book over again on the
+    /// way into Search.
+    @MainActor
+    func testEnteringSearchHandsOverTheReadersCurrentBook() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            defaults.set(
+                PSSearchRange.BookRange.rawValue,
+                forKey: Defaults.lastSearchRange
+            )
+            let model = SearchModel(
+                optionsStore: SearchOptionsStore(defaults: defaults),
+                indexCoordinator: SearchIndexCoordinator(
+                    freshnessProvider: { _ in true },
+                    buildOperation: { _, _ in }
+                ),
+                debounceInterval: 0,
+                featureProvider: { _, _ in true },
+                queryOperation: { _, _, _, _, _ in [] }
+            )
+            let session = AppSession(
+                selectedWorkspace: .read,
+                search: model,
+                dismissKeyboard: {}
+            )
+            let workspace = ReadingWorkspaceModel(session: session)
+
+            // The first visit, and what `SearchView`'s one-shot task does on it.
+            session.selectedWorkspace = .search
+            model.configure(
+                modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+                preferredModule: "KJV",
+                currentBookName: workspace.currentSearchBookName,
+                restoring: nil
+            )
+            XCTAssertEqual(model.bookName, "Genesis")
+
+            // The reader moves on, and the user comes back to Search.
+            session.selectedWorkspace = .read
+            standard.set("John 3", forKey: Defaults.lastRef)
+            session.selectedWorkspace = .search
+
+            // Read AFTER the selection moved, which also keeps the workspace
+            // alive across it: the session's edge to it is weak.
+            XCTAssertEqual(workspace.currentSearchBookName, "John")
+            XCTAssertEqual(
+                model.bookName,
+                "John",
+                "The Book scope kept the book open when Search first appeared."
+            )
+        }
+    }
+
+    /// The hand-over itself: it changes what the Book scope means and searches
+    /// nothing.
+    ///
+    /// The results on screen stay until the next search — re-running one on the
+    /// way in would rebuild the list inside the tab bar's selection animation,
+    /// and replace results a tab change is meant to preserve. The next search,
+    /// by a keystroke or an option, is scoped to the book handed over.
+    @MainActor
+    func testBookScopeUsesTheBookHandedOverOnEntry() async {
+        let collector = ExpressionCollector()
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, bookName, _ in
+                collector.record(bookName ?? "-")
+                return []
+            }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        // Handed over under another scope, it is what choosing Book then means.
+        model.readerBookDidChange("John")
+        model.range = .BookRange
+        XCTAssertEqual(model.bookName, "John")
+
+        model.query = "love"
+        await collector.wait(forCount: 1, in: self)
+        XCTAssertEqual(collector.snapshot(), ["John"])
+
+        // Handed over with the scope already on Book, it moves the scope...
+        model.readerBookDidChange("Romans")
+        XCTAssertEqual(model.bookName, "Romans")
+        // ...and runs nothing by itself.
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(
+            collector.snapshot(),
+            ["John"],
+            "Entering Search re-ran the query that was on screen."
+        )
+
+        model.query = "loved"
+        await collector.wait(forCount: 2, in: self)
+        XCTAssertEqual(collector.snapshot(), ["John", "Romans"])
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []

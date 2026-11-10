@@ -746,6 +746,28 @@ final class SearchModel {
         scheduleSearch(immediate: true)
     }
 
+    /// The reader's book, handed over each time the Search workspace is entered
+    /// (`AppSession.selectedWorkspace`'s setter).
+    ///
+    /// `configure(...)` runs once per launch, so the copy it took is the book that
+    /// was open when Search first appeared. Without this the Book scope kept
+    /// meaning that book for the rest of the launch, however far the reader had
+    /// moved since.
+    ///
+    /// Deliberately runs NO search. The results on screen stay until the next one:
+    /// a re-run here would rebuild the list in the half-second after a tab change,
+    /// on the tab bar's selection animation, and replace results a tab change is
+    /// meant to preserve. The next search — a keystroke, an option, the Search
+    /// key — is scoped to this book.
+    ///
+    /// It also outranks the book a restored history item carried (`restore`):
+    /// that one scoped the results the item came with, and stops being the
+    /// "current book" as soon as Search is entered again.
+    func readerBookDidChange(_ name: String?) {
+        currentBookName = name
+        updateBookName(name)
+    }
+
     func selectModule(_ choice: SearchModuleChoice) {
         guard module != choice.id, !indexCoordinator.isOperationActive else {
             return
@@ -1133,6 +1155,25 @@ final class AppSession {
             // the Search tab focuses the field again (`searchFocusRequest`).
             if workspaceSelection == .search, newValue != .search {
                 dismissKeyboard()
+            }
+            // Entering Search hands it the reader's book, so the Book scope means
+            // the book being read NOW.
+            //
+            // `SearchView` configures the model once per launch, so the book it
+            // passes is only ever the one open when Search first appeared: open
+            // Search at Genesis, read on to John, come back, and Book still meant
+            // Genesis. Here is where it can be refreshed, because the reader only
+            // moves while another workspace is selected — its own navigation, a
+            // Library open, a `sword://` route and a search result all select
+            // `.read`. A name is handed over and nothing is searched (see
+            // `SearchModel.readerBookDidChange`).
+            //
+            // The `if let` keeps a session with no reading workspace inert.
+            if workspaceSelection != .search, newValue == .search,
+               let readingWorkspace {
+                search.readerBookDidChange(
+                    readingWorkspace.currentSearchBookName
+                )
             }
             workspaceSelection = newValue
         }
