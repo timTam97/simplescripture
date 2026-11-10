@@ -17,6 +17,11 @@
 //  Verse and chapter default to 1 when absent. A range must be ascending and
 //  inside the chapter.
 //
+//  A book on its own is a reference in every one of those spellings, the
+//  unspaced numbered ones included: "1John" is 1 John 1:1, as "Jude" is
+//  Jude 1:1. Only a string of nothing but digits, ":" and "-" ("3:16") is read
+//  as having no book, and that needs a context book (below).
+//
 //  ## Deliberately out of scope
 //
 //  Bounded by what the app can actually receive; anything wider would be
@@ -26,6 +31,8 @@
 //      ranges. The `sword://` path truncates a list itself first
 //      ("28-30" -> "28", "26,28;30" -> "26").
 //    - Roman-numeral chapters ("Gen ii").
+//    - A chapter run into the book name ("John3:16", "1John3:16"). The numbers
+//      start at a space; the numbered books are why a digit cannot mark them.
 //    - `ff` / trailing-letter suffixes ("Gen 1:1ff", "Gen 1:12a").
 //    - `inscriptio` / `subscriptio`. No bundled module uses them.
 //    - Localised book names. The app is English-only.
@@ -178,10 +185,16 @@ struct PSRefParser {
     /// treats everything after it as the numeric part — but only if the remaining
     /// left side is non-empty, so "1 Corinthians" does not lose its "1". A string
     /// that is entirely numeric ("3:16") yields an empty book part.
+    ///
+    /// Entirely: digits, ":" and "-" and nothing else. Starting with a digit is
+    /// not enough — the unspaced numbered books do ("1John", "1Cor", "2Kgs"), and
+    /// read as a number spec they had no book, so a bare one was declined while
+    /// "Jude" and "1 John" were not.
     private func splitBookFromNumbers(_ input: String) -> (String, String) {
         let chars = Array(input)
-        if let first = chars.first, first.isNumber, !input.contains(" ") {
-            // "3:16" / "3" — no book name at all.
+        if let first = chars.first, first.isNumber,
+           chars.allSatisfy({ $0.isNumber || $0 == ":" || $0 == "-" }) {
+            // "3:16" / "3" / "3:16-18" — no book name at all.
             return ("", input)
         }
         var i = chars.count - 1

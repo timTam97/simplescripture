@@ -294,4 +294,25 @@ final class URLRouterTests: XCTestCase {
         // `testOutOfRangeVerseStillRoutesToAValidChapter`.
         XCTAssertEqual(try verse("John+3:99"), "99")
     }
+
+    /// A bare book opens at its first chapter — the numbered books written without
+    /// a space included ("1John", "1Cor"), which the parser used to take for a
+    /// chapter-and-verse with no book, and decline.
+    func testAnUnspacedNumberedBookOpensAtItsFirstChapter() throws {
+        let router = try router()
+
+        for (path, persisted) in [("1John", "1 John 1"),
+                                  ("1Cor", "1 Corinthians 1"),
+                                  ("3Jn", "3 John 1")] {
+            guard let route = router.route(
+                for: URL(string: "sword://Bible/" + path)
+            ) else {
+                XCTFail("sword://Bible/\(path) did not route")
+                continue
+            }
+            XCTAssertEqual(route.destination, .bible(module: nil))
+            XCTAssertEqual(route.persistedChapterRef, persisted)
+            XCTAssertEqual(route.versePosition, "1")
+        }
+    }
 }

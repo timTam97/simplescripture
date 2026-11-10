@@ -522,6 +522,66 @@ final class PSRefSemanticsTests: XCTestCase {
         XCTAssertGreaterThan(resolved, 300)
     }
 
+    /// Every book also resolves from every spelling **on its own**: the chapter is
+    /// optional in the grammar, and `sword://Bible/Jude` is a documented URL.
+    ///
+    /// The numbered books are the ones at risk. Their unspaced spellings ("1John",
+    /// "1Cor", "2Kgs" — 39 across the 17 books) start with a digit and hold no
+    /// space, which the parser used to read as a chapter-and-verse with no book in
+    /// front of it, and decline.
+    func testParserAcceptsEveryBareBookSpelling() throws {
+        let parser = try parser()
+        let resolver = try resolver()
+        // As in `testParserResolvesAllBooksFromEverySpelling`.
+        let intentionalCollisions: [String: String] = ["Jud": "Judges", "Phi": "Philippians"]
+
+        var accepted = 0
+        var rejected: [String] = []
+        for book in resolver.books {
+            let spellings = [book.name, book.longName, book.localisedName, book.osisName,
+                             book.shortName, book.preferredAbbreviation, book.abbreviation]
+            for spelling in spellings where !spelling.isEmpty {
+                guard let parsed = parser.parse(spelling) else {
+                    if !rejected.contains(spelling) { rejected.append(spelling) }
+                    continue
+                }
+                if let owner = intentionalCollisions[spelling] {
+                    XCTAssertEqual(parsed.book.name, owner,
+                                   "'\(spelling)' is an intentional collision and must keep resolving to \(owner)")
+                } else {
+                    XCTAssertEqual(parsed.book.osisName, book.osisName,
+                                   "bare spelling '\(spelling)' resolved to the wrong book")
+                }
+                XCTAssertFalse(parsed.hadExplicitChapter,
+                               "'\(spelling)' carries no chapter")
+                XCTAssertEqual(parsed.chapter, 1, "bare spelling '\(spelling)'")
+                XCTAssertEqual(parsed.verse, 1, "bare spelling '\(spelling)'")
+                accepted += 1
+            }
+        }
+        print("[refsem/fast] bare book spellings accepted: \(accepted),"
+              + " distinct spellings rejected: \(rejected.count)")
+        XCTAssertEqual(rejected, [], "the parser rejected \(rejected.count) bare book spelling(s)")
+        XCTAssertGreaterThan(accepted, 300)
+
+        // Digits, ":" and "-" alone are still a chapter-and-verse with no book,
+        // which needs a context to mean anything.
+        for input in ["3", "12", "3:16", "3:16-18"] {
+            XCTAssertNil(parser.parse(input), "'\(input)' names no book")
+        }
+        guard let john = resolver.book(named: "John") else { return }
+        XCTAssertEqual(parser.parse("3:16-18", relativeTo: john)?.displayRef, "John 3:16-18")
+        XCTAssertEqual(parser.parse("3", relativeTo: john)?.displayRef, "John 3:1")
+
+        // And a chapter run into the book name stays out of scope: the numbers
+        // start at a space.
+        for input in ["1John3:16", "John3:16", "1John3", "3:16a"] {
+            XCTAssertNil(parser.parse(input), "parser accepted '\(input)' but should not")
+            XCTAssertNil(parser.parse(input, relativeTo: john),
+                         "parser accepted '\(input)' against a context but should not")
+        }
+    }
+
     // MARK: - Fast tier: the unreachability proof
     //
     // Four parts. Three are pure data assertions over the baked store; the fourth
