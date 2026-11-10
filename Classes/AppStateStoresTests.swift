@@ -2212,6 +2212,92 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(store.verse(at: 100, fallback: 1), 3)
     }
 
+    /// Renders ten one-line verses through the reader's own text renderer and asks
+    /// the store for the verse at the middle of each line.
+    ///
+    /// The test above hands the store text-view coordinates directly; this pins
+    /// that the RENDERER records them in that space. With a line's origin added to
+    /// bounds that already include it, every fragment sat at about twice its real y
+    /// and this read `[1, 1, 2, 2, 3, 3, 4, 4, 5, 5]`: the toolbar title and
+    /// `bibleVersePosition` moved through a flowing paragraph at half speed and
+    /// never reached its second half.
+    @MainActor
+    func testVerseTrackingRendererRecordsFragmentsInTextViewCoordinates() throws {
+        var text = Text("")
+        for verse in 1...10 {
+            let piece = Text(verbatim: verse == 10 ? "Verse \(verse)" : "Verse \(verse)\n")
+                .customAttribute(VerseTextAttribute(verse: verse))
+            text = Text("\(text)\(piece)")
+        }
+        let store = VerseLayoutStore()
+        let renderer = ImageRenderer(
+            content: text
+                .font(.system(size: 20))
+                .textRenderer(VerseTrackingTextRenderer(layoutStore: store))
+                .frame(width: 300, alignment: .leading)
+        )
+        renderer.scale = 1
+        let height = try XCTUnwrap(renderer.uiImage).size.height
+
+        XCTAssertEqual(
+            (0..<10).map {
+                store.verse(at: height * (CGFloat($0) + 0.5) / 10, fallback: 0)
+            },
+            Array(1...10)
+        )
+    }
+
+    /// Scrolls a flowing paragraph past the top half a point at a time and collects
+    /// every change of verse the tracker reports: 1 to 12, each once, in order.
+    ///
+    /// The text is built the way `ParagraphRow` builds it — superscript label, body,
+    /// verse attribute, the reader's line spacing — because the label is what made
+    /// the tracker step backwards. A label's own bounds start about 2 pt above the
+    /// body text's, so with each fragment at its run's height the gap above a line
+    /// holding the tail of verse N-1 and the start of verse N read N, and the line
+    /// itself read N-1 again: one backward step of the title, and two defaults
+    /// writes, per verse. Correcting the fragments' position alone doubles those
+    /// steps, which is why this is pinned beside the test above.
+    @MainActor
+    func testFlowingVerseTrackerNeverStepsBackwards() throws {
+        let style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        var text = Text("")
+        for verse in 1...12 {
+            var attributed = ChapterTextRenderer.verseLabel(verse, style: style)
+            attributed += ChapterTextRenderer.attributed(
+                runs: [
+                    InlineRun(
+                        text: "In the beginning God created the heaven and the earth "
+                            + "and so on and so forth for a while. "
+                    ),
+                ],
+                style: style
+            )
+            let piece = Text(attributed)
+                .customAttribute(VerseTextAttribute(verse: verse))
+            text = Text("\(text)\(piece)")
+        }
+        let store = VerseLayoutStore()
+        let renderer = ImageRenderer(
+            content: text
+                .lineSpacing(style.fontSize * (style.lineSpacingMultiple - 1))
+                .textRenderer(VerseTrackingTextRenderer(layoutStore: store))
+                .frame(width: 360, alignment: .leading)
+        )
+        renderer.scale = 1
+        let height = try XCTUnwrap(renderer.uiImage).size.height
+
+        // Each element is one retitle on the way down the paragraph.
+        var reported: [Int] = []
+        for offset in stride(from: CGFloat(0), to: height, by: 0.5) {
+            let verse = store.verse(at: offset, fallback: 0)
+            if verse != reported.last { reported.append(verse) }
+        }
+        XCTAssertEqual(reported, Array(1...12))
+    }
+
     // MARK: Launch scroll restore
 
     /// Saves and restores the two `UserDefaults.standard` keys the reader pane

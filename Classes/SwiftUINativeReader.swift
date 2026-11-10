@@ -440,7 +440,11 @@ final class VerseLayoutStore: @unchecked Sendable {
     }
 }
 
-private struct VerseTrackingTextRenderer: TextRenderer {
+/// Draws the text unchanged and records where each verse's runs were laid out, for
+/// `VerseLayoutStore.verse(at:)` to answer with an offset from the top of the text.
+///
+/// Internal rather than private so the unit tests can render through it.
+struct VerseTrackingTextRenderer: TextRenderer {
     let layoutStore: VerseLayoutStore?
 
     var animatableData: EmptyAnimatableData {
@@ -448,20 +452,44 @@ private struct VerseTrackingTextRenderer: TextRenderer {
         set {}
     }
 
+    /// A fragment is its run's horizontal extent and its LINE's vertical extent,
+    /// with nothing added to either. Both halves are measured (iOS 27.2), and they
+    /// go together:
+    ///
+    /// - **Typographic bounds are already relative to the text view**, a run's and a
+    ///   line's alike. With `line.origin` (the line's baseline) added on top, every
+    ///   fragment sat at about twice its real y: the verse reported was the one half
+    ///   as far into the paragraph, and none in its second half was ever reported.
+    /// - **Every fragment on a line shares the line's extent**, so the store's
+    ///   `order` tie-break returns the first verse on the topmost line. A verse
+    ///   label is raised, and its own bounds start about 2 pt above the body text
+    ///   beside it. At the runs' own heights, on a line holding the tail of verse
+    ///   N-1 and the start of verse N, the gap above the line read N (the label's
+    ///   bounds are the first below it) and the line itself read N-1 again: the
+    ///   title stepped backwards once per verse boundary. Correcting the position
+    ///   alone doubles those steps (11 against 5 over twelve verses), because the
+    ///   whole table is then in reach.
+    ///
+    /// Pinned by `testVerseTrackingRendererRecordsFragmentsInTextViewCoordinates`
+    /// and `testFlowingVerseTrackerNeverStepsBackwards`.
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         var fragments: [VerseLayoutFragment] = []
         var order = 0
 
         for line in layout {
+            let lineBounds = line.typographicBounds.rect
             for run in line {
                 if let verse = run[VerseTextAttribute.self]?.verse {
-                    var rect = run.typographicBounds.rect
-                    rect.origin.x += line.origin.x
-                    rect.origin.y += line.origin.y
+                    let runBounds = run.typographicBounds.rect
                     fragments.append(
                         VerseLayoutFragment(
                             verse: verse,
-                            rect: rect,
+                            rect: CGRect(
+                                x: runBounds.minX,
+                                y: lineBounds.minY,
+                                width: runBounds.width,
+                                height: lineBounds.height
+                            ),
                             order: order
                         )
                     )
