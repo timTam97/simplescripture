@@ -47,7 +47,13 @@ struct URLRouter {
     func route(for url: URL?) -> URLRoute? {
         // Bundled study texts keep using sword:// internally, while the
         // development app registers sword-dev:// for links opened by iOS.
-        guard let url, url.scheme == "sword" || url.scheme == externalScheme else {
+        //
+        // Compared in lower case: a scheme is case-insensitive (RFC 3986 §3.1)
+        // and `URL.scheme` returns it as written, so `Sword://` was not
+        // `sword://` here and the link was dropped without a log line.
+        guard let url,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "sword" || scheme == externalScheme.lowercased() else {
             return nil
         }
 

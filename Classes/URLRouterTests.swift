@@ -315,4 +315,39 @@ final class URLRouterTests: XCTestCase {
             XCTAssertEqual(route.versePosition, "1")
         }
     }
+
+    /// A URL scheme is case-insensitive (RFC 3986 §3.1) and `URL.scheme` returns
+    /// it as written, so `Sword://` has to be compared as `sword://` — it used to
+    /// be dropped, without so much as a log line.
+    func testSchemeMatchingIgnoresCase() throws {
+        let router = try router()
+        let lower = try XCTUnwrap(router.route(
+            for: URL(string: "sword://KJV/John+3:16")
+        ))
+
+        for string in ["Sword://KJV/John+3:16", "SWORD://KJV/John+3:16"] {
+            let url = try XCTUnwrap(URL(string: string))
+            guard let route = router.route(for: url) else {
+                XCTFail("\(string) did not route")
+                continue
+            }
+            // The URL itself is passed on as it arrived.
+            XCTAssertEqual(route.sourceURL, url)
+            XCTAssertEqual(route.destination, lower.destination)
+            XCTAssertEqual(route.reference, lower.reference)
+            XCTAssertEqual(route.persistedChapterRef, lower.persistedChapterRef)
+            XCTAssertEqual(route.versePosition, lower.versePosition)
+        }
+
+        let development = try XCTUnwrap(URLRouter(externalScheme: "sword-dev"))
+        XCTAssertNotNil(development.route(
+            for: URL(string: "Sword-Dev://KJV/John+3:16")
+        ))
+
+        // Still only `sword` and the scheme the bundle registers.
+        let production = try XCTUnwrap(URLRouter(externalScheme: "sword"))
+        XCTAssertNil(production.route(for: URL(string: "sword-dev://KJV/John+3:16")))
+        XCTAssertNil(production.route(for: URL(string: "Sword-Dev://KJV/John+3:16")))
+        XCTAssertNil(production.route(for: URL(string: "https://KJV/John+3:16")))
+    }
 }
