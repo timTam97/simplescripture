@@ -1,5 +1,6 @@
 import XCTest
 import Observation
+import SwiftUI
 import UIKit
 import os
 @testable import SimpleScripture
