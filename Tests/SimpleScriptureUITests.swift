@@ -301,6 +301,129 @@ final class SimpleScriptureUITests: XCTestCase {
         }
     }
 
+    /// A horizontal swipe on the reader pages by one chapter and lands at the top
+    /// of it; a vertical scroll and a text-selection drag do not page at all.
+    ///
+    /// Only the simulator can answer this: the swipe is recognised alongside the
+    /// scroll view's own pan, and a gesture attached the wrong way either never
+    /// fires or stops the chapter scrolling. Both would pass every unit test.
+    ///
+    /// The landing is checked from the FOOT of a chapter, against where a chevron
+    /// page from the top lands. That is the state paging mis-landed from when it
+    /// scrolled the old scroll view to the top: verse 1 left some 110pt down the
+    /// screen, but only in about one swipe in six, so a pass here is necessary and
+    /// not sufficient. What rules it out is the new scroll surface per page, pinned
+    /// by `testPagingStartsANewScrollSurfaceAtThePersistedTopOfTheChapter`.
+    @MainActor
+    func testSwipingTheReaderPagesChapters() throws {
+        app.terminate()
+        app.launchArguments += [
+            "-strongsPreference_KJV", "NO",
+            "-morphPreference_KJV", "NO",
+            "-footnotesPreference_KJV", "NO",
+            "-vplPreference_KJV", "NO",
+            "-fontSizePreference", "18",
+        ]
+        app.launch()
+        selectWorkspace("Read")
+        selectReadingMode("Bible")
+        selectGenesisChapter(1)
+
+        let reader = app.descendants(matching: .any)
+            .matching(identifier: "reading.chapter-content").firstMatch
+        XCTAssertTrue(reader.waitForExistence(timeout: 5))
+        let reference = app.buttons["reading.reference-picker"]
+        let openings = [
+            1: "In the beginning God created",
+            2: "Thus the heavens and the earth",
+            3: "Now the serpent was more subtil",
+        ]
+
+        func opening(_ chapter: Int) -> XCUIElement {
+            app.staticTexts.containing(
+                NSPredicate(format: "label CONTAINS %@", openings[chapter]!)
+            ).firstMatch
+        }
+
+        func assertChapter(_ chapter: Int, after action: String) {
+            XCTAssertTrue(opening(chapter).waitForExistence(timeout: 5),
+                          "Genesis \(chapter) is not showing after \(action).")
+            for other in openings.keys where other != chapter {
+                XCTAssertFalse(opening(other).exists,
+                               "Genesis \(other) is showing after \(action).")
+            }
+        }
+
+        assertChapter(1, after: "selecting it")
+        // Nothing precedes Genesis 1, so this is the disabled-chevron case.
+        reader.swipeRight()
+        assertChapter(1, after: "swiping back at the first chapter")
+
+        // Where a page lands, taken from the chevron at the top of a chapter.
+        app.buttons["reading.next-chapter"].tap()
+        assertChapter(2, after: "the chevron")
+        let verse1 = app.links["pslink://versemenu/1"]
+        XCTAssertTrue(verse1.waitForExistence(timeout: 5))
+        let landing = verse1.frame.origin
+
+        func assertLandsAtTheTop(after action: String) {
+            let landed = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in
+                    guard verse1.exists else { return false }
+                    let origin = verse1.frame.origin
+                    return abs(origin.x - landing.x) <= 1 && abs(origin.y - landing.y) <= 1
+                },
+                object: nil
+            )
+            let outcome = XCTWaiter().wait(for: [landed], timeout: 5)
+            let rest = verse1.exists ? "\(verse1.frame.origin)" : "off screen"
+            XCTAssertEqual(outcome, .completed,
+                           "Verse 1 came to rest at \(rest) after \(action); "
+                               + "a page lands it at \(landing).")
+        }
+
+        func scrollToTheFoot() {
+            for _ in 0..<5 { reader.swipeUp(velocity: .fast) }
+        }
+
+        scrollToTheFoot()
+        reader.swipeLeft()
+        assertChapter(3, after: "swiping forward")
+        assertLandsAtTheTop(after: "swiping forward from the foot of Genesis 2")
+
+        scrollToTheFoot()
+        reader.swipeRight()
+        assertChapter(2, after: "swiping back")
+        assertLandsAtTheTop(after: "swiping back from the foot of Genesis 3")
+
+        // The scroll still scrolls — the verse in the title moves — and stays in
+        // the chapter it was in.
+        let chapterReference = reference.label
+        let verseBeforeScrolling = try XCTUnwrap(reference.value as? String)
+        reader.swipeUp()
+        let scrolled = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                (reference.value as? String) != verseBeforeScrolling
+            },
+            object: nil
+        )
+        wait(for: [scrolled], timeout: 10)
+        XCTAssertEqual(reference.label, chapterReference,
+                       "Scrolling the reader vertically changed the chapter.")
+        XCTAssertFalse(opening(1).exists)
+        XCTAssertFalse(opening(3).exists)
+
+        // Dragging out a text selection is a sideways drag as well, and belongs to
+        // the text: it must select, not page.
+        let press = reader.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.45))
+        let release = reader.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.45))
+        press.press(forDuration: 1.0, thenDragTo: release)
+        XCTAssertEqual(reference.label, chapterReference,
+                       "Dragging out a text selection changed the chapter.")
+        XCTAssertFalse(opening(1).exists)
+        XCTAssertFalse(opening(3).exists)
+    }
+
     @MainActor
     private func setVersePerLine(_ enabled: Bool) {
         // Genesis 1 and 3 put verses 1 and 2 in the same prose paragraph.
@@ -678,14 +801,22 @@ final class SimpleScriptureUITests: XCTestCase {
                 XCTAssertEqual(reference.value as? String, initialReference)
             }
 
-            reader.swipeUp()
-            let advanced = XCTNSPredicateExpectation(
-                predicate: NSPredicate { _, _ in
-                    (reference.value as? String) != initialReference
-                },
-                object: nil
-            )
-            wait(for: [advanced], timeout: 10)
+            // One swipe does not always move the reference on. A commentary record
+            // covers a run of verses, and MHCC's first in Genesis 1 is several
+            // screens long, so the commentary pane needs more than one.
+            var advanced = false
+            for _ in 0..<6 where !advanced {
+                reader.swipeUp()
+                let moved = XCTNSPredicateExpectation(
+                    predicate: NSPredicate { _, _ in
+                        (reference.value as? String) != initialReference
+                    },
+                    object: nil
+                )
+                advanced = XCTWaiter().wait(for: [moved], timeout: 3) == .completed
+            }
+            XCTAssertTrue(advanced,
+                          "Scrolling the \(mode) pane never moved the reference on.")
             assertWorkspaceTabsVisible()
             XCTAssertTrue(reference.isHittable)
             XCTAssertTrue(app.buttons["reading.mode"].isHittable)
@@ -779,11 +910,14 @@ final class SimpleScriptureUITests: XCTestCase {
     ///
     /// `ToolbarOverflowMenu` is system-provided, so its button carries the system's
     /// own identity rather than one we set: confirmed on the iOS 27 simulator as
-    /// identifier `OverflowBarButtonItem` / label "More". Matched by identifier,
-    /// since the label is localized.
+    /// identifier `OverflowBarButtonItem` / label "More", and on iOS 27.2 as
+    /// `TopOverflowBarButtonItem`. Matched by the identifier's suffix, which both
+    /// share, since the label is localized.
     @MainActor
     private func openReadingOverflowMenu() {
-        let overflow = app.buttons["OverflowBarButtonItem"].firstMatch
+        let overflow = app.buttons.matching(
+            NSPredicate(format: "identifier ENDSWITH %@", "OverflowBarButtonItem")
+        ).firstMatch
         XCTAssertTrue(
             overflow.waitForExistence(timeout: 5),
             "Could not find the reading toolbar's overflow menu."

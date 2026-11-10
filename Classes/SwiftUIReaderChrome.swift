@@ -191,6 +191,47 @@ final class ReaderChromeModel {
     }
 }
 
+/// A finished drag on the reader, classified as a chapter swipe — or not one.
+///
+/// Swiping LEFT pages forward and RIGHT pages back, the direction a page turns.
+/// It follows the text (English, left-to-right), not the interface's layout
+/// direction.
+///
+/// A pure value so the swipe-versus-scroll decision is assertable without the
+/// simulator. The reader is a vertical scroll view the user drags all day, so the
+/// test is deliberately strict: an ordinary scroll that drifts sideways, or a
+/// finger resting on the text, must not turn the page.
+enum ChapterSwipe: Equatable {
+    case next
+    case previous
+
+    /// How far a finger moves before the drag is tracked at all. Well clear of a
+    /// tap, so links and the verse menu are untouched.
+    static let minimumDistance: CGFloat = 20
+    /// Horizontal travel under the finger. Rules out a flick too short to be meant.
+    static let minimumTravel: CGFloat = 50
+    /// Horizontal travel once the release velocity is projected forward. A quick
+    /// flick clears it on speed; a slow drag has to cover the distance itself.
+    static let minimumProjectedTravel: CGFloat = 150
+    /// Horizontal travel must be at least this many times the vertical — within
+    /// about 27° of level. A scroll with sideways drift fails here.
+    static let horizontalDominance: CGFloat = 2
+
+    init?(translation: CGSize, predictedEndTranslation: CGSize) {
+        let travel = translation.width
+        let projected = predictedEndTranslation.width
+        guard abs(travel) >= Self.minimumTravel,
+              abs(travel) >= abs(translation.height) * Self.horizontalDominance,
+              // Still heading the way it started: a drag reversed before release is
+              // the user changing their mind.
+              (travel < 0) == (projected < 0),
+              abs(projected) >= Self.minimumProjectedTravel else {
+            return nil
+        }
+        self = travel < 0 ? .next : .previous
+    }
+}
+
 /// The Read workspace: the active pane, its chrome, the Bible/commentary
 /// switch, and the study surfaces the reader raises (study popup, verse menu,
 /// bookmark editor).
@@ -303,6 +344,30 @@ struct ReaderScreen: View {
             reading.prepareForSizeChange()
             reading.restoreAfterSizeChange()
         }
+        // On the ZStack, not in `ChapterTextView`: one recogniser for whichever pane
+        // is showing.
+        //
+        // `.gesture`, NOT `.simultaneousGesture`: the gestures inside the reader have
+        // to win. The chapter text is selectable, and dragging a selection handle —
+        // or pressing and dragging out a selection — is a sideways drag. MEASURED on
+        // iOS 27.2: recognised simultaneously, extending a selection turned the page.
+        // At ordinary priority the selection keeps the touch, a swipe that starts on
+        // plain text or on a link still pages, and vertical scrolling is untouched
+        // (the scroll view does not claim a sideways drag).
+        .gesture(chapterSwipe)
+    }
+
+    /// A horizontal swipe pages by a chapter. Decided once, on release — see
+    /// `ChapterSwipe` — so one swipe can never page twice.
+    private var chapterSwipe: some Gesture {
+        DragGesture(minimumDistance: ChapterSwipe.minimumDistance)
+            .onEnded { drag in
+                guard let swipe = ChapterSwipe(
+                    translation: drag.translation,
+                    predictedEndTranslation: drag.predictedEndTranslation
+                ) else { return }
+                reading.page(swipe)
+            }
     }
 
     /// The verse menu's title — "Verse 12".

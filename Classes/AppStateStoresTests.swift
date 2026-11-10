@@ -2326,4 +2326,128 @@ final class AppStateStoresTests: XCTestCase {
             )
         }
     }
+
+    // MARK: Paging
+
+    /// Paging replaces the scroll view and persists the top of the new chapter.
+    ///
+    /// The persist is the half that is easy to lose. A scroll view that starts at
+    /// the top publishes no offset change and no new topmost verse, so nothing
+    /// else writes these keys — and they hold the position in the chapter being
+    /// LEFT (`setToPreviousChapter` even writes the destination's last verse). Left
+    /// alone, a relaunch restores the old offset in the new chapter and a display
+    /// toggle jumps to the old verse.
+    @MainActor
+    func testPagingStartsANewScrollSurfaceAtThePersistedTopOfTheChapter() {
+        withPreservedPanePositionKeys { standard, scrollKey in
+            standard.set("2289", forKey: scrollKey)
+            standard.set("31", forKey: Defaults.bibleVersePosition)
+            let pane = ReaderPaneModel(mode: .bible)
+            let surface = pane.scrollSurface
+
+            pane.pendingRestore = .chapterStart
+            pane.applyPendingWork()
+
+            XCTAssertEqual(pane.scrollSurface, surface + 1,
+                           "Paging kept the scroll view of the chapter being left.")
+            XCTAssertEqual(standard.string(forKey: scrollKey), "0")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1")
+
+            // Every other restore keeps its scroll view: replacing it on a display
+            // toggle or a font change would flash and drop the scroll in flight.
+            for restore: ReaderPaneModel.PaneRestore in [.none, .verse(3), .offset(120)] {
+                pane.pendingRestore = restore
+                pane.applyPendingWork()
+            }
+            XCTAssertEqual(pane.scrollSurface, surface + 1)
+        }
+    }
+
+    /// `displayChapter`'s `.none` is paging, and paging is what asks for the new
+    /// scroll surface — on the pane it renders now and on the one it defers into.
+    @MainActor
+    func testPagingDefersAChapterStartIntoTheOtherPane() {
+        let standard = UserDefaults.standard
+        let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
+                    Defaults.commentaryVersePosition,
+                    "bibleScrollPosition", "commentaryScrollPosition"]
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        let workspace = ReadingWorkspaceModel()
+        let surface = workspace.bible.scrollSurface
+
+        workspace.displayChapter("Genesis 2", polling: .bible, restore: .none)
+
+        XCTAssertEqual(workspace.bible.scrollSurface, surface + 1)
+        XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
+        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "0")
+        XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1")
+    }
+
+    // MARK: Chapter swipe
+
+    /// The swipe-versus-scroll decision. The reader is a vertical scroll view, so
+    /// every vector here that returns nil is something a reader does all day; one
+    /// of them paging would be a chapter change nobody asked for.
+    func testChapterSwipeClassifiesAFinishedDrag() {
+        func swipe(_ dx: CGFloat, _ dy: CGFloat,
+                   projected px: CGFloat, _ py: CGFloat) -> ChapterSwipe? {
+            ChapterSwipe(
+                translation: CGSize(width: dx, height: dy),
+                predictedEndTranslation: CGSize(width: px, height: py)
+            )
+        }
+
+        // Left pages forward, right pages back.
+        XCTAssertEqual(swipe(-120, 8, projected: -300, 20), .next)
+        XCTAssertEqual(swipe(120, -8, projected: 300, -20), .previous)
+        // A quick flick clears the projected distance on speed alone...
+        XCTAssertEqual(swipe(-55, 0, projected: -400, 0), .next)
+        // ...and a slow, deliberate drag clears it on distance.
+        XCTAssertEqual(swipe(160, 10, projected: 160, 10), .previous)
+        // The thresholds are inclusive.
+        XCTAssertEqual(swipe(-50, 25, projected: -150, 75), .next)
+
+        XCTAssertNil(swipe(5, -200, projected: 10, -600),
+                     "An ordinary vertical scroll paged the chapter.")
+        XCTAssertNil(swipe(-80, -60, projected: -250, -180),
+                     "A scroll that drifted sideways paged the chapter.")
+        XCTAssertNil(swipe(-30, 0, projected: -400, 0),
+                     "A flick too short to be deliberate paged the chapter.")
+        XCTAssertNil(swipe(-90, 0, projected: -90, 0),
+                     "A short, slow drag paged the chapter.")
+        XCTAssertNil(swipe(-60, 0, projected: 40, 0),
+                     "A drag reversed before release paged the chapter.")
+        XCTAssertNil(swipe(0, 0, projected: 0, 0))
+    }
+
+    /// A swipe is gated on the flags that disable the chevron buttons.
+    ///
+    /// `page(forward:)` clears the search highlight before it checks the boundary,
+    /// which is harmless behind a disabled button and not behind a swipe: without
+    /// the gate, swiping back at Genesis 1 would wipe the highlight and go nowhere.
+    @MainActor
+    func testChapterSwipeIsInertWhereTheChevronsAreDisabled() {
+        let standard = UserDefaults.standard
+        let lastRef = standard.string(forKey: Defaults.lastRef)
+        let workspace = ReadingWorkspaceModel()
+        workspace.bible.searchHighlightTerms = ["beginning"]
+        workspace.bible.chrome.isNextEnabled = false
+        workspace.bible.chrome.isPreviousEnabled = false
+
+        workspace.page(.next)
+        workspace.page(.previous)
+
+        XCTAssertEqual(workspace.bible.searchHighlightTerms, ["beginning"])
+        XCTAssertEqual(standard.string(forKey: Defaults.lastRef), lastRef,
+                       "A gated swipe changed the persisted reference.")
+    }
 }

@@ -11,13 +11,20 @@
 //  The chapter must SCROLL UNDER the chrome, not stop at it, without any line
 //  being hidden at rest:
 //
-//      .contentMargins(.vertical, insets, for: .scrollContent)   // content inset
+//      .contentMargins(.all, insets, for: .scrollContent)        // content inset
 //      .ignoresSafeArea(edges: .vertical)                        // full-height view
 //
 //  The scroll VIEW is full-height, so text flows beneath the translucent bars;
 //  the scroll CONTENT carries the safe-area insets. Dropping either one either
 //  hides text behind the floating tab bar or letterboxes the reader.
 //  `contentMargins` also provides the scroll room past the bottom chrome.
+//
+//  The side gutter is a content margin too, NOT padding inside the content. The
+//  scroll view re-anchors to a row whenever lazy row heights settle, and it
+//  aligns the row's leading edge with the content's. With the gutter as padding
+//  that edge sat a gutter's width in, so the chapter could come to rest shifted
+//  left by the gutter, flush against the screen edge (measured after paging: 1
+//  chevron page in 120). As a margin, the aligned position IS the resting one.
 //
 //  ── Prose vs verse-per-line ───────────────────────────────────────────────
 //
@@ -253,7 +260,6 @@ struct ChapterTextView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, horizontalPadding)
                 .scrollTargetLayout()
                 // Paragraphs and individual verses reuse the same numeric IDs.
                 // Replace the lazy row stack when switching layouts so cached
@@ -267,12 +273,15 @@ struct ChapterTextView: View {
             //
             // `for: .scrollContent` insets the content rather than the indicators —
             // the default would also pull the scroll indicator inward.
+            //
+            // The side gutter belongs here as well, not as padding on the stack: see
+            // the file header for the left-shifted landing that padding produces.
             .contentMargins(
-                .vertical,
+                .all,
                 EdgeInsets(top: proxy.safeAreaInsets.top,
-                           leading: 0,
+                           leading: horizontalPadding,
                            bottom: proxy.safeAreaInsets.bottom,
-                           trailing: 0),
+                           trailing: horizontalPadding),
                 for: .scrollContent
             )
             .ignoresSafeArea(edges: .vertical)
@@ -304,13 +313,17 @@ struct ChapterTextView: View {
                     pane.userBeganScrolling()
                 }
             }
+            // A chapter the reader pages to gets a NEW scroll view, not the old one
+            // scrolled to the top — see `ReaderPaneModel.scrollSurface`. After every
+            // scroll modifier, so the identity covers the scroll view they configure.
+            .id(pane.scrollSurface)
         }
         // The identifier the XCUITests match on.
         .accessibilityIdentifier("reading.chapter-content")
     }
 
     /// Horizontal gutter: text pinned to the physical edge is unreadable in a
-    /// full-width view.
+    /// full-width view. Applied as a scroll-content margin.
     private var horizontalPadding: CGFloat {
         UIDevice.current.userInterfaceIdiom == .phone ? 16 : 20
     }

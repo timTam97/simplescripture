@@ -14,8 +14,9 @@ is no catalogue of additional translations or module downloads.
 ## Read
 
 Use the reference picker to choose a book, chapter and verse. The chapter
-arrows move backward and forward. Switch between Bible and Commentary to
-read the passage or Matthew Henry's notes.
+arrows move backward and forward, and so does swiping the text: swipe left
+for the next chapter, right for the previous one. Switch between Bible and
+Commentary to read the passage or Matthew Henry's notes.
 
 Reading options include red-letter text, headings, footnotes, Strong's numbers
 and morphology where the selected resource supplies them. Enable Strong's

@@ -22,7 +22,9 @@
 //    "commentary" action land on the right verse without rendering MHCC on every
 //    Bible chapter change. `applyPendingWork()`'s branch order is load-bearing.
 //  * **Chapter paging restores no position in either direction** — do not
-//    "restore" a verse position on `previousChapter`.
+//    "restore" a verse position on `previousChapter`. It also starts the new
+//    chapter on a NEW scroll view (`ReaderPaneModel.scrollSurface`) rather than
+//    scrolling the old one to the top, which did not land reliably.
 //  * **`bibleScrollPosition` / `commentaryScrollPosition`** are raw `UserDefaults`
 //    string keys with no `Defaults` constant, written as `"%d"` of a `CGFloat`.
 //    They are persisted; `displayChapter`'s `.scroll` arm reads them back into an
@@ -186,7 +188,27 @@ final class ReaderPaneModel {
         case verse(Int)
         case offset(CGFloat)
         case none
+        /// The top of a chapter the reader has PAGED to. Lands where `.none` does,
+        /// but on a new scroll view rather than by scrolling the old one — see
+        /// `scrollSurface` — and persists that position.
+        case chapterStart
     }
+
+    /// The identity of this pane's scroll view: `ChapterTextView` keys its
+    /// `ScrollView` on it, so bumping it replaces the scroll view outright.
+    ///
+    /// **Paging bumps it, because scrolling the old scroll view to the top of a new
+    /// chapter does not land reliably.** The two chapters share row ids (verse
+    /// numbers), and the old scroll view keeps the row it was anchored to and any
+    /// momentum it had, so the scroll to the top races all of them. Measured on the
+    /// simulator, paging straight after a flick left verse 1 in the wrong place in
+    /// 7 chevron pages in 120 (resting too low, still drifting on the old momentum,
+    /// or shifted sideways), and in 8 swipes in 32 from the foot of a chapter. A new
+    /// scroll view has nothing to carry over: 0 in 152.
+    ///
+    /// Only paging takes this path. Every other restore keeps its scroll view, so a
+    /// display toggle or a font change does not flash or lose its place.
+    private(set) var scrollSurface = 0
 
     @ObservationIgnored private var currentShownVerse = 1
     @ObservationIgnored private var verseToShow = 0
@@ -343,6 +365,20 @@ final class ReaderPaneModel {
             Task { @MainActor [weak self] in
                 self?.scrollPosition.scrollTo(edge: .top)
             }
+        case .chapterStart:
+            // A new scroll view (see `scrollSurface`), and a new position to go with
+            // it: the old one names a row of the chapter being left, and the chapter
+            // arriving has a row with the same id.
+            outstandingOffsetRestore = nil
+            lastScrollOffset = 0
+            scrollPosition = ScrollPosition(idType: Int.self)
+            scrollSurface += 1
+            // Persisted HERE because nothing else will. A scroll view that starts at
+            // the top publishes no offset change and no new topmost verse, so the keys
+            // would keep the position in the chapter being left — and `setToPreviousChapter`
+            // has just written the destination's LAST verse into the verse key. A
+            // relaunch (`.scroll`) or a display toggle (`.verse`) would land there.
+            persistPosition(verse: 1, scrollOffset: 0)
         }
     }
 
@@ -919,7 +955,10 @@ final class ReadingWorkspaceModel {
                 commentary.setVerseToShow((verse as NSString).integerValue)
             }
         case .none:
-            break
+            // Paging — the only caller that passes `.none`. Each pane starts the new
+            // chapter on a new scroll surface, the deferred one when it is drained.
+            bibleRestore = .chapterStart
+            commentaryRestore = .chapterStart
         }
 
         switch polling {
@@ -1058,6 +1097,25 @@ final class ReadingWorkspaceModel {
 
     func previousChapter() {
         page(forward: false)
+    }
+
+    /// A chapter swipe on the reader: the same paging as the chevron buttons,
+    /// under the same enablement.
+    ///
+    /// The chevrons are disabled at Genesis 1 / Revelation 22 and when the
+    /// commentary pane has no module, so `page(forward:)` is never reached there.
+    /// A swipe has no disabled state, so it is gated on the same flags — otherwise
+    /// a swipe that goes nowhere would still clear the search highlight.
+    func page(_ swipe: ChapterSwipe) {
+        let chrome = activePane.chrome
+        switch swipe {
+        case .next:
+            guard chrome.isNextEnabled else { return }
+            nextChapter()
+        case .previous:
+            guard chrome.isPreviousEnabled else { return }
+            previousChapter()
+        }
     }
 
     private func page(forward: Bool) {
