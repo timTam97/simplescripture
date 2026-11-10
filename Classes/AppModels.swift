@@ -1117,6 +1117,23 @@ final class AppSession {
             if workspaceSelection == .search, newValue == .search {
                 searchFocusRequest &+= 1
             }
+            // Leaving Search puts the keyboard away FIRST, before the selection
+            // moves, so the workspace being shown is never laid out against it.
+            //
+            // Left up, the keyboard is still part of the safe area when the next
+            // workspace appears: the reader is laid out at the keyboard's height
+            // and then again at its own, which `ReaderScreen`'s size hook takes
+            // for a rotation — and re-anchors on the offset the reader held
+            // before. Opening a search result that way (type, tap) left the reader
+            // where it had been, under the result's reference in the title.
+            // MEASURED, iOS 27.2: 390x442 then 390x660, the hook firing twice.
+            // Pinned by `testOpeningASearchResultWithTheKeyboardUpLandsOnItsVerse`.
+            //
+            // The query, its results and the options are untouched; reselecting
+            // the Search tab focuses the field again (`searchFocusRequest`).
+            if workspaceSelection == .search, newValue != .search {
+                dismissKeyboard()
+            }
             workspaceSelection = newValue
         }
     }
@@ -1149,6 +1166,9 @@ final class AppSession {
     /// The `.appStateDidReset` observer. Held so it can be removed, and so a
     /// second `start()` cannot register a second handler.
     @ObservationIgnored private var resetObserver: NSObjectProtocol?
+    /// Resigns whichever control has the keyboard. Injected so the rule in
+    /// `selectedWorkspace`'s setter is assertable without a window.
+    @ObservationIgnored private let dismissKeyboard: @MainActor () -> Void
 
     init(
         selectedWorkspace: Workspace = .read,
@@ -1157,7 +1177,8 @@ final class AppSession {
         settings: SettingsModel? = nil,
         library: LibraryModel? = nil,
         search: SearchModel? = nil,
-        readingStore: ReadingStateStore = ReadingStateStore()
+        readingStore: ReadingStateStore = ReadingStateStore(),
+        dismissKeyboard: (@MainActor () -> Void)? = nil
     ) {
         self.workspaceSelection = selectedWorkspace
         self.lastOpenedURL = lastOpenedURL
@@ -1166,6 +1187,16 @@ final class AppSession {
         self.library = library ?? LibraryModel()
         self.search = search ?? SearchModel()
         self.readingStore = readingStore
+        self.dismissKeyboard = dismissKeyboard ?? {
+            // To the first responder, whichever view that is: the search field is
+            // SwiftUI's, and this model has no reference to it.
+            UIApplication.shared.sendAction(
+                #selector(UIResponder.resignFirstResponder),
+                to: nil,
+                from: nil,
+                for: nil
+            )
+        }
     }
 
     deinit {

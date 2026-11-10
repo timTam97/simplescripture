@@ -165,10 +165,27 @@ struct WorkspaceTabs: View {
         // buttons expose only their localized labels ("Read", "Library",
         // "Settings", "Search"). The XCUITests therefore match tabs by label.
         //
-        // NOTE ALSO the resulting ORDER: Read, Library, Settings, Search. `Search`
-        // is declared second but `TabRole.search` moves it to the trailing
-        // position, which is the system's convention for a search tab and is why
-        // the role exists.
+        // NOTE ALSO the ORDER: Read, Library, Settings, Search — on screen AND in
+        // this builder. The second half is load-bearing.
+        //
+        // `TabRole.search` shows the search tab in the trailing position wherever
+        // it is declared. Declared anywhere but last, the on-screen order and the
+        // declared order disagree, and every selection pays for it: after each
+        // change SwiftUI hands UIKit the tab list again
+        // (`-[UITabBarController setTabs:animated:]`), and the selection is
+        // re-applied through an index counted in one order and resolved in the
+        // other. MEASURED (iOS 27.2) with Search declared second:
+        //
+        //   tap Settings  ->  the bar selects Library, then Settings
+        //   tap Library   ->  the bar selects Search,  then Library
+        //   tap Search    ->  the bar selects Settings, then Search
+        //
+        // Each detour appears and disappears the WRONG workspace (building it, the
+        // first time — Search was configured by the first tap on Library) and
+        // cuts the bar's selection animation short: the pill vanishes and comes
+        // back. 18 of 27 tab changes took it, and it does not depend on what the
+        // workspaces contain or on how the selection is stored. None do with the
+        // search tab declared last.
         TabView(selection: $session.selectedWorkspace) {
             Tab(
                 "WorkspaceRead",
@@ -176,17 +193,6 @@ struct WorkspaceTabs: View {
                 value: Workspace.read
             ) {
                 ReadWorkspace(session: session, reading: reading)
-            }
-
-            Tab(
-                "WorkspaceSearch",
-                systemImage: "magnifyingglass",
-                value: Workspace.search,
-                // The system's search-tab treatment: on iPhone it takes the
-                // trailing position and can host the search field itself.
-                role: .search
-            ) {
-                SearchWorkspace(session: session, reading: reading)
             }
 
             Tab(
@@ -203,6 +209,18 @@ struct WorkspaceTabs: View {
                 value: Workspace.settings
             ) {
                 SettingsWorkspace(session: session)
+            }
+
+            // LAST — see the note above before moving it.
+            Tab(
+                "WorkspaceSearch",
+                systemImage: "magnifyingglass",
+                value: Workspace.search,
+                // The system's search-tab treatment: on iPhone it takes the
+                // trailing position and can host the search field itself.
+                role: .search
+            ) {
+                SearchWorkspace(session: session, reading: reading)
             }
         }
         .tabBarMinimizeBehavior(.never)
