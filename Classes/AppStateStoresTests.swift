@@ -1153,6 +1153,50 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(redisplayNotifications, 1)
     }
 
+    /// The primaries resolved at launch are a Bible and a commentary, not merely
+    /// two modules that ship.
+    ///
+    /// `reloadLast*` used to honour any persisted name the store had a type for, so
+    /// a `lastCommentary` naming a lexicon — which `sword://StrongsRealGreek/John+3:16`
+    /// could write, before the router learned to ignore such a host — came back as
+    /// the commentary at every launch. A lexicon has no chapters and there is no
+    /// module picker, so the commentary pane stayed empty. A name of the wrong kind
+    /// now falls back to the bundled module and is rewritten, exactly like a name
+    /// that is not shipped at all.
+    ///
+    /// `reloadLast*` resolves against `UserDefaults.standard` (the singleton has no
+    /// injectable defaults), so both keys and both primaries are put back.
+    func testAPersistedLexiconIsNotRestoredAsAReadingModule() {
+        let controller: PSModuleController = PSModuleController.default()
+        let standard = UserDefaults.standard
+        let previousBible = controller.primaryBibleName
+        let previousCommentary = controller.primaryCommentaryName
+        let previousLastBible = standard.string(forKey: Defaults.lastBible)
+        let previousLastCommentary = standard.string(forKey: Defaults.lastCommentary)
+        defer {
+            controller.primaryBibleName = previousBible
+            controller.primaryCommentaryName = previousCommentary
+            standard.set(previousLastBible, forKey: Defaults.lastBible)
+            standard.set(previousLastCommentary, forKey: Defaults.lastCommentary)
+        }
+
+        standard.set(BundledModules.strongsGreek, forKey: Defaults.lastCommentary)
+        standard.set(BundledModules.commentary, forKey: Defaults.lastBible)
+        controller.reloadLastCommentary()
+        controller.reloadLastBible()
+
+        XCTAssertEqual(controller.primaryCommentaryName, BundledModules.commentary)
+        XCTAssertEqual(
+            standard.string(forKey: Defaults.lastCommentary),
+            BundledModules.commentary
+        )
+        XCTAssertEqual(controller.primaryBibleName, BundledModules.bible)
+        XCTAssertEqual(
+            standard.string(forKey: Defaults.lastBible),
+            BundledModules.bible
+        )
+    }
+
     /// A reset has to TAKE in the live models, not just in the defaults plist.
     ///
     /// `resetPreferences()` removes `fontNamePreference` / `fontSizePreference` /

@@ -272,12 +272,14 @@ final class PSModuleController: NSObject {
     // MARK: - Reload last bible / commentary
 
     /// Resolve the primary Bible from `lastBible`, falling back to the bundled one.
-    /// A persisted name is honoured only if it names a module we ship.
+    /// A persisted name is honoured only if it names a Bible we ship — the kind is
+    /// checked, not just that the module ships; see `reloadLastCommentary`.
     @objc(reloadLastBible)
     func reloadLastBible() {
         let defaults = UserDefaults.standard
         let last = defaults.string(forKey: Defaults.lastBible)
-        if let last, PSContentStore.shared?.moduleMeta(last, key: "type") != nil {
+        if let last,
+           PSContentStore.shared?.moduleMeta(last, key: "type") == PSRefLinkRouter.typeBible {
             primaryBibleName = last
         } else {
             primaryBibleName = BundledModules.bible
@@ -287,12 +289,20 @@ final class PSModuleController: NSObject {
     }
 
     /// Resolve the primary commentary from `lastCommentary`. Same shape as
-    /// `reloadLastBible`.
+    /// `reloadLastBible`, and the same rule: only a commentary we ship.
+    ///
+    /// The test used to be "has a type at all", which a lexicon passes — and the
+    /// `sword://` router used to write one here (a URL with a lexicon as its host
+    /// was loaded as the commentary). A lexicon has no chapters, so it came back
+    /// at every launch as a commentary whose every chapter is empty, with no
+    /// module picker to replace it. The wrong kind now takes the fallback, which
+    /// rewrites the default too, so an install already holding one heals here.
     @objc(reloadLastCommentary)
     func reloadLastCommentary() {
         let defaults = UserDefaults.standard
         let last = defaults.string(forKey: Defaults.lastCommentary)
-        if let last, PSContentStore.shared?.moduleMeta(last, key: "type") != nil {
+        if let last,
+           PSContentStore.shared?.moduleMeta(last, key: "type") == PSRefLinkRouter.typeCommentary {
             primaryCommentaryName = last
         } else {
             primaryCommentaryName = BundledModules.commentary

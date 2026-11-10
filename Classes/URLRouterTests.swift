@@ -219,4 +219,41 @@ final class URLRouterTests: XCTestCase {
         XCTAssertEqual(routing("Jn 3:16")?.persistedChapterRef, "Jn 3")
         XCTAssertEqual(routing("I Samuel 3")?.persistedChapterRef, "1 Samuel 3")
     }
+
+    /// A lexicon is not something a chapter can be read in.
+    ///
+    /// The host of a `sword://` URL names the module to open the reference in, and
+    /// every bundled module that was not a Bible used to be taken for a
+    /// commentary — so `sword://StrongsRealGreek/John+3:16` installed the Greek
+    /// lexicon as the primary commentary and persisted it. A lexicon has no
+    /// chapters: every chapter then read as empty, across relaunches, and there is
+    /// no module picker to put MHCC back with. Such a host is treated like a
+    /// module that is not installed: it is ignored and the reference still opens.
+    func testALexiconHostIsNotLoadedAsAReadingModule() throws {
+        let router = try router()
+
+        for lexicon in BundledModules.lexicons {
+            let route = try XCTUnwrap(router.route(
+                for: URL(string: "sword://\(lexicon)/John+3:16")
+            ))
+            XCTAssertEqual(route.destination, .bible(module: nil), lexicon)
+            XCTAssertEqual(route.persistedChapterRef, "John 3")
+            XCTAssertEqual(route.versePosition, "16")
+        }
+
+        let asCommentary = try XCTUnwrap(router.route(
+            for: URL(string: "sword://StrongsRealGreek/John+3:16?type=commentary")
+        ))
+        XCTAssertEqual(asCommentary.destination, .commentary(module: nil))
+
+        // The two modules that are read in are still loaded by name.
+        let commentary = try XCTUnwrap(router.route(
+            for: URL(string: "sword://MHCC/John+3:16")
+        ))
+        XCTAssertEqual(commentary.destination, .commentary(module: "MHCC"))
+        let bible = try XCTUnwrap(router.route(
+            for: URL(string: "sword://KJV/John+3:16?type=commentary")
+        ))
+        XCTAssertEqual(bible.destination, .bible(module: "KJV"))
+    }
 }

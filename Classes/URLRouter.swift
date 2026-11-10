@@ -86,17 +86,22 @@ struct URLRouter {
         let versePosition = Int(firstNumericPrefix(in: verseRaw)).map(String.init) ?? "1"
         let type = queryValue(named: "type", in: url)
 
+        // The host names the module to open the reference in — if it is one a
+        // chapter can be read in. A lexicon is a bundled module too, but it has
+        // no chapters: taken for a commentary, as every module that was not a
+        // Bible used to be, `sword://StrongsRealGreek/John+3:16` made the lexicon
+        // the primary commentary and persisted it. Every chapter then read as
+        // empty, across relaunches, and there is no module picker to put MHCC
+        // back with. So a host of any other kind is ignored, exactly like one
+        // that is not installed, and the reference still opens.
         let destination: URLRoute.Destination
-        if let requestedModule = module, !requestedModule.isEmpty {
-            if let moduleType = moduleTypeProvider(requestedModule) {
-                destination = moduleType == PSRefLinkRouter.typeBible
-                    ? .bible(module: requestedModule)
-                    : .commentary(module: requestedModule)
-            } else {
-                destination = type == nil || type == "bible"
-                    ? .bible(module: nil)
-                    : .commentary(module: nil)
-            }
+        if let requestedModule = module, !requestedModule.isEmpty,
+           let moduleType = moduleTypeProvider(requestedModule),
+           moduleType == PSRefLinkRouter.typeBible
+            || moduleType == PSRefLinkRouter.typeCommentary {
+            destination = moduleType == PSRefLinkRouter.typeBible
+                ? .bible(module: requestedModule)
+                : .commentary(module: requestedModule)
         } else {
             destination = type == nil || type == "bible"
                 ? .bible(module: nil)
