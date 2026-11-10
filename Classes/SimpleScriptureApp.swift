@@ -271,17 +271,22 @@ private struct LibraryWorkspace: View {
     let session: AppSession
     let reading: ReadingWorkspaceModel
 
-    @State private var section: LibrarySection
-
-    init(session: AppSession, reading: ReadingWorkspaceModel) {
-        self.session = session
-        self.reading = reading
-        _section = State(initialValue: session.settings.librarySection)
-    }
+    /// The section on screen. Seeded from the "Default Library Tab" preference
+    /// on first appearance, then owned by the section menu.
+    @State private var section: LibrarySection = .bookmarks
+    /// The preference value `section` was last seeded from; `nil` until the
+    /// workspace first appears.
+    @State private var appliedPreference: LibrarySection?
 
     var body: some View {
         Group {
-            switch section {
+            // Read the preference only until it has been applied once. A read
+            // here (or in an `init`, which runs inside `WorkspaceTabs.body`)
+            // subscribes that body to the preference, and a Settings pick then
+            // re-evaluates it underneath the picker's own menu animation.
+            switch appliedPreference == nil
+                ? session.settings.librarySection : section
+            {
             case .bookmarks:
                 BookmarksView(
                     library: session.library,
@@ -310,8 +315,15 @@ private struct LibraryWorkspace: View {
                 )
             }
         }
-        .onChange(of: session.settings.librarySection) { _, newValue in
-            section = newValue
+        .onAppear { applyPreferenceIfChanged() }
+        // A changed preference is applied when the Library is next SELECTED,
+        // not when it changes. This workspace stays alive behind Settings, and
+        // swapping a whole `NavigationStack` there stalls the main thread for
+        // the length of the Settings picker's menu dismissal, which leaves the
+        // picker's value blank until the swap finishes.
+        .onChange(of: session.selectedWorkspace) { _, workspace in
+            guard workspace == .library else { return }
+            applyPreferenceIfChanged()
         }
     }
 }
@@ -371,6 +383,15 @@ struct LibrarySectionPicker: View {
             .foregroundStyle(.primary)
         }
         .accessibilityIdentifier("library.section")
+    }
+}
+
+private extension LibraryWorkspace {
+    func applyPreferenceIfChanged() {
+        let preference = session.settings.librarySection
+        guard preference != appliedPreference else { return }
+        section = preference
+        appliedPreference = preference
     }
 }
 

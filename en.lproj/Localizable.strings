@@ -288,7 +288,7 @@
 // SwiftUI supporting screens
 "SettingsReadingPreview" = "In the beginning God created the heaven and the earth.";
 "SettingsReadingPreviewReference" = "Genesis 1:1";
-"PreferencesLibraryOpensToTitle" = "Opens To";
+"PreferencesLibraryOpensToTitle" = "Default Library Tab";
 // About redesigned for SimpleScripture, 5 October 2026.
 // Original contributor credits are preserved in Resources/Notices/Application.txt.
 "AboutTagline" = "Read, search and study the Bible.";

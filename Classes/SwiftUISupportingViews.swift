@@ -881,7 +881,7 @@ private struct LibrarySettingsSection: View {
         Section("WorkspaceLibrary") {
             Picker(selection: $settings.librarySection) {
                 ForEach(LibrarySection.allCases) { section in
-                    Label(section.title, systemImage: section.systemImage)
+                    Text(section.title)
                         .tag(section)
                 }
             } label: {
