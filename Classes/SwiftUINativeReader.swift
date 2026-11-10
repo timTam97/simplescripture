@@ -11,13 +11,20 @@
 //  The chapter must SCROLL UNDER the chrome, not stop at it, without any line
 //  being hidden at rest:
 //
-//      .contentMargins(.vertical, insets, for: .scrollContent)   // content inset
+//      .contentMargins(.all, insets, for: .scrollContent)        // content inset
 //      .ignoresSafeArea(edges: .vertical)                        // full-height view
 //
 //  The scroll VIEW is full-height, so text flows beneath the translucent bars;
 //  the scroll CONTENT carries the safe-area insets. Dropping either one either
 //  hides text behind the floating tab bar or letterboxes the reader.
 //  `contentMargins` also provides the scroll room past the bottom chrome.
+//
+//  The side gutter is a content margin too, NOT padding inside the content. The
+//  scroll view re-anchors to a row whenever lazy row heights settle, and it
+//  aligns the row's leading edge with the content's. With the gutter as padding
+//  that edge sat a gutter's width in, so the chapter could come to rest shifted
+//  left by the gutter, flush against the screen edge (measured after paging: 1
+//  chevron page in 120). As a margin, the aligned position IS the resting one.
 //
 //  ── Prose vs verse-per-line ───────────────────────────────────────────────
 //
@@ -230,8 +237,14 @@ extension Color {
 struct ChapterTextView: View {
     let pane: ReaderPaneModel
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         @Bindable var pane = pane
+        // The scroll view this body describes. Captured so each callback below can
+        // say which scroll view it is reporting for: a page turn leaves the old one
+        // on screen, still live, until its slide ends — see `scrollSurface`.
+        let surface = pane.scrollSurface
 
         GeometryReader { proxy in
             ScrollView(.vertical) {
@@ -242,18 +255,18 @@ struct ChapterTextView: View {
                         ForEach(pane.document.verses) { verse in
                             VerseRow(verse: verse, pane: pane, style: pane.textStyle)
                                 .id(verse.number)
-                                .tracksTopmostVerse(verse.number, pane: pane)
+                                .tracksTopmostVerse(verse.number, pane: pane,
+                                                    surface: surface)
                         }
                     } else {
                         ForEach(pane.paragraphs) { paragraph in
                             ParagraphRow(paragraph: paragraph, pane: pane,
-                                         style: pane.textStyle)
+                                         surface: surface, style: pane.textStyle)
                                 .id(paragraph.id)
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, horizontalPadding)
                 .scrollTargetLayout()
                 // Paragraphs and individual verses reuse the same numeric IDs.
                 // Replace the lazy row stack when switching layouts so cached
@@ -267,12 +280,15 @@ struct ChapterTextView: View {
             //
             // `for: .scrollContent` insets the content rather than the indicators —
             // the default would also pull the scroll indicator inward.
+            //
+            // The side gutter belongs here as well, not as padding on the stack: see
+            // the file header for the left-shifted landing that padding produces.
             .contentMargins(
-                .vertical,
+                .all,
                 EdgeInsets(top: proxy.safeAreaInsets.top,
-                           leading: 0,
+                           leading: horizontalPadding,
                            bottom: proxy.safeAreaInsets.bottom,
-                           trailing: 0),
+                           trailing: horizontalPadding),
                 for: .scrollContent
             )
             .ignoresSafeArea(edges: .vertical)
@@ -295,7 +311,7 @@ struct ChapterTextView: View {
                     containerHeight: geometry.containerSize.height
                 )
             } action: { _, sample in
-                pane.scrollOffsetChanged(sample)
+                pane.scrollOffsetChanged(sample, from: surface)
             }
             .onScrollPhaseChange { _, newPhase in
                 // A finger on the reader abandons any restore still in flight, which
@@ -304,13 +320,28 @@ struct ChapterTextView: View {
                     pane.userBeganScrolling()
                 }
             }
+            // A chapter the reader pages to gets a NEW scroll view, not the old one
+            // scrolled to the top — see `ReaderPaneModel.scrollSurface`. After every
+            // scroll modifier, so the identity covers the scroll view they configure.
+            .id(surface)
+            // The swap is the page turn, and this is its slide.
+            .transition(ChapterPageTransition(
+                pane: pane,
+                reduceMotion: reduceMotion,
+                overhang: proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing
+            ))
         }
+        // Animates the swap only when THIS pane turned a page while showing. A
+        // deferred page drained on a Bible/commentary switch bumps the surface
+        // without a `pageTurn`, and is swapped in place.
+        .animation(ChapterPageTransition.animation(reduceMotion: reduceMotion),
+                   value: pane.pageTurn.count)
         // The identifier the XCUITests match on.
         .accessibilityIdentifier("reading.chapter-content")
     }
 
     /// Horizontal gutter: text pinned to the physical edge is unreadable in a
-    /// full-width view.
+    /// full-width view. Applied as a scroll-content margin.
     private var horizontalPadding: CGFloat {
         UIDevice.current.userInterfaceIdiom == .phone ? 16 : 20
     }
@@ -322,7 +353,8 @@ private extension View {
     /// Lives in the VIEW because only the view knows where a row sits. Without
     /// it `bibleVersePosition` would stay stale while the reader scrolls, taking
     /// the toolbar title and `.verse` relaunch restoration with it.
-    func tracksTopmostVerse(_ verse: Int, pane: ReaderPaneModel) -> some View {
+    func tracksTopmostVerse(_ verse: Int, pane: ReaderPaneModel,
+                            surface: Int) -> some View {
         onGeometryChange(for: Bool.self) { proxy in
             // The row covers the top of the reading area (in the scroll view's own
             // space, where 0 is the top of the visible content).
@@ -330,7 +362,7 @@ private extension View {
             return frame.minY <= 1 && frame.maxY > 1
         } action: { _, isTopmost in
             guard isTopmost else { return }
-            pane.topmostVerseChanged(verse)
+            pane.topmostVerseChanged(verse, from: surface)
         }
     }
 
@@ -338,7 +370,8 @@ private extension View {
     func tracksTopmostVerse(
         fallbackVerse: Int,
         layoutStore: VerseLayoutStore,
-        pane: ReaderPaneModel
+        pane: ReaderPaneModel,
+        surface: Int
     ) -> some View {
         onGeometryChange(for: CGFloat?.self) { proxy in
             let frame = proxy.frame(in: .scrollView)
@@ -347,7 +380,8 @@ private extension View {
         } action: { _, offset in
             guard let offset else { return }
             pane.topmostVerseChanged(
-                layoutStore.verse(at: offset, fallback: fallbackVerse)
+                layoutStore.verse(at: offset, fallback: fallbackVerse),
+                from: surface
             )
         }
     }
@@ -437,6 +471,8 @@ private struct VerseTrackingTextRenderer: TextRenderer {
 private struct ParagraphRow: View {
     let paragraph: ChapterParagraph
     let pane: ReaderPaneModel
+    /// The scroll surface this row belongs to — see `ChapterTextView.body`.
+    let surface: Int
     let style: ChapterTextRenderer.Style
 
     @State private var verseLayoutStore = VerseLayoutStore()
@@ -455,7 +491,8 @@ private struct ParagraphRow: View {
                 .tracksTopmostVerse(
                     fallbackVerse: paragraph.verses.first?.number ?? 1,
                     layoutStore: verseLayoutStore,
-                    pane: pane
+                    pane: pane,
+                    surface: surface
                 )
                 .padding(.bottom, style.fontSize * 0.55)
         }

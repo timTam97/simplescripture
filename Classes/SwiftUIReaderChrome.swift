@@ -191,11 +191,134 @@ final class ReaderChromeModel {
     }
 }
 
+/// A finished drag on the reader, classified as a chapter swipe — or not one.
+///
+/// Swiping LEFT pages forward and RIGHT pages back, the direction a page turns.
+/// It follows the text (English, left-to-right), not the interface's layout
+/// direction.
+///
+/// A pure value so the swipe-versus-scroll decision is assertable without the
+/// simulator. The reader is a vertical scroll view the user drags all day, so the
+/// test is deliberately strict: an ordinary scroll that drifts sideways, or a
+/// finger resting on the text, must not turn the page.
+enum ChapterSwipe: Equatable {
+    case next
+    case previous
+
+    /// How far a finger moves before the drag is tracked at all. Well clear of a
+    /// tap, so links and the verse menu are untouched.
+    static let minimumDistance: CGFloat = 20
+    /// Horizontal travel under the finger. Rules out a flick too short to be meant.
+    static let minimumTravel: CGFloat = 50
+    /// Horizontal travel once the release velocity is projected forward. A quick
+    /// flick clears it on speed; a slow drag has to cover the distance itself.
+    static let minimumProjectedTravel: CGFloat = 150
+    /// Horizontal travel must be at least this many times the vertical — within
+    /// about 27° of level. A scroll with sideways drift fails here.
+    static let horizontalDominance: CGFloat = 2
+
+    init?(translation: CGSize, predictedEndTranslation: CGSize) {
+        let travel = translation.width
+        let projected = predictedEndTranslation.width
+        guard abs(travel) >= Self.minimumTravel,
+              abs(travel) >= abs(translation.height) * Self.horizontalDominance,
+              // Still heading the way it started: a drag reversed before release is
+              // the user changing their mind.
+              (travel < 0) == (projected < 0),
+              abs(projected) >= Self.minimumProjectedTravel else {
+            return nil
+        }
+        self = travel < 0 ? .next : .previous
+    }
+}
+
+/// The slide between the scroll view a page turn leaves and the one it arrives
+/// on (`ReaderPaneModel.scrollSurface`). The new chapter comes in from the side
+/// it is on — the right going forward, the left going back, the way the swipe
+/// itself reads (see `ChapterSwipe`) — and pushes the old one out the other,
+/// like facing pages. With Reduce Motion they cross-fade in place instead.
+///
+/// It plays when the page turns, for a swipe and a chevron alike. It does NOT
+/// follow the finger during a swipe, and at the swipe's gesture priority it
+/// cannot: SwiftUI holds a `.gesture` drag back until the text's own gestures
+/// have had the touch, and then delivers all of it at once. MEASURED on iOS
+/// 27.2: every update of a 1.6-second drag arrived in the same millisecond as
+/// its end. Tracking the finger would take `.simultaneousGesture`, the
+/// attachment under which extending a text selection turned the page.
+///
+/// **The direction is read from the pane when the slide runs, not stored in the
+/// transition.** SwiftUI removes a view with the transition value it was LAST
+/// GIVEN, which for the scroll view being left is the one from the previous
+/// turn. MEASURED with the direction stored (`.push(from:)`): paging forward
+/// and then back sent the old chapter out to the left while the new one came in
+/// from the left as well.
+struct ChapterPageTransition: Transition {
+    let pane: ReaderPaneModel
+    let reduceMotion: Bool
+    /// How much wider than the page the slide has to be to carry it off SCREEN
+    /// rather than only out of its own frame: the reader's side safe-area insets.
+    /// Zero in portrait. In landscape on an iPhone the reader sits inside them, and
+    /// a page that travelled only its own width would stop with its edge still
+    /// showing in the margin beside the sensor housing, then vanish.
+    let overhang: CGFloat
+
+    /// The page turn's curve. `.smooth`, not `.snappy`: the latter overshoots, and
+    /// a page of text that runs a point past its margin and comes back reads as a
+    /// wobble (measured: 1 pt, with `.snappy`).
+    static func animation(reduceMotion: Bool) -> Animation {
+        reduceMotion ? .easeInOut(duration: 0.2) : .smooth(duration: 0.35)
+    }
+
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content
+            .modifier(PageSlide(widths: reduceMotion ? 0 : side(in: phase),
+                                overhang: overhang))
+            .opacity(reduceMotion && !phase.isIdentity ? 0 : 1)
+            // The chapter being left stays in the hierarchy until the slide ends. It
+            // must not take a touch (its links belong to a chapter that is no longer
+            // the current one), or be read out and matched as though still showing.
+            .allowsHitTesting(phase != .didDisappear)
+            .accessibilityHidden(phase == .didDisappear)
+    }
+
+    /// Where a page sits, in page widths from rest: +1 is a full width to the
+    /// right. Going forward the new chapter waits there and the old one leaves
+    /// by the left; going back, the reverse.
+    private func side(in phase: TransitionPhase) -> CGFloat {
+        switch phase {
+        case .identity: return 0
+        case .willAppear: return pane.pageTurn.forward ? 1 : -1
+        case .didDisappear: return pane.pageTurn.forward ? -1 : 1
+        }
+    }
+
+    /// A sideways shift measured in the view's own width (plus the overhang), so
+    /// it stays right through a rotation in mid-slide.
+    private struct PageSlide: GeometryEffect {
+        var widths: CGFloat
+        var overhang: CGFloat
+
+        var animatableData: CGFloat {
+            get { widths }
+            set { widths = newValue }
+        }
+
+        func effectValue(size: CGSize) -> ProjectionTransform {
+            ProjectionTransform(
+                CGAffineTransform(translationX: (size.width + overhang) * widths, y: 0)
+            )
+        }
+    }
+}
+
 /// The Read workspace: the active pane, its chrome, the Bible/commentary
 /// switch, and the study surfaces the reader raises (study popup, verse menu,
 /// bookmark editor).
 struct ReaderScreen: View {
     let reading: ReadingWorkspaceModel
+
+    /// Bumped by a swipe that turned the page; the haptic's trigger.
+    @State private var swipePageTurns = 0
 
     private var chrome: ReaderChromeModel { reading.activePane.chrome }
 
@@ -303,6 +426,35 @@ struct ReaderScreen: View {
             reading.prepareForSizeChange()
             reading.restoreAfterSizeChange()
         }
+        // On the ZStack, not in `ChapterTextView`: one recogniser for whichever pane
+        // is showing.
+        //
+        // `.gesture`, NOT `.simultaneousGesture`: the gestures inside the reader have
+        // to win. The chapter text is selectable, and dragging a selection handle —
+        // or pressing and dragging out a selection — is a sideways drag. MEASURED on
+        // iOS 27.2: recognised simultaneously, extending a selection turned the page.
+        // At ordinary priority the selection keeps the touch, a swipe that starts on
+        // plain text or on a link still pages, and vertical scrolling is untouched
+        // (the scroll view does not claim a sideways drag).
+        .gesture(chapterSwipe)
+        // One light tap as a swipe turns the page. A swipe has no button under the
+        // finger, so this is its confirmation that the gesture took; a swipe that
+        // goes nowhere (a scroll, or back from Genesis 1) stays silent. So do the
+        // chevrons, like any other toolbar button.
+        .sensoryFeedback(.impact(weight: .light), trigger: swipePageTurns)
+    }
+
+    /// A horizontal swipe pages by a chapter. Decided once, on release — see
+    /// `ChapterSwipe` — so one swipe can never page twice.
+    private var chapterSwipe: some Gesture {
+        DragGesture(minimumDistance: ChapterSwipe.minimumDistance)
+            .onEnded { drag in
+                guard let swipe = ChapterSwipe(
+                    translation: drag.translation,
+                    predictedEndTranslation: drag.predictedEndTranslation
+                ), reading.page(swipe) else { return }
+                swipePageTurns += 1
+            }
     }
 
     /// The verse menu's title — "Verse 12".
