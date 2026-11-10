@@ -256,4 +256,42 @@ final class URLRouterTests: XCTestCase {
         ))
         XCTAssertEqual(bible.destination, .bible(module: "KJV"))
     }
+
+    /// The verse part of a `sword://` URL only ever leaves the router as a verse
+    /// the reader can scroll to.
+    ///
+    /// Only the chapter part goes through `PSRefParser`; the verse is read here.
+    /// "0" and "-5" used to pass straight through to the verse-position key, and
+    /// the reader's verse restore ignores anything below 1 — so the new chapter
+    /// opened wherever the last one had been scrolled to, under a title and a
+    /// history row reading "John 3:0". A verse too large for the `Int32` the
+    /// reader formats a position through went the same way, and that conversion
+    /// traps on overflow.
+    func testAVerseTheReaderCannotScrollToFallsBackToVerseOne() throws {
+        let router = try router()
+        func verse(_ path: String) throws -> String {
+            try XCTUnwrap(
+                router.route(for: URL(string: "sword://KJV/" + path)),
+                path
+            ).versePosition
+        }
+
+        XCTAssertEqual(try verse("John+3:0"), "1")
+        XCTAssertEqual(try verse("John+3:-5"), "1")
+        XCTAssertEqual(try verse("John+3:3000000000"), "1")
+        // A space after the colon is still that verse ("+" is a space too).
+        XCTAssertEqual(try verse("John+3:%2016"), "16")
+        XCTAssertEqual(try verse("John+3:+16"), "16")
+
+        // What already held, and must keep holding.
+        XCTAssertEqual(try verse("John+3:16"), "16")
+        XCTAssertEqual(try verse("John+3:007"), "7")
+        XCTAssertEqual(try verse("Gen.+1:28-30"), "28")
+        XCTAssertEqual(try verse("Genesis%201:1."), "1")
+        XCTAssertEqual(try verse("John+3:abc"), "1")
+        XCTAssertEqual(try verse("John+3:"), "1")
+        // Past the end of the chapter is not a verse the router rewrites — see
+        // `testOutOfRangeVerseStillRoutesToAValidChapter`.
+        XCTAssertEqual(try verse("John+3:99"), "99")
+    }
 }

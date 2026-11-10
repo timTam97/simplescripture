@@ -83,7 +83,14 @@ struct URLRouter {
         let persistedChapterRef = chapterResolvesAsGiven
             ? mungedChapter
             : reference.chapterRef
-        let versePosition = Int(firstNumericPrefix(in: verseRaw)).map(String.init) ?? "1"
+        // The parser only saw the chapter, so this is the one place the verse is
+        // made into something the reader can scroll to: a number, and at least
+        // 1. A "0" written to the verse-position key is a restore the reader
+        // ignores, leaving the new chapter wherever the last one was scrolled to
+        // under a title reading "John 3:0". A verse past the end of the chapter
+        // is left alone: the reader falls back to the nearest row before it.
+        let versePosition = firstVerseNumber(in: verseRaw)
+            .map { String(max(1, $0)) } ?? "1"
         let type = queryValue(named: "type", in: url)
 
         // The host names the module to open the reference in — if it is one a
@@ -124,17 +131,16 @@ struct URLRouter {
             .value
     }
 
-    private func firstNumericPrefix(in value: String) -> String {
-        let scalars = Array(value.unicodeScalars)
-        guard !scalars.isEmpty else {
-            return ""
-        }
-
-        var end = 1
-        while end < scalars.count,
-              CharacterSet.decimalDigits.contains(scalars[end]) {
-            end += 1
-        }
-        return String(String.UnicodeScalarView(scalars[0..<end]))
+    /// The leading ASCII digits of the verse part ("28-30" -> 28, "1." -> 1,
+    /// " 16" -> 16), or nil when it does not start with one ("-5", "abc", "").
+    ///
+    /// The first character is tested like the rest: taken on trust, it let a
+    /// sign through, and "-5" came out as verse -5. `Int32` because that is the
+    /// width the reader formats a verse position through (`persistPosition`), and
+    /// the conversion there traps on anything wider — so a number that does not
+    /// fit is no verse here.
+    private func firstVerseNumber(in value: String) -> Int32? {
+        Int32(value.trimmingCharacters(in: .whitespaces)
+            .prefix { $0.isASCII && $0.isNumber })
     }
 }
