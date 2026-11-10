@@ -2086,6 +2086,68 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(model.range, .AllRange)
     }
 
+    /// Strong's mode survives a number being typed into it, one character at a
+    /// time.
+    ///
+    /// The mode is sticky and clears itself when the text stops looking like a
+    /// Strong's number. A lone "H" used to count as not looking like one, and it
+    /// is where every typed number starts: on an iPhone the first digit is two
+    /// taps away (123, then the digit), which ordinary typing does not fit
+    /// inside the 0.25 s debounce, so the search for the bare letter ran,
+    /// switched the mode off, and nothing switched it back on. "H430" was then
+    /// searched as literal text: no results, with the toggle silently off.
+    ///
+    /// Asserts on `model.expression`, which `runSearch` sets synchronously here
+    /// (`debounceInterval: 0`); the queries themselves run on a global queue.
+    @MainActor
+    func testStrongsModeSurvivesANumberTypedOneCharacterAtATime() {
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        // The options-menu toggle, on an empty field.
+        model.strongsSearch = true
+
+        model.query = "H"
+        XCTAssertTrue(
+            model.strongsSearch,
+            "The prefix letter alone switched Strong's mode off."
+        )
+        XCTAssertEqual(model.expression, "lemmas:(\"H\")")
+
+        model.query = "H4"
+        model.query = "H430"
+        XCTAssertTrue(model.strongsSearch)
+        XCTAssertEqual(
+            model.expression,
+            "lemmas:((\"H430\" OR \"H0430\"))"
+        )
+
+        // The rule this must not weaken: a plain word still clears the mode, at
+        // its second letter.
+        model.query = "G"
+        XCTAssertTrue(model.strongsSearch)
+        model.query = "Go"
+        XCTAssertFalse(
+            model.strongsSearch,
+            "A plain word kept Strong's mode, which searches the lemmas column."
+        )
+        XCTAssertEqual(model.expression, "text_norm:\"go\"")
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []

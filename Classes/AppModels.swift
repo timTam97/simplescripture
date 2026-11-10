@@ -1095,9 +1095,10 @@ final class SearchModel {
             return
         }
 
-        // Sticky Strong's mode, cleared when the text stops looking like a lemma
-        // (a plain word searched with the mode on hits the lemmas column and
-        // returns zero rows). A model-originated write, marked as such.
+        // Sticky Strong's mode, cleared when the text stops looking like a lemma:
+        // when no token is a Strong's prefix letter followed by digits, or by
+        // nothing yet (a plain word searched with the mode on hits the lemmas
+        // column and returns zero rows). A model-originated write, marked as such.
         if strongsSearch && !Self.inputLooksLikeStrongs(query) {
             withInternalInputMutation {
                 strongsSearch = false
@@ -1149,14 +1150,29 @@ final class SearchModel {
         }
     }
 
+    /// Whether any token is an H/G prefix followed by digits only — INCLUDING no
+    /// digits yet.
+    ///
+    /// A lone "H" is a number still being typed, not a plain word, and it is
+    /// where every typed number starts. On an iPhone the first digit is two taps
+    /// away (123, then the digit), which ordinary typing does not fit inside the
+    /// 0.25 s debounce, so the search for the bare letter runs. Counted as a
+    /// plain word, it switched the mode off; nothing switches it back on, so the
+    /// finished "H430" was searched as literal text and found nothing, with the
+    /// toggle silently off.
+    ///
+    /// A word that merely starts with H or G still clears the mode, at its second
+    /// letter. Until then the bare letter runs as a lemma query, which matches no
+    /// rows.
     private static func inputLooksLikeStrongs(_ input: String) -> Bool {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
         for token in trimmed.components(separatedBy: .whitespaces) {
             let units = Array(token.utf16)
-            guard units.count >= 2 else { continue }
-            let prefix = units[0]
+            // No length floor: the digit check below passes vacuously for a lone
+            // prefix letter, which is the point.
+            guard let prefix = units.first else { continue }
             guard prefix == 0x48 || prefix == 0x47
                     || prefix == 0x68 || prefix == 0x67 else {
                 continue
