@@ -76,12 +76,14 @@ Rules:
 
 ### Workspaces
 
-`Read` / `Search` / `Library` / `Settings` in `WorkspaceTabs`. Display order is Read, Library, Settings, Search (`TabRole.search` moves Search to the trailing slot).
+`Read` / `Library` / `Settings` / `Search` in `WorkspaceTabs` — declared in that order, which is also the display order (`TabRole.search` shows Search in the trailing slot wherever it is declared).
 
 **SwiftUI modifiers in the wrong place fail silently** — no warning, no crash, no unit-test failure. Drive the simulator and check the hierarchy. Known traps:
 
 - `tabViewBottomAccessory` is one accessory for the whole `TabView`, not per tab.
 - There is no usable `.bottomBar` on iOS 27; items land on top of the floating tab bar.
+- **The search-role `Tab` must be declared LAST.** Declared anywhere else, the declared order and the display order disagree, and after every selection SwiftUI's re-push of the tab list (`-[UITabBarController setTabs:animated:]`) re-applies the selection through an index from the wrong order. Measured (iOS 27.2) with Search declared second: tapping Settings selected Library and then Settings, Library went via Search, Search via Settings — 18 of 27 tab changes. Each detour appears and disappears the wrong workspace (building it on first use: Search was configured by the first tap on Library) and cuts the bar's selection animation short, so the pill vanishes and re-enters. It is independent of what the tabs contain and of whether the selection lives in `@State` or the `@Observable` session. Nothing warns, and no test can see it from outside; log `UITabBar.setSelectedItem:` to check.
+- **The tab bar's selection animation is evaluated in-process, on the main thread** (sampled: `-[UITabBar setSelectedItem:]` → `UIViewFloatAnimatableProperty` → the private `AnimationKit`, ticking from main-thread display-link callbacks). Main-thread work in the half-second after a tab change lands on its frames.
 - **Navigation stays visible.** Fullscreen/Focus mode and automatic fullscreen are removed. The tab bar and reader/Search navigation bars use `.never` minimisation; reader taps and scrolling do not hide controls. Chapter scrolling, verse tracking, study links and Search keyboard dismissal remain in place.
 - A `safeAreaInset(edge: .top)` bar does not combine with a large navigation title — the large-title region expands behind it. `SearchView` and `DictionaryView` pin `.inline` for this reason.
 - **Workspaces are persistent.** `SearchView.configure` runs once per launch, so anything seeding a workspace from outside must drive its model directly (`SearchModel.startStrongsQuery`), and must not assume anything `configure` computes (e.g. `strongsAvailable`) has been computed — both `startStrongsQuery` and `optionsDidChange` gate on `module != nil`.
