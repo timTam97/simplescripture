@@ -1169,4 +1169,76 @@ final class PSChapterDocumentParityTests: XCTestCase {
         XCTAssertEqual(opening.first?.verses.contains(where: \.hasVisibleText), false)
         XCTAssertEqual(runsCarryingTheTitleMarker(in: psalm), [])
     }
+
+    /// A bible intro that is only whitespace is not a row.
+    ///
+    /// With Headings off — a fresh install — the intro record `" " + <title>`
+    /// expands to one space. The engine's HTML showed that as a space the browser
+    /// collapsed to nothing. The builder made it verse 0, which the verse-per-line
+    /// layout drew as a blank line above verse 1 (29.7 pt at the default size) in
+    /// 1,184 of the KJV's 1,189 chapters, and the prose layout as a leading space.
+    ///
+    /// The slot still COUNTS: `entryCount` is the loop counter that
+    /// `chapter-loop-counters.tsv` pins.
+    func testWhitespaceOnlyBibleIntroIsNotARow() throws {
+        var config = PSChapterDocumentBuilder.Config()
+        config.kind = .bible
+        config.headingsOn = false
+
+        // ── The corpus shape, synthetic ──
+        let built = PSChapterDocumentBuilder.build(
+            records: [" \u{000B}CHAPTER 1.\u{000C}", "In the beginning", "And the earth"],
+            headings: [:],
+            config: config,
+            options: .allOff,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let document = try XCTUnwrap(built)
+        XCTAssertEqual(document.verses.map(\.number), [1, 2],
+                       "the whitespace-only intro was given a row")
+        XCTAssertEqual(document.entryCount, 3, "the intro slot must still count")
+        XCTAssertEqual(document.paragraphs.first?.id, 1)
+        XCTAssertNil(document.emptyMessage)
+
+        // Only the INTRO. A numbered slot that is all whitespace keeps its row: the
+        // assembler gives it a `vv` anchor, and verse identity is part of parity.
+        let numberedBuilt = PSChapterDocumentBuilder.build(
+            records: ["", "In the beginning", " "],
+            headings: [:],
+            config: config,
+            options: .allOff,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let numbered = try XCTUnwrap(numberedBuilt)
+        XCTAssertEqual(numbered.verses.map(\.number), [1, 2])
+
+        // And only a BIBLE's. The rule is the assembler's, which is bible-only;
+        // MHCC's intro is the chapter summary, real text in every chapter.
+        config.kind = .commentary
+        let commentaryBuilt = PSChapterDocumentBuilder.build(
+            records: ["* Summary.", "Verse one."],
+            headings: [:],
+            config: config,
+            options: .allOff,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let commentary = try XCTUnwrap(commentaryBuilt)
+        XCTAssertEqual(commentary.verses.map(\.number), [0, 1])
+
+        // ── The store's own records ──
+        let genesisBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "Genesis 1", options: .allOff, kind: .bible))
+        let genesis = genesisBoth.document
+        XCTAssertEqual(genesis.verses.first?.number, 1)
+        XCTAssertEqual(genesis.verses.count, 31)
+        XCTAssertEqual(genesis.entryCount, 32)
+        XCTAssertEqual(genesis.paragraphs.first?.id, 1)
+
+        for ref in Self.sampleRefs {
+            let both = try XCTUnwrap(
+                renderBoth(module: "KJV", ref: ref, options: .allOff, kind: .bible))
+            XCTAssertEqual(both.document.verses.first?.number, 1,
+                           "KJV \(ref): the chapter opens with a row above verse 1")
+        }
+    }
 }

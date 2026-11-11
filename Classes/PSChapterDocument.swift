@@ -228,8 +228,9 @@ struct ChapterVerse: Identifiable, Equatable, Hashable {
     /// Whether any run has something to draw.
     ///
     /// False for an intro whose title was hoisted into `headings`, which has no
-    /// runs left. The row views ask this before laying out the text: an empty
-    /// `Text` still takes a line.
+    /// runs left, and for one that is only whitespace. The row views ask this
+    /// before laying out the text — an empty `Text` still takes a line — and the
+    /// builder asks it before giving a bible intro a row at all.
     ///
     /// Computed, so the synthesized `Equatable` and memberwise `init` the parity
     /// tests build on are untouched.
@@ -387,7 +388,9 @@ enum PSChapterDocumentBuilder {
 
             // The assembler's leading-whitespace strip, over the expanded text.
             // Deliberate quirk: an entry that is ENTIRELY whitespace is left alone, so
-            // it then fails the isEmpty test and IS emitted.
+            // it then fails the isEmpty test and still counts as an entry. A numbered
+            // slot made of it IS emitted; a bible intro made of it is not given a row
+            // (see the drop rule below).
             stripLeadingWhitespace(&runs)
 
             let thisEntry = runs.map(\.text).joined()
@@ -442,11 +445,20 @@ enum PSChapterDocumentBuilder {
                 verse.startsParagraph = config.kind == .commentary
                     || Self.opensParagraph(runs)
 
-                // The assembler drops a bible intro slot whose whole content was a
-                // `<br />`; with no `br` in the corpus that reduces to dropping an
-                // entry that has no text at all.
-                let hasText = runs.contains { !$0.text.isEmpty }
-                if !(i == 0 && config.kind == .bible && !hasText && verse.headings.isEmpty) {
+                // A bible intro with nothing to show is not a row.
+                //
+                // The assembler drops one whose whole content was a `<br />` (none in
+                // the corpus), and emits a whitespace-only one as a space the HTML
+                // collapsed to nothing. That is 1,184 of the KJV's 1,189 chapters with
+                // headings off: slot 0 is `" " + <title>`, and the title token is
+                // skipped. Kept as a row, that space is a `Text(" ")` — a blank line
+                // above verse 1 in the verse-per-line layout (29.7 pt at the default
+                // size) and a leading space in prose.
+                //
+                // Only the row is withheld. `i` and `lastEntry` advance below as for
+                // any slot, so the loop counter and the duplicate test are untouched.
+                if !(i == 0 && config.kind == .bible
+                     && !verse.hasVisibleText && verse.headings.isEmpty) {
                     document.verses.append(verse)
                 }
             }
@@ -481,8 +493,11 @@ enum PSChapterDocumentBuilder {
     ///
     ///  * it removes the whole leading whitespace RUN, not one character;
     ///  * an entry that is *entirely* whitespace is left untouched, so it then
-    ///    fails the empty test and IS emitted — which is why a few chapters carry a
-    ///    blank row. Reproduced deliberately.
+    ///    fails the empty test and still counts as an entry. Reproduced
+    ///    deliberately: a numbered slot made of it keeps its row, as it keeps its
+    ///    `vv` anchor in the HTML. The bible INTRO made of it is the one that gets
+    ///    no row — the engine showed it as a space that collapsed to nothing, in
+    ///    all but five KJV chapters with headings off. See `build`'s drop rule.
     private static func stripLeadingWhitespace(_ runs: inout [InlineRun]) {
         // Nothing to cut back to → leave it exactly as it is.
         guard runs.contains(where: {
