@@ -266,6 +266,12 @@ final class PSSearchEngine {
 
     /// Builds the index from scratch. Blocks the calling thread; expected to run on
     /// a background queue. On cancel or error the partial DB is dropped.
+    ///
+    /// Returning normally MEANS a complete, committed, stamped index. Both drivers
+    /// (`SearchIndexCoordinator`, `SearchIndexBackgroundManager`) take a return as
+    /// success whatever their own cancel flag says by then, because a cancel is
+    /// seen only at the 500-row progress poll: one raised after the last poll
+    /// stops nothing. A cancel that IS seen must keep throwing `.cancelled`.
     func build(progress: PSSearchProgressBlock?) throws {
         // Start fresh: if there's any prior DB, drop it. A half-built index is worse
         // than none.

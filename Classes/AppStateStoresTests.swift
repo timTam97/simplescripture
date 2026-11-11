@@ -2762,9 +2762,10 @@ final class AppStateStoresTests: XCTestCase {
     /// An EXPIRED background build is not billed as a failure.
     ///
     /// `PSSearchEngine.build` throws `.cancelled` on expiry, so an expired run arrives
-    /// with both an error and the cancellation flag set. Testing the error first would
+    /// with both an error and the cancellation flag set. Billing the error first would
     /// spend retry budget on work that was merely interrupted — which is why the expiry
-    /// arm comes first and reports `shouldRetry: true` with the record intact.
+    /// arm comes before the failure arm and reports `shouldRetry: true` with the record
+    /// intact.
     func testExpiredBackgroundIndexBuildKeepsItsRecordWithoutSpendingBudget() {
         defaults.set("KJV", forKey: Defaults.pendingSearchIndexModule)
         let manager = SearchIndexBackgroundManager(
@@ -2794,6 +2795,204 @@ final class AppStateStoresTests: XCTestCase {
             defaults.integer(forKey: Defaults.pendingSearchIndexAttempts), 0,
             "an expiration must not spend retry budget"
         )
+    }
+
+    /// A background build that RETURNED has built the index, even if its task
+    /// expired on the way out.
+    ///
+    /// `PSSearchEngine.build` can only see a cancel at its 500-row progress
+    /// poll. After the last one (row 31,000 of the KJV's 31,102) the remaining
+    /// inserts, the COMMIT and the meta stamp cannot be stopped, so an expiry
+    /// that lands there leaves a complete, stamped index and a build that
+    /// returns normally with the flag set. Classified by the flag first, that
+    /// was reported as an interrupted run: the recovery record stayed, the
+    /// request was resubmitted, and the next background slot opened with
+    /// `dropIndex()` on the finished index.
+    ///
+    /// So the order is success, then expiry, then failure. The flag is raised
+    /// inside the operation, as it is on a device, rather than passed as
+    /// `{ true }`: a build that was never allowed to start is not what this
+    /// pins.
+    func testBackgroundBuildThatFinishesAfterExpiryCountsAsBuilt() {
+        defaults.set("KJV", forKey: Defaults.pendingSearchIndexModule)
+        let flagLock = NSLock()
+        var expired = false
+        let manager = SearchIndexBackgroundManager(
+            defaults: defaults,
+            taskIdentifier: "test.search-index",
+            scheduler: SearchIndexBackgroundManager.Scheduler(
+                register: { _, _ in true },
+                submit: { _, completion in completion(nil) },
+                cancel: { _ in }
+            ),
+            buildGate: SearchIndexBuildGate(),
+            buildOperation: { _, progress in
+                // The engine's last poll finds nothing to stop for ...
+                var cancel = false
+                progress?(0.99, &cancel)
+                XCTAssertFalse(cancel)
+                // ... and the task expires after it, in the tail.
+                flagLock.withLock { expired = true }
+            }
+        )
+
+        let done = expectation(description: "late expiry")
+        manager.performPendingBuild(
+            cancellationRequested: { flagLock.withLock { expired } }
+        ) { success, shouldRetry in
+            XCTAssertTrue(
+                success,
+                "a build that returned has committed its index"
+            )
+            XCTAssertFalse(
+                shouldRetry,
+                "a retry would open with dropIndex() on the finished index"
+            )
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+
+        XCTAssertNil(
+            defaults.string(forKey: Defaults.pendingSearchIndexModule),
+            "nothing is left to recover"
+        )
+        XCTAssertEqual(
+            defaults.integer(forKey: Defaults.pendingSearchIndexAttempts), 0
+        )
+    }
+
+    /// A background build that finishes just as the user starts their own build
+    /// of the same module leaves the recovery record alone.
+    ///
+    /// `beginForegroundBuild` writes the record for the build the user asked
+    /// for and tells the background one to stop. Landing in the background
+    /// build's tail, that stops nothing: the build returns, and counts as
+    /// built. But the record is no longer its to clear. The foreground build is
+    /// waiting at the gate, opens with `dropIndex()`, and needs the record if
+    /// the app is killed before it finishes. Without the `foregroundModule`
+    /// check the success arm clears it.
+    func testALateBackgroundBuildLeavesTheRecordOfAForegroundBuild() {
+        defaults.set("KJV", forKey: Defaults.pendingSearchIndexModule)
+        let flagLock = NSLock()
+        var cancelled = false
+        // The operation needs the manager it belongs to; cleared at the end so
+        // the two do not keep each other alive.
+        var foreground: SearchIndexBackgroundManager?
+        let manager = SearchIndexBackgroundManager(
+            defaults: defaults,
+            taskIdentifier: "test.search-index",
+            scheduler: SearchIndexBackgroundManager.Scheduler(
+                register: { _, _ in true },
+                submit: { _, completion in completion(nil) },
+                cancel: { _ in }
+            ),
+            buildGate: SearchIndexBuildGate(),
+            buildOperation: { module, _ in
+                // Build is tapped in the tail: the record is rewritten for the
+                // foreground build and this one is told to stop, too late.
+                foreground?.beginForegroundBuild(module: module)
+                flagLock.withLock { cancelled = true }
+            }
+        )
+        foreground = manager
+        defer { foreground = nil }
+
+        let done = expectation(description: "late background build")
+        manager.performPendingBuild(
+            cancellationRequested: { flagLock.withLock { cancelled } }
+        ) { success, shouldRetry in
+            XCTAssertTrue(success)
+            XCTAssertFalse(shouldRetry)
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+
+        XCTAssertEqual(
+            defaults.string(forKey: Defaults.pendingSearchIndexModule), "KJV",
+            "the record belongs to the foreground build now"
+        )
+
+        // ... which clears it when it finishes.
+        manager.finishForegroundBuild(module: "KJV")
+        XCTAssertNil(
+            defaults.string(forKey: Defaults.pendingSearchIndexModule)
+        )
+    }
+
+    /// A foreground build that RETURNED is ready, even if Cancel was tapped on
+    /// its way out.
+    ///
+    /// The Cancel button is up for the whole build and the engine stops only at
+    /// a progress poll, so a tap in the tail cancels nothing: the index is
+    /// committed and stamped. Classified by the flag first, the coordinator
+    /// said `.cancelled` — no search ran, and the screen offered only "Build
+    /// Index", which drops the finished index and spends another ~30 s
+    /// rebuilding it. Nothing re-reads freshness until a relaunch or a module
+    /// switch.
+    @MainActor
+    func testAnIndexBuildThatFinishesAfterALateCancelIsReady() async {
+        let outcome = await outcomeOfAnIndexBuildCancelledMidFlight(
+            endingWith: nil
+        )
+
+        XCTAssertEqual(outcome.state, .ready)
+        XCTAssertEqual(outcome.success, true)
+        XCTAssertEqual(outcome.cancelled, false)
+    }
+
+    /// The companion: a cancel the build DID see still ends cancelled.
+    ///
+    /// `PSSearchEngine.build` rolls back, drops the partial index and throws
+    /// `.cancelled`, which arrives with the flag set. That throw, not the flag,
+    /// is what makes a build cancelled.
+    @MainActor
+    func testAnIndexBuildThatStopsForACancelIsCancelled() async {
+        let outcome = await outcomeOfAnIndexBuildCancelledMidFlight(
+            endingWith: PSSearchEngineError.cancelled
+        )
+
+        XCTAssertEqual(outcome.state, .cancelled)
+        XCTAssertEqual(outcome.success, false)
+        XCTAssertEqual(outcome.cancelled, true)
+    }
+
+    /// Starts a foreground build, cancels it while the operation is running,
+    /// then lets the operation end: by returning, or by throwing `error`.
+    @MainActor
+    private func outcomeOfAnIndexBuildCancelledMidFlight(
+        endingWith error: Error?
+    ) async -> (state: SearchIndexState, success: Bool?, cancelled: Bool?) {
+        let started = expectation(description: "Index build started")
+        let completed = expectation(description: "Index build completed")
+        let release = DispatchSemaphore(value: 0)
+        let coordinator = SearchIndexCoordinator(
+            freshnessProvider: { _ in false },
+            buildGate: SearchIndexBuildGate(),
+            buildOperation: { _, _ in
+                started.fulfill()
+                release.wait()
+                if let error {
+                    throw error
+                }
+            }
+        )
+        var success: Bool?
+        var cancelled: Bool?
+        coordinator.onCompletion = {
+            success = $0
+            cancelled = $1
+            completed.fulfill()
+        }
+
+        coordinator.build(module: "KJV")
+        await fulfillment(of: [started], timeout: 2)
+        coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .cancelling)
+
+        release.signal()
+        await fulfillment(of: [completed], timeout: 2)
+
+        return (coordinator.state, success, cancelled)
     }
 
     /// Every chapter link survives the round trip to the URL the text carries.

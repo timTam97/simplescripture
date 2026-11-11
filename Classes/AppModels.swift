@@ -549,16 +549,27 @@ final class SearchIndexCoordinator {
         self.operationID = nil
         cancellation = nil
 
+        // A build that RETURNED has committed and stamped a complete index, so
+        // the error decides first; the flag only tells a cancel from a failure.
+        // The engine sees a cancel at its 500-row progress poll and nowhere
+        // else, and the Cancel button is up for the whole build, so a tap after
+        // the last poll stops nothing. Tested flag-first, that ended
+        // `.cancelled` over a fresh index: no search ran, and the only action
+        // offered was "Build Index", which drops the index and spends ~30 s
+        // rebuilding it. Nothing re-reads freshness until a relaunch or a
+        // module switch.
+        guard let error else {
+            state = .ready
+            onCompletion?(true, false)
+            return
+        }
         if cancelled {
             state = .cancelled
             onCompletion?(false, true)
-        } else if let error {
+        } else {
             alog("SearchIndexCoordinator: build failed: \(error)")
             state = .failed
             onCompletion?(false, false)
-        } else {
-            state = .ready
-            onCompletion?(true, false)
         }
     }
 }
