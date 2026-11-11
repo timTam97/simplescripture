@@ -1317,4 +1317,72 @@ final class PSChapterDocumentParityTests: XCTestCase {
         XCTAssertEqual(doubled, [],
                        "KJV John 3: verses with a doubled space inside their text")
     }
+
+    // MARK: - Heading fonts
+
+    /// A heading is bold run by run, and each run keeps the rest of its own font.
+    ///
+    /// `text(for heading:)` put one bold font over the whole string, which replaced
+    /// every run's. A Strong's or morph marker in a Psalm title kept its grey and
+    /// its raise but was drawn at the title's size — `A Psalm<04210> of
+    /// David<01732>` in full-size numbers — and the translators' supplied words
+    /// lost their italic. The HTML had the same anchors inside its `<b>`, as 70%
+    /// superscripts. Of the KJV's 138 canonical headings, 116 carry a Strong's
+    /// token and 39 an `<i>`.
+    ///
+    /// Compares fonts against each other, as the bookmark test compares colours, so
+    /// this file needs no `import SwiftUI`.
+    @MainActor
+    func testHeadingKeepsEachRunsOwnFont() throws {
+        let style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        // The shape of Psalms 3's title with Strong's on. Every run is already
+        // bold: the whole heading sits inside a title token.
+        let runs = [
+            InlineRun(text: "A Psalm", style: .bold),
+            InlineRun(text: "<04210>", style: [.smaller, .bold],
+                      link: .strongs(type: "Hebrew", value: "04210"), isMarker: true),
+            InlineRun(text: " which", style: [.bold, .transChangeAdded]),
+        ]
+        let heading = ChapterTextRenderer.text(
+            for: ChapterHeading(runs: runs, isCanonical: true), style: style
+        )
+        let fonts = heading.runs.map { $0.font }
+        guard fonts.count == 3 else {
+            return XCTFail(
+                "expected one attributed run per heading run, got \(fonts.count)"
+            )
+        }
+        XCTAssertNotEqual(fonts[0], fonts[1],
+                          "the marker is drawn in the title's own font")
+        XCTAssertNotEqual(fonts[0], fonts[2],
+                          "the supplied words lost their italic")
+        XCTAssertEqual(
+            fonts,
+            ChapterTextRenderer.attributed(runs: runs, style: style).runs.map { $0.font },
+            "a heading's runs are not in the fonts the renderer gives those runs"
+        )
+
+        // Bold does not lean on the title token: a run that arrives without it is
+        // bold in a heading all the same.
+        let plain = ChapterTextRenderer.text(
+            for: ChapterHeading(runs: [InlineRun(text: "ALEPH.")], isCanonical: true),
+            style: style
+        )
+        XCTAssertEqual(
+            plain.runs.first?.font,
+            ChapterTextRenderer.attributed(
+                runs: [InlineRun(text: "ALEPH.", style: .bold)], style: style
+            ).runs.first?.font,
+            "a heading run without its own bold was not drawn bold"
+        )
+        XCTAssertNotEqual(
+            plain.runs.first?.font,
+            ChapterTextRenderer.attributed(
+                runs: [InlineRun(text: "ALEPH.")], style: style
+            ).runs.first?.font,
+            "bold and regular compare equal, so the assertion above proves nothing"
+        )
+    }
 }

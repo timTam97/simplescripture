@@ -142,10 +142,22 @@ enum ChapterTextRenderer {
     }
 
     /// A heading's text — `<p><b>` in the HTML.
+    ///
+    /// Bold PER RUN, not one bold font over the finished string. A font set on the
+    /// whole string replaces each run's own: a Strong's or morph marker keeps its
+    /// grey and its raise but is drawn at the title's size (`A Psalm<04210> of
+    /// David<01732>` in full-size numbers), and the translators' supplied words
+    /// lose their italic. The HTML had the same anchors inside its `<b>`, as 70%
+    /// superscripts.
+    ///
+    /// All the heading text in the corpus already arrives bold from its title token;
+    /// inserting it here is what stops a heading depending on that.
     static func text(for heading: ChapterHeading, style: Style) -> AttributedString {
-        var out = attributed(runs: heading.runs, style: style)
-        out.font = .custom(style.fontName, size: style.fontSize).bold()
-        return out
+        attributed(runs: heading.runs.map { run in
+            var run = run
+            run.style.insert(.bold)
+            return run
+        }, style: style)
     }
 
     /// Map runs to an `AttributedString`, carrying links as `AttributeContainer`
