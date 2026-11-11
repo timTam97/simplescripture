@@ -574,6 +574,14 @@ final class SearchModel {
         _ strongsTokens: [String]?
     ) -> [PSSearchResult]
 
+    /// The most verses a search lists. The cap is deliberate and long-standing;
+    /// what the list must not do is pass the cap off as the number of matches
+    /// (see `resultsWereTruncated`).
+    ///
+    /// `nonisolated` because the default `queryOperation` reads it off the main
+    /// actor.
+    nonisolated static let resultLimit = 1000
+
     var query = "" {
         didSet {
             guard query != oldValue, !isApplyingInternalInputs else { return }
@@ -614,6 +622,17 @@ final class SearchModel {
     }
     var bookName: String?
     var results: [SearchResultRow] = []
+    /// The search matched more verses than `results` lists: the list was cut at
+    /// `resultLimit`.
+    ///
+    /// Read by the result list's header, which otherwise gives the cap as the
+    /// count — a wrong number for any common word ("God" is in 3,892 verses),
+    /// with nothing to say that the end of the Bible is missing (rows come in
+    /// canonical order) or that a narrower scope would show it.
+    ///
+    /// It describes the rows in `results`, so whatever replaces them without
+    /// going through `setResults` clears it.
+    private(set) var resultsWereTruncated = false
     private(set) var modules: [SearchModuleChoice] = []
     private(set) var moduleKind: ReadingMode = .bible
     private(set) var strongsAvailable = false
@@ -688,7 +707,12 @@ final class SearchModel {
                 expression,
                 scope: range,
                 bookName: bookName,
-                limit: 1000,
+                // One row PAST the cap, on purpose: that row arriving is the
+                // only way `setResults` learns the search matched more than it
+                // lists. Asked for exactly `resultLimit`, the list can never be
+                // marked as cut — and nothing fails, the header just goes back
+                // to giving the cap as the count.
+                limit: Int32(SearchModel.resultLimit + 1),
                 strongsTokens: strongsTokens
             )
         },
@@ -865,7 +889,10 @@ final class SearchModel {
     }
 
     func setResults(_ rawResults: [PSSearchResult]) {
-        results = rawResults.map {
+        // The query asks for one row past the cap (see the default
+        // `queryOperation`). A row past it is the signal, and is not listed.
+        resultsWereTruncated = rawResults.count > Self.resultLimit
+        results = rawResults.prefix(Self.resultLimit).map {
             SearchResultRow(
                 reference: $0.reference,
                 text: $0.fullText,
@@ -881,6 +908,7 @@ final class SearchModel {
         isSearching = false
         expression = nil
         results = []
+        resultsWereTruncated = false
         highlightTerms = []
     }
 
@@ -1087,6 +1115,8 @@ final class SearchModel {
             )
         } ?? []
         results = restoredRows
+        // A saved search holds its rows and no record of whether they were cut.
+        resultsWereTruncated = false
         expression = PSSearchQuery.fts5Expression(
             fromUserInput: query,
             matchType: matchType,
@@ -1131,6 +1161,7 @@ final class SearchModel {
             isSearching = false
             expression = nil
             results = []
+            resultsWereTruncated = false
             highlightTerms = []
             onHistoryChange?(nil)
             return

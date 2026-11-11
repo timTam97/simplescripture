@@ -190,6 +190,7 @@ private struct SearchWorkspaceContent: View {
                 SearchReadyContent(
                     query: search.query,
                     results: search.results,
+                    resultsWereTruncated: search.resultsWereTruncated,
                     highlightTerms: search.highlightTerms,
                     fuzzy: search.fuzzySearch,
                     strongs: search.strongsSearch,
@@ -281,6 +282,9 @@ private struct SearchIndexRetryView: View {
 private struct SearchReadyContent: View {
     let query: String
     let results: [SearchResultRow]
+    /// The search matched more than `results` lists. For the list's header
+    /// only.
+    let resultsWereTruncated: Bool
     let highlightTerms: [String]
     let fuzzy: Bool
     let strongs: Bool
@@ -308,6 +312,7 @@ private struct SearchReadyContent: View {
         } else {
             SearchResultList(
                 results: results,
+                resultsWereTruncated: resultsWereTruncated,
                 highlightTerms: highlightTerms,
                 fuzzy: fuzzy,
                 strongs: strongs,
@@ -321,6 +326,7 @@ private struct SearchReadyContent: View {
 
 private struct SearchResultList: View {
     let results: [SearchResultRow]
+    let resultsWereTruncated: Bool
     let highlightTerms: [String]
     let fuzzy: Bool
     let strongs: Bool
@@ -365,12 +371,22 @@ private struct SearchResultList: View {
                     }
                 }
             } header: {
+                // A list cut at the cap is not a count of the matches, and the
+                // bare number passed the cap off as one. "First" says there are
+                // more, further on in the Bible than the list goes (the rows
+                // are in canonical order).
                 Text(
-                    LocalizedStringResource(
-                        "SearchResultCountFormat",
-                        defaultValue: "\(results.count) Results",
-                        comment: "Search result count; the variable is the count."
-                    )
+                    resultsWereTruncated
+                        ? LocalizedStringResource(
+                            "SearchResultCountTruncatedFormat",
+                            defaultValue: "First \(results.count) Results",
+                            comment: "Search result count when the list was cut at the cap; the variable is the number of results listed."
+                        )
+                        : LocalizedStringResource(
+                            "SearchResultCountFormat",
+                            defaultValue: "\(results.count) Results",
+                            comment: "Search result count; the variable is the count."
+                        )
                 )
             }
         }

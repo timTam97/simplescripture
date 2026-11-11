@@ -2400,6 +2400,96 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(model.highlightTerms, ["Caesar", "C\u{00E6}sar"])
     }
 
+    /// A search that matches more verses than the list holds is cut at the cap,
+    /// and says it was cut.
+    ///
+    /// The list has always stopped at 1,000 rows, in canonical order, so the cut
+    /// takes the end of the Bible. The header gave the cap as the count: "God"
+    /// is in 3,892 verses, and the list read as 1,000 results ending at
+    /// 1 Kings 15:3, with nothing to say the New Testament was missing or that a
+    /// narrower scope would show it. The query now asks for one row past the
+    /// cap; `setResults` drops that row and records that it was there.
+    @MainActor
+    func testResultsPastTheCapAreCutAndReportedAsTruncated() throws {
+        func rows(_ count: Int) -> [PSSearchResult] {
+            (0..<count).map {
+                PSSearchResult(reference: "Ref \($0)", fullText: "t")
+            }
+        }
+        // No index, so nothing here can start a search: every row arrives
+        // through `setResults`, as it does from a finished query.
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in false },
+                buildOperation: { _, _ in }
+            ),
+            featureProvider: { _, _ in false },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        let kjv = SearchModuleChoice(id: "KJV", kind: .bible)
+        model.configure(
+            modules: [kjv],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        XCTAssertEqual(SearchModel.resultLimit, 1000)
+
+        // The row past the cap is the query's evidence of more. It is dropped,
+        // and the list is marked.
+        model.setResults(rows(1001))
+        XCTAssertEqual(model.results.count, 1000)
+        XCTAssertEqual(model.results.last?.reference, "Ref 999")
+        XCTAssertTrue(model.resultsWereTruncated)
+
+        // Exactly the cap is every match there is.
+        model.setResults(rows(1000))
+        XCTAssertEqual(model.results.count, 1000)
+        XCTAssertEqual(model.results.last?.reference, "Ref 999")
+        XCTAssertFalse(model.resultsWereTruncated)
+
+        // The mark describes the rows on screen, so it goes when they do:
+        // cleared results, ...
+        model.setResults(rows(1001))
+        model.clearResults()
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertFalse(model.resultsWereTruncated)
+
+        // ... an emptied field, ...
+        model.query = "God"
+        model.setResults(rows(1001))
+        model.query = ""
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertFalse(model.resultsWereTruncated)
+
+        // ... and a saved search put back, which holds its rows and no record
+        // of whether they were cut.
+        let saved = try XCTUnwrap(
+            PSSearchHistoryItem(
+                searchTermToDisplay: "God",
+                strongs: false,
+                fuzzy: false,
+                type: .AndSearch,
+                range: .AllRange,
+                book: nil
+            )
+        )
+        saved.results = [
+            PSVerseTextEntry(key: "Genesis 1:1", text: "In the beginning God"),
+        ]
+        model.setResults(rows(1001))
+        model.configure(
+            modules: [kjv],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: saved
+        )
+        XCTAssertEqual(model.results.map(\.reference), ["Genesis 1:1"])
+        XCTAssertFalse(model.resultsWereTruncated)
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []

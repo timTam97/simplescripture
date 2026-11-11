@@ -421,7 +421,9 @@ final class PSSearchEngine {
     ///
     /// No cancel flag: callers run this off the main thread under a generation
     /// counter and discard superseded results, so cancelling could only save CPU
-    /// on a `LIMIT 1000` query.
+    /// on a query the caller has already bounded. Search asks for one row past
+    /// the 1,000 it lists (`SearchModel.resultLimit`), which is how it knows the
+    /// list was cut.
     func runQuery(_ fts5Expression: String,
                   scope: PSSearchRange,
                   bookName: String?,
