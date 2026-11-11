@@ -818,12 +818,14 @@ final class SimpleScriptureUITests: XCTestCase {
         // other failure.
         let navigationBarBottom = app.navigationBars.firstMatch.frame.maxY
         let firstVerse = app.links["pslink://versemenu/1"]
-        if firstVerse.waitForExistence(timeout: 5) {
-            XCTAssertGreaterThanOrEqual(
-                firstVerse.frame.minY, navigationBarBottom - 1,
-                "verse 1 is painted behind the navigation bar"
-            )
-        }
+        XCTAssertTrue(
+            firstVerse.waitForExistence(timeout: 5),
+            "Genesis 1 shows no verse 1 link"
+        )
+        XCTAssertGreaterThanOrEqual(
+            firstVerse.frame.minY, navigationBarBottom - 1,
+            "verse 1 is painted behind the navigation bar"
+        )
     }
 
     /// Flowing prose still tracks the exact inline verse at the viewport top.
