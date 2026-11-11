@@ -182,6 +182,173 @@ final class PSRefSemanticsTests: XCTestCase {
 
     // MARK: - Fast tier: the table itself
 
+    /// What one table comparison covered and what it found. The comparisons return
+    /// their findings instead of asserting them, so that
+    /// `testTableComparisonCatchesAChangedVerseMaximum` can run the same code over
+    /// an altered table and count what it reports.
+    private typealias TableComparison = (compared: Int, mismatches: [String])
+
+    /// A verse maximum for a mismatch line. nil is a chapter that side does not have.
+    private static func verseCount(_ value: Int?) -> String {
+        value.map { "\($0)" } ?? "none"
+    }
+
+    /// The table's books against the oracle's on the members the app consumes:
+    /// `name`, `shortName`, `osisName`, the chapter count and chapter 1's verse
+    /// maximum. One line per member that differs. Books are paired by array index,
+    /// so a table in a different order differs too.
+    private func bookMemberMismatches(_ resolver: PSBookOSISResolver,
+                                      _ books: [OracleBook]) -> TableComparison {
+        var compared = 0
+        var mismatches: [String] = []
+        for (i, oracleBook) in books.enumerated() {
+            guard let ours = resolver.book(at: i) else {
+                mismatches.append("index \(i): no table entry")
+                continue
+            }
+            // The oracle's `name` is SwordBook's munge of the localised long name;
+            // the table's `name` is the same munge applied at bake time.
+            if ours.name != oracleBook.name {
+                mismatches.append("index \(i): name '\(ours.name)', the oracle has '\(oracleBook.name)'")
+            }
+            if ours.shortName != oracleBook.shortName {
+                mismatches.append("index \(i) (\(ours.name)): shortName '\(ours.shortName)',"
+                                  + " the oracle has '\(oracleBook.shortName)'")
+            }
+            if ours.osisName != oracleBook.osisName {
+                mismatches.append("index \(i) (\(ours.name)): osisName '\(ours.osisName)',"
+                                  + " the oracle has '\(oracleBook.osisName)'")
+            }
+            if ours.chapterCount != oracleBook.chapters {
+                mismatches.append("index \(i) (\(ours.name)): \(ours.chapterCount) chapters,"
+                                  + " the oracle has \(oracleBook.chapters)")
+            }
+            // The verse maxima are member 5: covered per chapter by
+            // `verseMaximaMismatches`, and spot-checked here at chapter 1 so this
+            // comparison fails on all five.
+            let mine = resolver.verseMax(book: ours, chapter: 1)
+            let theirs = oracleBook.verseMax.first
+            if mine != theirs {
+                mismatches.append("index \(i) (\(ours.name)): chapter 1 has \(Self.verseCount(mine)) verses,"
+                                  + " the oracle has \(Self.verseCount(theirs))")
+            }
+            compared += 1
+        }
+        return (compared, mismatches)
+    }
+
+    /// Every chapter's verse maximum against the oracle's, one line per chapter
+    /// that differs. Walks the longer of the two books, so a chapter only one side
+    /// has is reported rather than skipped.
+    private func verseMaximaMismatches(_ resolver: PSBookOSISResolver,
+                                       _ books: [OracleBook]) -> TableComparison {
+        var compared = 0
+        var mismatches: [String] = []
+        for (i, oracleBook) in books.enumerated() {
+            guard let ours = resolver.book(at: i) else {
+                mismatches.append("index \(i): no table entry")
+                continue
+            }
+            for chapter in 1...max(ours.chapterCount, oracleBook.verseMax.count) {
+                let mine = resolver.verseMax(book: ours, chapter: chapter)
+                let theirs = chapter <= oracleBook.verseMax.count ? oracleBook.verseMax[chapter - 1] : nil
+                if mine != theirs {
+                    mismatches.append("\(ours.name) \(chapter): \(Self.verseCount(mine)) verses,"
+                                      + " the oracle has \(Self.verseCount(theirs))")
+                }
+                compared += 1
+            }
+        }
+        return (compared, mismatches)
+    }
+
+    /// 66 books x the 5 members the app actually consumes, **including array
+    /// order**. Order matters: `nextChapter`/`previousChapter` roll over by index,
+    /// and the ref selector's section index is positional.
+    ///
+    /// The transitions test below cannot stand in for this one. A transition is
+    /// built from the names and the chapter counts alone, so a wrong `shortName`
+    /// or verse maximum passes all 2,376 of them.
+    func testTableMatchesTheCommittedFixtureOnAllFiveMembers() throws {
+        let resolver = try resolver()
+        let books = try oracle().books
+
+        XCTAssertEqual(resolver.books.count, 66)
+
+        let (compared, mismatches) = bookMemberMismatches(resolver, books)
+        XCTAssertTrue(mismatches.isEmpty,
+                      "the table differs from the oracle in \(mismatches.count) member(s): \(mismatches.prefix(5))")
+        print("[refsem/fast] books compared on 5 members: \(compared)")
+        XCTAssertEqual(compared, 66)
+    }
+
+    /// All 1,189 chapters' verse maxima, and the two out-of-range directions.
+    ///
+    /// The maxima are consumed directly: `PSRefParser`'s verse bound, the verse
+    /// `setToPreviousChapter` lands on, and the ref picker's verse list.
+    func testAllVerseMaximaMatchTheCommittedFixture() throws {
+        let resolver = try resolver()
+        let books = try oracle().books
+
+        for (i, oracleBook) in books.enumerated() {
+            XCTAssertEqual(oracleBook.verseMax.count, oracleBook.chapters,
+                           "\(oracleBook.name): the oracle's verseMax length disagrees with its chapter count")
+            guard let ours = resolver.book(at: i) else { continue }
+            // Out of range in both directions. SWORD returned -1 there
+            // (versificationmgr.cpp Book::getVerseMax) and we return nil. The
+            // fixture holds no out-of-range row, so only our side is assertable.
+            XCTAssertNil(resolver.verseMax(book: ours, chapter: 0))
+            XCTAssertNil(resolver.verseMax(book: ours, chapter: ours.chapterCount + 1))
+        }
+
+        let (compared, mismatches) = verseMaximaMismatches(resolver, books)
+        XCTAssertTrue(mismatches.isEmpty,
+                      "\(mismatches.count) verse maxima differ from the oracle: \(mismatches.prefix(5))")
+        print("[refsem/fast] verse maxima compared: \(compared)")
+        XCTAssertEqual(compared, 1189, "the KJV versification is 1,189 chapters")
+        // Sum check, independent of the loop: 31,102 verses.
+        let sum = resolver.books.reduce(0) { $0 + $1.verseMax.reduce(0, +) }
+        XCTAssertEqual(sum, 31102, "total verse count changed")
+    }
+
+    /// The negative control for the two comparisons above. A copy of the bundled
+    /// table that gives Genesis 1 thirty verses instead of 31 still loads and
+    /// still has 66 books and 1,189 chapters, so only a comparison of the maxima
+    /// themselves can tell it from the real one. Each comparison must report it,
+    /// once.
+    func testTableComparisonCatchesAChangedVerseMaximum() throws {
+        let books = try oracle().books
+
+        let bundled = try XCTUnwrap(Bundle.main.url(forResource: "Versification-KJV", withExtension: "json"))
+        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: bundled))
+        var root = try XCTUnwrap(json as? [String: Any])
+        var tableBooks = try XCTUnwrap(root["books"] as? [[String: Any]])
+        var maxima = try XCTUnwrap(tableBooks.first?["verseMax"] as? [Int])
+        XCTAssertEqual(tableBooks[0]["name"] as? String, "Genesis")
+        XCTAssertEqual(maxima.first, 31, "Genesis 1 has 31 verses")
+        maxima[0] = 30
+        tableBooks[0]["verseMax"] = maxima
+        root["books"] = tableBooks
+
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("psvers-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let copy = dir.appendingPathComponent("Versification-KJV.json")
+        try JSONSerialization.data(withJSONObject: root).write(to: copy)
+        let altered = try XCTUnwrap(PSBookOSISResolver(url: copy, reportFailures: false),
+                                    "the altered table must still load")
+
+        let perChapter = verseMaximaMismatches(altered, books)
+        XCTAssertEqual(perChapter.compared, 1189)
+        XCTAssertEqual(perChapter.mismatches, ["Genesis 1: 30 verses, the oracle has 31"])
+
+        // Genesis 1 is a chapter 1, so the member comparison's spot check sees it too.
+        let members = bookMemberMismatches(altered, books)
+        XCTAssertEqual(members.compared, 66)
+        XCTAssertEqual(members.mismatches,
+                       ["index 0 (Genesis): chapter 1 has 30 verses, the oracle has 31"])
+    }
 
 
     // MARK: - Fast tier: chapter navigation (the 2,376 transitions)
