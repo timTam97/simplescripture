@@ -830,26 +830,61 @@ final class SimpleScriptureUITests: XCTestCase {
 
     /// Flowing prose still tracks the exact inline verse at the viewport top.
     ///
-    /// Genesis 1's first paragraph contains verses 1-5 in one `Text`. A small drag
-    /// stays inside that paragraph, so a row-level tracker remains stuck at verse 1;
-    /// the per-verse text-layout tracker must advance the reference value.
+    /// Genesis 1's first paragraph contains verses 1-5 in one `Text`. A drag that
+    /// stays inside that paragraph leaves a row-level tracker stuck at verse 1;
+    /// the per-verse text-layout tracker must move the reference on, and to the
+    /// verse whose text is on the line now at the top.
+    ///
+    /// The test brings its own chapter and its own layout. It used to start
+    /// wherever the test before it had left the reader, and with Verse Per Line
+    /// on — an absent key reads as on — every verse is a row of its own, so it
+    /// passed without going near the text-layout tracker.
+    ///
+    /// The drag is held still before the finger lifts, so the reader moves the
+    /// drag's own length and no further. MEASURED (iOS 27.2, iPhone 18 Pro, 18 pt):
+    /// let go while moving, a drag of 149 pt coasted to 332 pt, past the foot of
+    /// the paragraph (304 pt tall), and the reference read verse 6 — the first
+    /// verse of the next ROW, which a row-level tracker reports just the same.
     @MainActor
     func testFlowingReaderTracksTheVisibleVerseWithinAParagraph() throws {
+        app.terminate()
+        app.launchArguments += [
+            "-strongsPreference_KJV", "NO",
+            "-morphPreference_KJV", "NO",
+            "-footnotesPreference_KJV", "NO",
+            "-vplPreference_KJV", "NO",
+            "-fontSizePreference", "18",
+        ]
+        app.launch()
+        // A launch always starts in the Read workspace, in the Bible.
+        let reference = app.buttons["reading.reference-picker"]
+        XCTAssertTrue(
+            reference.waitForExistence(timeout: 20),
+            "SimpleScripture did not finish initialization."
+        )
+        selectGenesisChapter(1)
+
         let reader = app.descendants(matching: .any)
             .matching(identifier: "reading.chapter-content")
             .firstMatch
-        let reference = app.buttons["reading.reference-picker"]
-        XCTAssertTrue(reader.waitForExistence(timeout: 10))
-        XCTAssertTrue(reference.waitForExistence(timeout: 5))
+        let firstParagraph = app.staticTexts.containing(
+            .link, identifier: "pslink://versemenu/1"
+        ).firstMatch
+        XCTAssertTrue(firstParagraph.waitForExistence(timeout: 5))
+        XCTAssertTrue(
+            firstParagraph.links["pslink://versemenu/2"].exists,
+            "The reader is not in flowing prose."
+        )
         let initialValue = try XCTUnwrap(reference.value as? String)
 
         let start = reader.coordinate(
             withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55)
         )
-        let end = reader.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.38)
+        let end = start.withOffset(CGVector(dx: 0, dy: -200))
+        start.press(
+            forDuration: 0.05, thenDragTo: end,
+            withVelocity: .slow, thenHoldForDuration: 0.5
         )
-        start.press(forDuration: 0.05, thenDragTo: end)
 
         let advanced = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in
@@ -859,6 +894,52 @@ final class SimpleScriptureUITests: XCTestCase {
         )
         wait(for: [advanced], timeout: 10)
         XCTAssertNotEqual(reference.value as? String, initialValue)
+
+        // The reading area starts under the navigation bar, and the tracker reads
+        // the line 1 pt into it (MEASURED: a paragraph whose top was 0.4 pt below
+        // the bar had already taken the reference).
+        let topLine = app.navigationBars.firstMatch.frame.maxY + 1
+        XCTAssertGreaterThan(
+            firstParagraph.frame.maxY, topLine,
+            "The drag left the first paragraph, so the row it landed in "
+                + "accounts for the new reference without the inline tracker."
+        )
+
+        // The verse in the reference has text on that line: its number is on the
+        // line or above it, and the next verse's number is on it or below. A
+        // number in mid-line shares the line with the end of the verse before,
+        // and either may be named; a verse wholly above or below may not. The
+        // frames are the lines': a number's frame is as tall as the line it is
+        // on. MEASURED with the fragments recorded at twice their depth, as they
+        // once were: the reference read verse 2 with verse 4 on the line.
+        func verseInTheReference() -> Int? {
+            (reference.value as? String)?.split(separator: ":").last
+                .flatMap { Int($0) }
+        }
+        func isOnTheTopLine(_ verse: Int) -> Bool {
+            let number = app.links["pslink://versemenu/\(verse)"]
+            let next = app.links["pslink://versemenu/\(verse + 1)"]
+            guard number.exists, next.exists else { return false }
+            return number.frame.minY <= topLine + 1.5
+                && next.frame.maxY > topLine - 1.5
+        }
+        let named = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                verseInTheReference().map(isOnTheTopLine) ?? false
+            },
+            object: nil
+        )
+        let outcome = XCTWaiter().wait(for: [named], timeout: 5)
+        let numbers = (1...6).map { verse -> String in
+            let number = app.links["pslink://versemenu/\(verse)"]
+            return "\(verse) at y \(number.exists ? "\(number.frame.minY)" : "?")"
+        }
+        XCTAssertEqual(
+            outcome, .completed,
+            "The reference reads \(reference.value as? String ?? "nothing") with "
+                + "the top line at y \(topLine); the verse numbers are "
+                + numbers.joined(separator: ", ") + "."
+        )
     }
 
     /// A Strong's number in the chapter text opens its lexicon entry. The reader's
