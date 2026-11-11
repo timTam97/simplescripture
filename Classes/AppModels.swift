@@ -1371,6 +1371,10 @@ final class AppSession {
     /// then would render a chapter the `DefaultsLastRefValidated` migration is
     /// about to rewrite.
     @ObservationIgnored private var pendingURL: URL?
+    /// Launch preparation has finished (`replayPendingURL()`). Until then an
+    /// inbound URL is parked (`open(_:)`) and an activation leaves the
+    /// Settings-bundle reset to `LaunchCoordinator.prepare()`
+    /// (`resetOnActivationIfRequested`).
     @ObservationIgnored private var isReady = false
     /// The `.appStateDidReset` observer. Held so it can be removed, and so a
     /// second `start()` cannot register a second handler.
@@ -1556,12 +1560,39 @@ final class AppSession {
     }
 
     /// Opens the launch URL held back during preparation, if there was one. Called
-    /// once, from the `.ready` transition.
+    /// once, from the `.ready` transition — which is also the point from which an
+    /// activation handles the Settings-bundle reset
+    /// (`resetOnActivationIfRequested`).
     func replayPendingURL() {
         isReady = true
         guard let url = pendingURL else { return }
         pendingURL = nil
         open(url)
+    }
+
+    /// The Settings-bundle reset, on activation — but only once launch preparation
+    /// has finished.
+    ///
+    /// `reset_PocketSword` is flipped in the Settings app, so it can be waiting at a
+    /// cold launch as well as on a return from the background. On a cold launch
+    /// `LaunchCoordinator.prepare()` owns it, off the main actor. Read here as well
+    /// with no readiness check, an activation arriving during preparation would
+    /// run the reset a second time alongside the first, on the main thread — the
+    /// one main-thread path that could first-touch `PSModuleController` (an
+    /// unsynchronised singleton) before `prepare()` had returned.
+    ///
+    /// Whether SwiftUI ever reports `.active` that early is not established: its
+    /// documentation does not say when the first change is delivered. Gated on
+    /// `isReady`, the answer stops mattering. A warm return is always after
+    /// `.ready`, so it resets exactly as before.
+    ///
+    /// `reset` is `LaunchCoordinator.resetPreferences()`, which clears the flag.
+    func resetOnActivationIfRequested(
+        defaults: UserDefaults = .standard,
+        reset: () -> Void
+    ) {
+        guard isReady, defaults.bool(forKey: "reset_PocketSword") else { return }
+        reset()
     }
 
     func apply(_ route: URLRoute) {

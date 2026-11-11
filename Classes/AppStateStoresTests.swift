@@ -2490,6 +2490,70 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertFalse(model.resultsWereTruncated)
     }
 
+    /// The Settings-bundle reset is handled on activation only once launch
+    /// preparation has finished.
+    ///
+    /// `reset_PocketSword` is flipped in the Settings app, so it can be waiting
+    /// at a cold launch as well as on a return from the background. At a cold
+    /// launch `LaunchCoordinator.prepare()` handles it, off the main actor. The
+    /// activation handler read the same flag with no readiness check, so an
+    /// activation arriving during preparation would run the reset a second
+    /// time, on the main thread, alongside the first — the one main-thread path
+    /// that could first-touch `PSModuleController` before `prepare()` had
+    /// returned. From the `.ready` transition (`replayPendingURL()`) on, the
+    /// handler is the only reader of the flag, as it always was on a warm
+    /// return.
+    @MainActor
+    func testActivationResetWaitsForLaunchPreparation() {
+        defaults.set(true, forKey: "reset_PocketSword")
+        let session = AppSession(
+            settings: SettingsModel(store: SettingsStore(defaults: defaults)),
+            library: LibraryModel(
+                bookmarkStore: BookmarkStore(
+                    rootProvider: { PSBookmarkFolder() },
+                    save: { true },
+                    notificationCenter: NotificationCenter()
+                ),
+                historyStore: HistoryStore(
+                    defaults: defaults,
+                    cloudStore: HistoryCloudStoreStub(),
+                    notificationCenter: NotificationCenter()
+                ),
+                dictionaryStore: DictionaryStore(
+                    defaults: defaults,
+                    moduleProvider: { nil },
+                    moduleLoader: { _ in },
+                    moduleTypeProvider: { _ in nil },
+                    keysProvider: { _ in [] },
+                    entryProvider: { _, _ in nil }
+                ),
+                notificationCenter: NotificationCenter()
+            ),
+            readingStore: ReadingStateStore(defaults: defaults)
+        )
+        var resets = 0
+
+        // Launch preparation is still running: the flag is `prepare()`'s.
+        session.resetOnActivationIfRequested(defaults: defaults) { resets += 1 }
+        XCTAssertEqual(
+            resets,
+            0,
+            "An activation during launch preparation ran the reset itself."
+        )
+
+        // The `.ready` transition. The stand-in reset leaves the flag set, as a
+        // flag flipped while the app was suspended would be.
+        session.replayPendingURL()
+        session.resetOnActivationIfRequested(defaults: defaults) { resets += 1 }
+        XCTAssertEqual(resets, 1)
+
+        // The real reset clears the flag, and without it an activation resets
+        // nothing.
+        defaults.removeObject(forKey: "reset_PocketSword")
+        session.resetOnActivationIfRequested(defaults: defaults) { resets += 1 }
+        XCTAssertEqual(resets, 1)
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []

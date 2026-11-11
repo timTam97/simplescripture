@@ -74,8 +74,10 @@ struct SimpleScriptureApp: App {
                 UserDefaults.standard.synchronize()
             case .active:
                 // `reset_PocketSword` is set from the Settings bundle, so it can arrive
-                // while the app is suspended.
-                if UserDefaults.standard.bool(forKey: "reset_PocketSword") {
+                // while the app is suspended. The session holds this back until
+                // launch preparation has finished: on a cold launch the flag is
+                // `LaunchCoordinator.prepare()`'s, read off the main actor.
+                appDelegate.session.resetOnActivationIfRequested {
                     appDelegate.launchCoordinator.resetPreferences()
                 }
             @unknown default:
