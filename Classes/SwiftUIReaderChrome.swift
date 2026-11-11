@@ -422,9 +422,15 @@ struct ReaderScreen: View {
             // The two calls are deliberately back to back: `restoreAfterSizeChange`
             // keeps the suppression alive until its own deferred scroll has landed.
             // Do not split them across separate callbacks.
+            //
+            // Whether the WIDTH changed goes with them, because it decides what a
+            // pane re-anchors on. This also fires for height alone — the bars
+            // settling at launch, a keyboard going — which re-wraps nothing, so the
+            // scroll offset is still right. After a width change the offset names
+            // different text, and the verse at the top is what to return to.
             guard old != .zero, old != new else { return }
             reading.prepareForSizeChange()
-            reading.restoreAfterSizeChange()
+            reading.restoreAfterSizeChange(widthChanged: old.width != new.width)
         }
         // On the ZStack, not in `ChapterTextView`: one recogniser for whichever pane
         // is showing.

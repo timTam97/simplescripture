@@ -262,9 +262,11 @@ final class ReaderPaneModel {
     /// The last scroll offset seen, clamped at 0 (see `scrollOffsetChanged`).
     @ObservationIgnored private var lastScrollOffset: CGFloat = 0
     /// An offset restore that has been requested but not yet observed to have landed.
-    /// Two things read it, and both are load-bearing: `scrollOffsetChanged` (do not
-    /// persist a position from before the restore lands) and `restoreAfterSizeChange`
-    /// (do not re-anchor on a verse while an offset restore is still in flight).
+    /// Three things read it, and each is load-bearing: `scrollOffsetChanged` (do not
+    /// persist a position from before the restore lands), `restoreAfterSizeChange`
+    /// (do not re-anchor on a verse while an offset restore is still in flight) and
+    /// `topmostVerseChanged` (the row at the top before it lands has not measured
+    /// where it lands — see `shownVerseIsMeasured`).
     @ObservationIgnored private var outstandingOffsetRestore: CGFloat?
     /// The verse the position keys pair with an offset restore, used for what
     /// `scrollOffsetChanged` persists until the view reports the topmost verse
@@ -282,6 +284,23 @@ final class ReaderPaneModel {
     /// drops it only because that is what the pane already believes. Seeded with
     /// the saved verse, it would take that report for a move and persist verse 1.
     @ObservationIgnored private var offsetRestoreVerse: Int?
+    /// Whether `currentShownVerse` says where the scroll view IS: the view
+    /// reported it as the row at the top, or a restore that names a verse (or the
+    /// top of the chapter) sent the scroll view there.
+    ///
+    /// False after an offset restore, which names no verse: `currentShownVerse`
+    /// is then whatever the pane believed before it — 1 on a pane that has shown
+    /// nothing, which is every launch — until the view reports.
+    /// `restoreAfterSizeChange` reads it. A width change re-anchors on a measured
+    /// verse; on a leftover one it would drag a reader restored mid-chapter back
+    /// to verse 1.
+    ///
+    /// **A different question from `offsetRestoreVerse`.** That is the verse the
+    /// KEYS hold, carried so that a scroll does not save a leftover over it. It
+    /// says what to persist, not where the scroll view is — nothing has checked
+    /// it against the rows — so the scroll that writes it into
+    /// `currentShownVerse` (`scrollOffsetChanged`) leaves this false.
+    @ObservationIgnored private var shownVerseIsMeasured = true
 
     @ObservationIgnored weak var workspace: ReadingWorkspaceModel?
 
@@ -397,6 +416,7 @@ final class ReaderPaneModel {
             // verse target rather than replaying stale pixels.
             lastScrollOffset = 0
             currentShownVerse = verse
+            shownVerseIsMeasured = true
             verseToShow = 0
             let target = rowID(containing: verse)
             // The chapter's first row is the one landing nothing may report. It
@@ -423,6 +443,8 @@ final class ReaderPaneModel {
                 return
             }
             lastScrollOffset = offset
+            // An offset names no verse — see `shownVerseIsMeasured`.
+            shownVerseIsMeasured = false
             // Recorded BEFORE the hop: the scroll view publishes geometry (and
             // `scrollOffsetChanged` would persist it) before the hop runs.
             outstandingOffsetRestore = offset
@@ -439,6 +461,7 @@ final class ReaderPaneModel {
             outstandingOffsetRestore = nil
             lastScrollOffset = 0
             currentShownVerse = 1
+            shownVerseIsMeasured = true
             Task { @MainActor [weak self] in
                 self?.scrollPosition.scrollTo(edge: .top)
             }
@@ -464,6 +487,7 @@ final class ReaderPaneModel {
             // (A DEFERRED page turn has had the same two keys written already, by
             // `deferRender`; this also retitles.)
             persistPosition(verse: 1, scrollOffset: 0)
+            shownVerseIsMeasured = true
         }
     }
 
@@ -670,7 +694,20 @@ final class ReaderPaneModel {
         // would let verse 0 through as "changed" forever (0 != 1) and rewrite the
         // position on every layout pass.
         let clamped = max(1, verse)
-        guard !isRestoringAfterTransition, clamped != currentShownVerse else { return }
+        guard !isRestoringAfterTransition else { return }
+        // The view has said which row is at the top, so `currentShownVerse` is a
+        // measurement from here on, whether or not this report changes it.
+        //
+        // One report is not: the one the row at the top makes BEFORE an offset
+        // restore lands, which says where the view was. It is told apart the way
+        // `offsetRestoreVerse` already relies on — it is the verse the pane
+        // believes anyway (1, on a new pane) — so while a restore is in flight a
+        // report counts only if it changes that. The row the restore lands on may
+        // report before the landing itself is published, and it does change it.
+        if outstandingOffsetRestore == nil || clamped != currentShownVerse {
+            shownVerseIsMeasured = true
+        }
+        guard clamped != currentShownVerse else { return }
         persistPosition(verse: clamped, scrollOffset: lastScrollOffset)
     }
 
@@ -752,27 +789,64 @@ final class ReaderPaneModel {
 
     // MARK: Size changes
 
-    /// Rotation, or an iPad split-view resize.
+    /// Rotation, or an iPad split-view resize — or the reader's height alone
+    /// changing, as the bars settle at launch and when a keyboard goes.
     ///
     /// Scroll identity is width-independent, so nothing needs re-measuring. All
-    /// that is needed is suppressing the transient scroll callbacks the transition
-    /// produces, which would otherwise overwrite the persisted position.
+    /// that is needed here is suppressing the transient scroll callbacks the
+    /// transition produces, which would otherwise overwrite the persisted
+    /// position. A scroll OFFSET is not width-independent, and what is restored
+    /// afterwards turns on that — see `restoreAfterSizeChange(widthChanged:)`.
     func prepareForSizeChange() {
         sizeChangeGeneration += 1
         isRestoringAfterTransition = true
     }
 
     /// **The suppression has to outlive this call.** `ReaderScreen` calls
-    /// `prepareForSizeChange()` and `restoreAfterSizeChange()` back to back in one
-    /// `onGeometryChange` action, so clearing the flag synchronously would let every
-    /// transient rotation callback overwrite the saved position.
+    /// `prepareForSizeChange()` and `restoreAfterSizeChange(widthChanged:)` back
+    /// to back in one `onGeometryChange` action, so clearing the flag synchronously
+    /// would let every transient rotation callback overwrite the saved position.
     ///
-    /// A prose paragraph is one flowing `Text`, not one scroll target per verse, so
+    /// **A height change replays the scroll offset; a width change re-anchors on
+    /// the verse.** The hook fires for both. Height alone re-wraps nothing, so the
+    /// offset still names the same text and is preserved exactly. A width change
+    /// re-wraps every row, and the old width's offset names different text:
+    /// Genesis 1 with a row per verse is 4198 pt tall in portrait and about half
+    /// that in landscape, so the offset of verse 20 is past the end of the
+    /// landscape chapter. Replayed, it pinned the reader there, that was persisted
+    /// as the position, and rotating back replayed IT into the portrait layout.
+    ///
+    /// The flowing layout keeps the offset on a width change too. A prose
+    /// paragraph is one flowing `Text`, not one scroll target per verse, so
     /// re-anchoring to `rowID(containing:)` would jump to the paragraph's first
-    /// verse. Preserve the actual scroll offset across the size change instead; the
-    /// per-verse layout tracker updates the title independently.
-    func restoreAfterSizeChange() {
+    /// verse; the per-verse layout tracker updates the title independently.
+    func restoreAfterSizeChange(widthChanged: Bool) {
         let generation = sizeChangeGeneration
+        // Re-anchor on the verse only where it is a better answer than the pixels:
+        //
+        //  * the rows are per verse (per record, on a commentary) and not
+        //    paragraphs — see above;
+        //  * the verse is one the view measured or a restore named. After an
+        //    offset restore it is a leftover — see `shownVerseIsMeasured`;
+        //  * no offset restore is in flight (below);
+        //  * the pane owes no render. One that does is holding a chapter the
+        //    reader has left, under position keys that already describe the one it
+        //    will open on (`deferRender`). Re-anchoring moves its scroll view, and
+        //    the landing would be persisted over them. The offset replayed instead
+        //    lands on `lastScrollOffset`, which `scrollOffsetChanged` does not
+        //    take for a move — unless the new width cannot reach it.
+        let reanchorsOnVerse = widthChanged && versePerLine && shownVerseIsMeasured
+            && outstandingOffsetRestore == nil && refToShow == nil
+        if reanchorsOnVerse {
+            // As in `apply(.verse)`: the old width's offset is not evidence for
+            // this position, and neither is a verse saved with it. Zeroed rather
+            // than skipped over, because a rotation's size arrives in steps, as
+            // the launch's does — the bars settle after the width has changed —
+            // and with everything published in between suppressed, the
+            // height-only step that follows would replay it.
+            lastScrollOffset = 0
+            offsetRestoreVerse = nil
+        }
         // An OFFSET restore still in flight wins over `currentShownVerse`.
         //
         // The reader's size settles in steps at launch ((402, 0) → (402, 623) →
@@ -1623,8 +1697,8 @@ final class ReadingWorkspaceModel {
         commentary.prepareForSizeChange()
     }
 
-    func restoreAfterSizeChange() {
-        bible.restoreAfterSizeChange()
-        commentary.restoreAfterSizeChange()
+    func restoreAfterSizeChange(widthChanged: Bool) {
+        bible.restoreAfterSizeChange(widthChanged: widthChanged)
+        commentary.restoreAfterSizeChange(widthChanged: widthChanged)
     }
 }

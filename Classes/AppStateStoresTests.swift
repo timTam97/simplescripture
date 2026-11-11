@@ -2431,6 +2431,186 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// `ReaderScreen`'s size hook — the two calls, back to back — and then the
+    /// hop the pane defers its scroll to.
+    @MainActor
+    private func sizeChange(_ pane: ReaderPaneModel, widthChanged: Bool) async {
+        pane.prepareForSizeChange()
+        pane.restoreAfterSizeChange(widthChanged: widthChanged)
+        for _ in 0..<10 { await Task.yield() }
+    }
+
+    /// What `pane`'s scroll position was last told, as a row: the row's id after
+    /// a `scrollTo(id:)`, nil after a `scrollTo(y:)`. `ScrollPosition` is a value,
+    /// so this needs no scroll view.
+    @MainActor
+    private func targetRow(of pane: ReaderPaneModel) -> Int? {
+        pane.scrollPosition.viewID(type: Int.self)
+    }
+
+    /// A rotation re-anchors on the verse being read. It does not replay the
+    /// offset the old width was scrolled to.
+    ///
+    /// A width change re-wraps every row, so a pixel offset names different text.
+    /// Genesis 1 with Verse Per Line on is 4198 pt tall in portrait and verse 20
+    /// sits near 2700; in landscape the rows are about half as tall and 2700 is
+    /// past the end of the chapter. The reader was pinned there, that was saved
+    /// as the position, and rotating back replayed IT into the portrait layout.
+    ///
+    /// The offset is still what is replayed wherever it names the same text or
+    /// there is no verse to go by. Each of those is pinned here too, because the
+    /// change is wrong if it reaches any of them:
+    ///
+    ///  * a HEIGHT-only change — the bars settling at launch, the keyboard —
+    ///    which re-wraps nothing, and where the verse would snap a row scrolled
+    ///    part-way to its top;
+    ///  * the flowing layout, whose row is a paragraph and not the verse;
+    ///  * a verse nobody has measured: after an offset restore the pane goes on
+    ///    believing what it did before — verse 1, at every launch — until the
+    ///    view reports the row at the top;
+    ///  * a pane that owes a render, which is holding a chapter the reader has
+    ///    left, under position keys already settled for the next one.
+    ///
+    /// This is the model's half. Where a scroll view lands after a real rotation
+    /// is a simulator check.
+    @MainActor
+    func testAWidthChangeReanchorsOnTheTopmostVerseInsteadOfReplayingPixels() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previousScroll = standard.string(forKey: scrollKey)
+        let previousVerse = standard.string(forKey: verseKey)
+        defer {
+            if let previousScroll {
+                standard.set(previousScroll, forKey: scrollKey)
+            } else {
+                standard.removeObject(forKey: scrollKey)
+            }
+            if let previousVerse {
+                standard.set(previousVerse, forKey: verseKey)
+            } else {
+                standard.removeObject(forKey: verseKey)
+            }
+        }
+        let chapter = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+        let portrait = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+        let landscape = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 2400, containerHeight: 340)
+        }
+
+        // Reading at verse 20 in portrait, having scrolled there.
+        let pane = ReaderPaneModel(mode: .bible)
+        pane.versePerLine = true
+        pane.document = chapter
+        let surface = pane.scrollSurface
+        pane.scrollOffsetChanged(portrait(2700), from: surface)
+        pane.topmostVerseChanged(20, from: surface)
+
+        await sizeChange(pane, widthChanged: true)
+        XCTAssertEqual(targetRow(of: pane), 20,
+                       "Rotating replayed portrait's offset into the landscape "
+                           + "layout, where it is past the end of the chapter.")
+
+        // A rotation's size arrives in steps, as the launch's does: the bars
+        // settle after the width has changed. Everything published in between is
+        // suppressed, so the only offset the pane holds is still portrait's.
+        await sizeChange(pane, widthChanged: false)
+        XCTAssertEqual(targetRow(of: pane), 20,
+                       "The bars settling after the rotation replayed portrait's "
+                           + "offset.")
+
+        // Where it lands is the position now, under the same verse.
+        pane.scrollOffsetChanged(landscape(1310), from: surface)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1310")
+        XCTAssertEqual(standard.string(forKey: verseKey), "20")
+
+        // Height alone, at this width: the offset still names the same text.
+        await sizeChange(pane, widthChanged: false)
+        XCTAssertNil(targetRow(of: pane),
+                     "A height change re-wraps nothing, and re-anchoring on the "
+                         + "verse snaps a row scrolled part-way to its top.")
+
+        // And back to portrait.
+        await sizeChange(pane, widthChanged: true)
+        XCTAssertEqual(targetRow(of: pane), 20,
+                       "Rotating back replayed landscape's offset into the "
+                           + "portrait layout.")
+
+        // The flowing layout. Its row is the paragraph — one, here, whose id is
+        // verse 1 — so the verse is not something it can be scrolled to.
+        let prose = ReaderPaneModel(mode: .bible)
+        prose.versePerLine = false
+        prose.document = chapter
+        prose.scrollOffsetChanged(portrait(2700), from: prose.scrollSurface)
+        prose.topmostVerseChanged(20, from: prose.scrollSurface)
+        await sizeChange(prose, widthChanged: true)
+        XCTAssertNil(targetRow(of: prose),
+                     "The flowing layout jumped to the first verse of the "
+                         + "paragraph being read.")
+
+        // An offset restore names no verse. The row at the top BEFORE it lands
+        // reports itself, and that is no measurement: it is where the view was.
+        standard.set("600", forKey: scrollKey)
+        standard.set("9", forKey: verseKey)
+        let restored = ReaderPaneModel(mode: .bible)
+        restored.versePerLine = true
+        restored.document = chapter
+        restored.pendingRestore = .offset(600)
+        restored.applyPendingWork()
+        restored.topmostVerseChanged(1, from: restored.scrollSurface)
+        restored.scrollOffsetChanged(portrait(600), from: restored.scrollSurface)
+        await sizeChange(restored, widthChanged: true)
+        XCTAssertNil(targetRow(of: restored),
+                     "A reader restored mid-chapter was dragged to verse 1, the "
+                         + "verse a pane that has shown nothing believes it is on.")
+
+        // Once the view has said which row is at the top, that is the verse.
+        restored.topmostVerseChanged(10, from: restored.scrollSurface)
+        await sizeChange(restored, widthChanged: true)
+        XCTAssertEqual(targetRow(of: restored), 10)
+
+        // The row the restore lands ON may report before the landing itself is
+        // published. It is told from the row that was at the top by changing
+        // what the pane believes. The restore still wins until it has landed —
+        // launch's own size changes arrive in that window.
+        standard.set("600", forKey: scrollKey)
+        standard.set("9", forKey: verseKey)
+        let early = ReaderPaneModel(mode: .bible)
+        early.versePerLine = true
+        early.document = chapter
+        early.pendingRestore = .offset(600)
+        early.applyPendingWork()
+        early.topmostVerseChanged(1, from: early.scrollSurface)
+        early.topmostVerseChanged(9, from: early.scrollSurface)
+        await sizeChange(early, widthChanged: true)
+        XCTAssertNil(targetRow(of: early),
+                     "A width change re-anchored over an offset restore that had "
+                         + "not landed.")
+        early.scrollOffsetChanged(portrait(600), from: early.scrollSurface)
+        await sizeChange(early, widthChanged: true)
+        XCTAssertEqual(targetRow(of: early), 9,
+                       "The verse the restore landed on was not taken for a "
+                           + "measurement because it was reported before the landing.")
+
+        // A pane that owes a render: it has been paged past while hidden.
+        let owing = ReaderPaneModel(mode: .bible)
+        owing.versePerLine = true
+        owing.document = chapter
+        owing.scrollOffsetChanged(portrait(2700), from: owing.scrollSurface)
+        owing.topmostVerseChanged(20, from: owing.scrollSurface)
+        owing.deferRender(of: "Genesis 2", restore: .chapterStart)
+        await sizeChange(owing, widthChanged: true)
+        XCTAssertNil(targetRow(of: owing))
+        owing.scrollOffsetChanged(portrait(2700), from: owing.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "0",
+                       "Re-anchoring the chapter being left moved its scroll view, "
+                           + "and the landing was saved over the top of the next one.")
+        XCTAssertEqual(standard.string(forKey: verseKey), "1")
+    }
+
     // MARK: Paging
 
     /// Paging replaces the scroll view and persists the top of the new chapter.
