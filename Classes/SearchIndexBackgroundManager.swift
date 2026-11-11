@@ -263,7 +263,8 @@ final class SearchIndexBackgroundManager {
 
             // The order is success, then expiry, then failure.
             //
-            // A build that RETURNED has committed and stamped a complete index,
+            // A build that RETURNED has committed a complete index (and stamped
+            // it, short of the stamp itself failing — see `PSSearchEngine.build`),
             // whatever the flag says by now, so that is decided first.
             // `PSSearchEngine.build` can only see a cancel at its 500-row progress
             // poll: after the last one (row 31,000 of the KJV's 31,102) the

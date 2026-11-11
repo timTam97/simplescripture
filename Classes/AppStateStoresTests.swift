@@ -3206,14 +3206,18 @@ final class AppStateStoresTests: XCTestCase {
         )
         XCTAssertEqual(model.indexCoordinator.state, .unavailable)
 
-        // The build finishes: the index is fresh, and nothing has told Search.
+        // The build finishes after that activation: the index is fresh, nothing
+        // has told Search, and the look that was skipped is not repeated. The
+        // build prompt stays up over it — the gap `indexMayHaveChanged`
+        // documents and leaves.
         releaseBackground.signal()
         await fulfillment(of: [backgroundFinished], timeout: 2)
         fresh = true
         XCTAssertEqual(model.indexCoordinator.state, .unavailable)
         XCTAssertTrue(collector.snapshot().isEmpty)
 
-        // The activation that follows adopts it and runs the waiting query.
+        // The next activation, whenever it comes, adopts it and runs the waiting
+        // query.
         model.indexMayHaveChanged()
         XCTAssertEqual(
             model.indexCoordinator.state,
@@ -4269,10 +4273,13 @@ final class AppStateStoresTests: XCTestCase {
     /// change, and the keys kept the position the reader had just LEFT: a display
     /// toggle, a bookmark or a relaunch went back there.
     ///
-    /// Jude, because verse 1 is its first row. 1,184 of the KJV's 1,189 chapters
-    /// open with an intro row above verse 1, which puts verse 1 a line down,
-    /// where its landing is seen. With Verse Per Line off the first PARAGRAPH is
-    /// the first row in every chapter.
+    /// Jude, because verse 1 is its first row whatever the host's Headings
+    /// setting. With Headings off (the default) that is true of every chapter: a
+    /// Bible intro with nothing to show gets no row. With Headings on, 1,184 of
+    /// the KJV's 1,189 chapters open with an intro row that is only its heading
+    /// (`CHAPTER n.`) above verse 1, which puts verse 1 a line down, where its
+    /// landing is seen; the five without one are the one-chapter books. With
+    /// Verse Per Line off the first PARAGRAPH is the first row in every chapter.
     @MainActor
     func testPickingTheTopOfTheOpenChapterPersistsIt() {
         withPreservedReadingKeys { standard in
@@ -4788,8 +4795,11 @@ final class AppStateStoresTests: XCTestCase {
             XCTAssertEqual(
                 PSModuleController.createRefString(workspace.bible.refToShow), "John 4"
             )
-            // Leaving the Bible alone must not mean leaving the edit unseen: the
-            // commentary's highlights are bookmarks too, and it is the pane on screen.
+            // The pane on screen is polled in the Bible's place, so the edit still
+            // goes through `displayChapter` and something is rendered. It has
+            // nothing new to draw there: a commentary row carries no bookmark
+            // colour (the builder looks one up for a Bible only). So this pins
+            // that the render ran, not that the commentary shows the edit.
             XCTAssertEqual(workspace.commentary.textStyle.fontSize, CGFloat(probe),
                            "The bookmark edit re-rendered neither pane.")
 

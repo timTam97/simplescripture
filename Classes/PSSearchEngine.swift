@@ -267,11 +267,26 @@ final class PSSearchEngine {
     /// Builds the index from scratch. Blocks the calling thread; expected to run on
     /// a background queue. On cancel or error the partial DB is dropped.
     ///
-    /// Returning normally MEANS a complete, committed, stamped index. Both drivers
+    /// Returning normally MEANS every row is in and committed. Both drivers
     /// (`SearchIndexCoordinator`, `SearchIndexBackgroundManager`) take a return as
     /// success whatever their own cancel flag says by then, because a cancel is
     /// seen only at the 500-row progress poll: one raised after the last poll
     /// stops nothing. A cancel that IS seen must keep throwing `.cancelled`.
+    ///
+    /// It does NOT mean the index is stamped. The meta row is written after the
+    /// COMMIT, outside the `catch` that drops a partial index, and `stampMeta`
+    /// swallows its own failure: a statement that will not prepare returns
+    /// early, and the step's result is not read. The build then returns over a
+    /// committed index with no meta row, which `indexIsFresh()` rejects, and both
+    /// drivers have counted it a success. The foreground one goes to `.ready`,
+    /// where `runQuery` answers every query with nothing until the next
+    /// activation turns that back into the build prompt
+    /// (`SearchModel.indexMayHaveChanged`). The background one clears its
+    /// recovery record, so nothing retries, and Search offers the build at its
+    /// next look. Either way the rows are never used: the next build opens with
+    /// `dropIndex()`. It takes a one-row write failing straight after the COMMIT
+    /// of the whole index succeeded on the same connection — an I/O error, or
+    /// the disk filling in that instant.
     func build(progress: PSSearchProgressBlock?) throws {
         // Start fresh: if there's any prior DB, drop it. A half-built index is worse
         // than none.
@@ -381,6 +396,9 @@ final class PSSearchEngine {
     }
 
     /// The meta row. `module_version` is nil-safe because the column is TEXT.
+    ///
+    /// Best effort: a failure here is neither thrown nor logged. `build`'s doc
+    /// comment says what an unstamped index then costs.
     private func stampMeta() {
         let currentVersion = PSContentStore.shared?.moduleVersion(moduleName)
         guard let meta = try? prepare(

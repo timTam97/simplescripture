@@ -557,7 +557,8 @@ final class SearchIndexCoordinator {
         self.operationID = nil
         cancellation = nil
 
-        // A build that RETURNED has committed and stamped a complete index, so
+        // A build that RETURNED has committed a complete index (and stamped it,
+        // short of the stamp itself failing — see `PSSearchEngine.build`), so
         // the error decides first; the flag only tells a cancel from a failure.
         // The engine sees a cancel at its 500-row progress poll and nowhere
         // else, and the Cancel button is up for the whole build, so a tap after
@@ -965,8 +966,25 @@ final class SearchModel {
     /// suspended. Search then kept showing "No Search Index Installed" over the
     /// finished index, and its Build button — `PSSearchEngine.build` opens with
     /// `dropIndex()` — threw that index away and spent tens of seconds building
-    /// it again. A background build ends while the app is in the background, so
-    /// an activation always follows it; no callback from the manager is needed.
+    /// it again. A background build that ends while the app is in the background
+    /// is followed by an activation, which finds it here; the manager has no
+    /// callback.
+    ///
+    /// **A build still running AT the activation is not covered.** The look is
+    /// skipped while a build holds the gate (below), and nothing repeats it when
+    /// the build ends. The system expires a background build as the user comes
+    /// back, and one the engine can still stop throws and drops its index, so
+    /// the build prompt is then right. But the engine sees a cancel only at its
+    /// 500-row poll. Past the last one — the final 102 rows of the KJV's 31,102,
+    /// 215 of MHCC's 27,715, then the COMMIT and the stamp — the build cannot be
+    /// stopped and finishes just after the activation that did not look. Search
+    /// then shows "No Search Index Installed" over a fresh index, and Build Index
+    /// there drops and rebuilds it, until the next look: the next activation, a
+    /// module switch, "Find all occurrences" from a Strong's popup
+    /// (`startStrongsQuery`) or a relaunch. Left as it is on purpose. Closing it
+    /// takes a callback from the manager or a thread parked at the gate, for a
+    /// build that must be in its last few hundred rows at the moment the user
+    /// returns, with Search already configured and sitting on the build prompt.
     ///
     /// The same look turns an index that has gone missing into the build prompt,
     /// instead of a `.ready` that answers every query with nothing (`runQuery`
@@ -986,8 +1004,12 @@ final class SearchModel {
         // the engine, on the main thread, about a connection that build is
         // writing through and is about to close (`dropIndex`, on the cancel). The
         // answer is known without asking: a build stamps the index last, so
-        // while one is running there is no fresh index. If it does finish, the
-        // next activation finds it.
+        // while one is running there is no fresh index.
+        //
+        // Nothing is scheduled here. If the build does finish — a cancel raised
+        // after its last poll stops nothing — the state stays as it is until the
+        // next look, which for a user who stays on the build prompt is the next
+        // activation (see the doc comment).
         guard !indexCoordinator.isAnyBuildRunning else { return }
         indexCoordinator.refresh(module: module)
         if before != .ready, indexCoordinator.state == .ready {
