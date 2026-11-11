@@ -19,10 +19,10 @@
 //  `LaunchCoordinator.prepare()` runs in a `Task`; the view switches on
 //  `LaunchPhase` from `LaunchView` to the tab bar when it finishes. The ORDER is
 //  load-bearing: nothing may touch `PSModuleController`, the content store or the
-//  reader until `prepare()` has returned, because its one-shot migrations
-//  (`DefaultsLastRefValidated` in particular) can rewrite `lastRef` out from under
-//  a render. `ReadingWorkspaceModel.start()` is therefore called from the `.ready`
-//  transition, not from `init`.
+//  reader until `prepare()` has returned, because it can rewrite `lastRef` out
+//  from under a render: its `lastRef` check, which runs at every launch, resets a
+//  ref the reader cannot resolve. `ReadingWorkspaceModel.start()` is therefore
+//  called from the `.ready` transition, not from `init`.
 //
 //  ── Orientation ────────────────────────────────────────────────────────────
 //
@@ -116,8 +116,8 @@ private struct RootView: View {
             guard phase == .preparing else { return }
             phase = await prepare()
             if phase == .ready {
-                // Only now: the migrations can rewrite `lastRef`, and the reader
-                // renders from it.
+                // Only now: launch preparation can rewrite `lastRef`, and the
+                // reader renders from it.
                 reading.start()
                 session.replayPendingURL()
             }

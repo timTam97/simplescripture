@@ -1403,6 +1403,86 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// The `lastRef` check runs at EVERY launch, not once.
+    ///
+    /// It was gated on `DefaultsLastRefValidated`, on the assumption that
+    /// nothing after it could persist a ref the reader cannot resolve. The
+    /// `sword://` router then did: a book in capitals was tested as "MALACHI 3"
+    /// and stored as "MALACH1 3", on installs whose flag was long set. The
+    /// router is fixed, but nothing repaired what it had stored — a blank reader
+    /// at every launch, and in Debug the store's assertion before a held URL is
+    /// replayed — until some other navigation overwrote the ref.
+    ///
+    /// The real resolver, because the rule is the reader's: the check resets
+    /// exactly the refs the launch render would fail on. A ref it resolves is
+    /// left byte for byte, with its positions — "Gen 3" included, the
+    /// abbreviation the router stores as the link spelled it.
+    func testLaunchCoordinatorRepairsAnUnresolvableReferenceAtEveryLaunch() throws {
+        let resolver = try XCTUnwrap(PSBookOSISResolver.shared)
+        let suite: UserDefaults = defaults
+        // Nothing is created under it; the file sweeps find nothing to remove.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let coordinator = LaunchCoordinator(
+            defaults: suite,
+            notificationCenter: NotificationCenter(),
+            paths: LaunchCoordinator.Paths(
+                moduleRoot: root.appendingPathComponent("Documents").path,
+                appSupportRoot: root.appendingPathComponent("Caches").path,
+                installerRoot: root.appendingPathComponent("InstallMgr").path,
+                temporaryRoot: root.appendingPathComponent("MMM").path
+            ),
+            moduleControllerAvailable: { true },
+            resetModuleSelections: {},
+            currentReference: { suite.string(forKey: Defaults.lastRef) ?? "" },
+            referenceResolves: { resolver.resolve(ref: $0) != nil }
+        )
+        let positionKeys = [
+            Defaults.bibleVersePosition,
+            Defaults.commentaryVersePosition,
+            "bibleScrollPosition",
+            "commentaryScrollPosition",
+        ]
+
+        // An install that has launched before: the one-shot this used to be has
+        // run, and the old router has since stored a ref nothing resolves.
+        suite.set(true, forKey: Defaults.lastRefValidated)
+        suite.set("MALACH1 3", forKey: Defaults.lastRef)
+        suite.set("10", forKey: Defaults.bibleVersePosition)
+        suite.set("10", forKey: Defaults.commentaryVersePosition)
+        suite.set("2400", forKey: "bibleScrollPosition")
+        suite.set("900", forKey: "commentaryScrollPosition")
+
+        XCTAssertNotNil(coordinator.prepare())
+
+        XCTAssertEqual(suite.string(forKey: Defaults.lastRef), "Genesis 1")
+        // All four describe the chapter read before the bad ref, and the launch
+        // restore is by offset.
+        XCTAssertEqual(
+            positionKeys.map { suite.string(forKey: $0) },
+            ["1", "1", "0", "0"]
+        )
+        XCTAssertTrue(suite.bool(forKey: Defaults.lastRefValidated))
+
+        // A ref the reader resolves is not touched, and neither is its position.
+        for reference in ["John 3", "Gen 3", "1 Corinthians 13"] {
+            suite.set(reference, forKey: Defaults.lastRef)
+            suite.set("16", forKey: Defaults.bibleVersePosition)
+            suite.set("4", forKey: Defaults.commentaryVersePosition)
+            suite.set("640", forKey: "bibleScrollPosition")
+            suite.set("320", forKey: "commentaryScrollPosition")
+
+            XCTAssertNotNil(coordinator.prepare())
+
+            XCTAssertEqual(suite.string(forKey: Defaults.lastRef), reference)
+            XCTAssertEqual(
+                positionKeys.map { suite.string(forKey: $0) },
+                ["16", "4", "640", "320"],
+                "'\(reference)' resolves, and its position was reset"
+            )
+        }
+    }
+
     func testLaunchCoordinatorResetPreservesLegacyKeysAndNotifications() {
         defaults.set(true, forKey: "reset_PocketSword")
         defaults.set("John 3", forKey: Defaults.lastRef)

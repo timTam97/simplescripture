@@ -1425,8 +1425,8 @@ final class AppSession {
     /// from `replayPendingURL()`.
     ///
     /// `onOpenURL` can fire while `LaunchPhase` is still `.preparing`, and routing
-    /// then would render a chapter the `DefaultsLastRefValidated` migration is
-    /// about to rewrite.
+    /// then would render a chapter the launch `lastRef` check
+    /// (`LaunchCoordinator.prepare()`, at every launch) is about to rewrite.
     @ObservationIgnored private var pendingURL: URL?
     /// Launch preparation has finished (`replayPendingURL()`). Until then an
     /// inbound URL is parked (`open(_:)`) and an activation leaves the
