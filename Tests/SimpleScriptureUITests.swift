@@ -1021,6 +1021,91 @@ final class SimpleScriptureUITests: XCTestCase {
         )
     }
 
+    /// Turning the phone leaves the reader on the verse it was on, there and back.
+    ///
+    /// Only a rotation on a device can answer this. A width change re-wraps every
+    /// row, so the offset the reader held names different text afterwards, and
+    /// the reader re-anchors on the verse at its top instead
+    /// (`ReaderPaneModel.restoreAfterSizeChange`). The unit test for that proves
+    /// what the model tells `ScrollPosition`; where the scroll view comes to rest
+    /// once the system has resized it is measured here.
+    ///
+    /// The position is reached by finger, so the verse is one the view reported
+    /// and the row at the top is scrolled part-way out. MEASURED (iOS 27.2,
+    /// iPhone 18 Pro, 18 pt): three drags leave verse 15 with 68 pt of its row
+    /// under the navigation bar and verse 16 the first whole verse. Turned, verse
+    /// 15's number rests 0.1 pt above the bar's bottom edge, in landscape and
+    /// back in portrait, and the same on each of three turns there and back.
+    /// That snap to the top of the row being read is why the verse before the
+    /// first whole one is accepted, and no other.
+    ///
+    /// With the offset replayed, as it used to be, landscape came to rest with
+    /// verse 27 the first whole verse, eleven on: portrait's 1278 pt names verse
+    /// 26 in a chapter whose rows are half as tall.
+    ///
+    /// Judged by the verse numbers, not by the reference in the navigation bar.
+    @MainActor
+    func testRotatingTheReaderKeepsTheVerseBeingRead() throws {
+        // Registered before anything turns: a failure must not leave the device
+        // on its side for every test after this one.
+        addTeardownBlock { @MainActor in
+            XCUIDevice.shared.orientation = .portrait
+        }
+        app.terminate()
+        XCUIDevice.shared.orientation = .portrait
+        app.launchArguments += [
+            "-strongsPreference_KJV", "NO",
+            "-morphPreference_KJV", "NO",
+            "-footnotesPreference_KJV", "NO",
+            "-vplPreference_KJV", "YES",
+            "-fontSizePreference", "18",
+            // Rotation Lock is a saved setting, and a locked app does not turn.
+            "-rotationLockedPosition", "0",
+        ]
+        app.launch()
+        selectWorkspace("Read")
+        selectReadingMode("Bible")
+        selectGenesisChapter(1)
+        XCTAssertTrue(app.links["pslink://versemenu/1"].waitForExistence(timeout: 5))
+
+        dragTheReaderUp(times: 3)
+        let reading = try XCTUnwrap(
+            try verseAtTheTopOfTheReader(),
+            "The reader shows no verse number after scrolling."
+        )
+        XCTAssertGreaterThan(
+            reading.verse, 5,
+            "The drags did not take the reader into the chapter, so there is "
+                + "no position for a rotation to lose."
+        )
+
+        turnTheDevice(to: .landscapeLeft)
+        let onItsSide = try XCTUnwrap(
+            try verseAtTheTopOfTheReader(),
+            "The reader shows no verse number in landscape."
+        )
+        XCTAssertTrue(
+            (reading.verse - 1...reading.verse).contains(onItsSide.verse),
+            "Verse \(reading.verse) was the first whole verse in the reader; "
+                + "turned to landscape, verse \(onItsSide.verse) is."
+        )
+
+        turnTheDevice(to: .portrait)
+        let upright = try XCTUnwrap(
+            try verseAtTheTopOfTheReader(),
+            "The reader shows no verse number back in portrait."
+        )
+        XCTAssertTrue(
+            (reading.verse - 1...reading.verse).contains(upright.verse),
+            "Verse \(reading.verse) was the first whole verse in the reader; "
+                + "turned to landscape and back, verse \(upright.verse) is."
+        )
+        XCTAssertEqual(
+            upright.origin.x, reading.origin.x, accuracy: 1,
+            "The chapter came back from landscape shifted sideways."
+        )
+    }
+
     /// A Strong's number in the chapter text opens its lexicon entry. The reader's
     /// links are real accessibility elements carrying their `pslink://` target,
     /// so the whole tap path is driven from the test.
@@ -1312,6 +1397,97 @@ final class SimpleScriptureUITests: XCTestCase {
         app.buttons.matching(
             NSPredicate(format: "identifier ENDSWITH %@", "OverflowBarButtonItem")
         ).firstMatch
+    }
+
+    /// Scrolls the reader up by finger, each drag held still before the finger
+    /// lifts so the reader moves the drag's own length and does not coast.
+    @MainActor
+    private func dragTheReaderUp(times: Int) {
+        let reader = app.descendants(matching: .any)
+            .matching(identifier: "reading.chapter-content").firstMatch
+        XCTAssertTrue(reader.waitForExistence(timeout: 5))
+        for _ in 0..<times {
+            let start = reader.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.5, dy: 0.75)
+            )
+            let end = reader.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)
+            )
+            start.press(
+                forDuration: 0.05, thenDragTo: end,
+                withVelocity: .slow, thenHoldForDuration: 0.5
+            )
+        }
+    }
+
+    /// Turns the device and waits for the reader to have turned with it.
+    @MainActor
+    private func turnTheDevice(to orientation: UIDeviceOrientation) {
+        XCUIDevice.shared.orientation = orientation
+        let reader = app.descendants(matching: .any)
+            .matching(identifier: "reading.chapter-content").firstMatch
+        let turned = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                guard reader.exists else { return false }
+                let frame = reader.frame
+                return orientation.isLandscape
+                    ? frame.width > frame.height
+                    : frame.height > frame.width
+            },
+            object: nil
+        )
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [turned], timeout: 10), .completed,
+            "The reader did not turn with the device."
+        )
+    }
+
+    /// The reader's verse numbers and where each is drawn, top to bottom.
+    ///
+    /// From ONE snapshot of the hierarchy, so the frames belong to the same
+    /// instant. Asking each link for its frame is a query apiece, and a reader
+    /// that is still settling moves between them.
+    @MainActor
+    private func verseNumbersInTheReader() throws -> [(verse: Int, frame: CGRect)] {
+        let prefix = "pslink://versemenu/"
+        var found: [(verse: Int, frame: CGRect)] = []
+        func collect(_ element: XCUIElementSnapshot) {
+            if element.elementType == .link, element.identifier.hasPrefix(prefix),
+               let verse = Int(element.identifier.dropFirst(prefix.count)) {
+                found.append((verse: verse, frame: element.frame))
+            }
+            element.children.forEach(collect)
+        }
+        collect(try app.snapshot())
+        return found.sorted { $0.frame.minY < $1.frame.minY }
+    }
+
+    /// The first verse number inside the reading area, and where it is, once
+    /// the reader has come to rest: two looks half a second apart that agree.
+    ///
+    /// The reading area starts under the navigation bar. The scroll view itself
+    /// runs to the top of the screen, so a row scrolled part-way out still has
+    /// its number in the hierarchy, above that line.
+    @MainActor
+    private func verseAtTheTopOfTheReader(
+        timeout: TimeInterval = 10
+    ) throws -> (verse: Int, origin: CGPoint)? {
+        var last: (verse: Int, origin: CGPoint)?
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            let top = app.navigationBars.firstMatch.frame.maxY
+            let first = try verseNumbersInTheReader()
+                .first { $0.frame.minY >= top - 1 }
+                .map { (verse: $0.verse, origin: $0.frame.origin) }
+            if let first, let last, first.verse == last.verse,
+               abs(first.origin.x - last.origin.x) <= 0.5,
+               abs(first.origin.y - last.origin.y) <= 0.5 {
+                return first
+            }
+            last = first
+            Thread.sleep(forTimeInterval: 0.5)
+        } while Date() < deadline
+        return nil
     }
 
     /// Opens the reading toolbar's iOS 27 overflow menu.
