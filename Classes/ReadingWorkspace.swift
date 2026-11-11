@@ -268,6 +268,14 @@ final class ReaderPaneModel {
     /// `topmostVerseChanged` (the row at the top before it lands has not measured
     /// where it lands — see `shownVerseIsMeasured`).
     @ObservationIgnored private var outstandingOffsetRestore: CGFloat?
+    /// The scroll view's last laid-out report about the chapter it is showing.
+    /// EVERY one: those a size change suppresses and those inside the two-point
+    /// dead zone as well, which `lastScrollOffset` leaves out. nil until this
+    /// scroll view has reported on this chapter. `scroll(toOffset:)` reads it.
+    @ObservationIgnored private var reportedSample: ReaderScrollSample?
+    /// The chapter `document` holds, which is how a report is told from one
+    /// about the chapter before it.
+    @ObservationIgnored private var renderedRef: String?
     /// The verse the position keys pair with an offset restore, used for what
     /// `scrollOffsetChanged` persists until the view reports the topmost verse
     /// itself.
@@ -337,6 +345,11 @@ final class ReaderPaneModel {
     /// Renders `ref` into this pane now and applies `restore`. Bookmark highlight
     /// colours, verse anchors and link targets are all in the document value.
     func render(ref: String?, restore: PaneRestore) {
+        // What the scroll view last reported was about the chapter it had.
+        if ref != renderedRef {
+            reportedSample = nil
+            renderedRef = ref
+        }
         guard let ref else {
             document = ChapterDocument()
             return
@@ -485,9 +498,10 @@ final class ReaderPaneModel {
                     .string(forKey: versePositionKey)
                     .map { max(1, ($0 as NSString).integerValue) }
             }
-            // Issued either way. In place it asks for where the view already is.
+            // Asked for either way. In place it is where the view already is, and
+            // `scroll(toOffset:)` then issues nothing.
             Task { @MainActor [weak self] in
-                self?.scrollPosition.scrollTo(y: offset)
+                self?.scroll(toOffset: offset)
             }
         case .none:
             // A chapter change lands at the top, which is what
@@ -513,6 +527,7 @@ final class ReaderPaneModel {
             verseToShow = 0
             scrollPosition = ScrollPosition(idType: Int.self)
             scrollSurface += 1
+            reportedSample = nil
             // Persisted HERE because nothing else will. A scroll view that starts at
             // the top publishes no offset change and no new topmost verse, so the keys
             // would keep the position in the chapter being left — and `setToPreviousChapter`
@@ -609,6 +624,80 @@ final class ReaderPaneModel {
         }
     }
 
+    // MARK: Offset scrolls
+
+    /// Sends the scroll view to `offset`, unless it has said it is there already.
+    /// Called from the hop a scroll is deferred to.
+    ///
+    /// **An offset handed to `ScrollPosition` stays in it after the scroll view
+    /// has gone there, and SwiftUI applies it again whenever the content or the
+    /// container size changes — as a raw content offset.** `scrollTo(y:)` lands
+    /// inset-relative: 1099 rests at content offset (-16, 983) under a 116 pt
+    /// top inset and the 16 pt gutter. Applied again it is (0, 1099): the chapter
+    /// one top inset further on and flush against the left screen edge, and the
+    /// pane saved that as the reader's position. MEASURED (iOS 27.2): the lazy
+    /// stack re-measures its rows when the app goes to the background and on
+    /// the first accessibility read of the reader, so a position restored at
+    /// launch moved the first time the app was left, 3 launches in 3, and on by
+    /// another inset at every launch after it (1099, 1215, 1331, 1447). The same
+    /// after a bookmark was added, in the commentary, and after a rotation in
+    /// the flowing layout. Only a finger on the reader ended it: SwiftUI takes
+    /// the offset out itself when the user scrolls.
+    ///
+    /// So the offset is held only while the scroll is on its way.
+    /// `scrollOffsetChanged` takes it out when the scroll view reports that it
+    /// has arrived, and nothing is asked of a scroll view that is already
+    /// there: it would not move, so it would report nothing, and the offset
+    /// would stay. That is the size hook's replay once a restore has landed and
+    /// a bookmark change's redisplay in place.
+    ///
+    /// While it is held it can still be applied raw, by a size change that
+    /// arrives with the landing. MEASURED in a rotation of the flowing layout:
+    /// (-16, 349) and then (0, 427) in one layout pass. That is a container
+    /// change, so the size hook follows it, finds the scroll view somewhere
+    /// else and sends it back.
+    ///
+    /// The report is as current as it can be where this is called. A size
+    /// change publishes the scroll view's geometry in the layout pass that
+    /// fires the hook, ahead of the hop; a redisplay of the same chapter moves
+    /// nothing (MEASURED: a bookmark added at Genesis 1:16 left its number at
+    /// the same 130.5 pt); and a report about another chapter is dropped
+    /// (`render`).
+    private func scroll(toOffset offset: CGFloat) {
+        if let reportedSample, has(reportedSample, reached: offset) {
+            // Anything still held is not wanted either: an older offset this one
+            // supersedes.
+            takeOffsetOutOfScrollPosition()
+            return
+        }
+        scrollPosition.scrollTo(y: offset)
+    }
+
+    /// Whether `sample` has the scroll view at `offset` to the tolerance a scroll
+    /// counts as moved, or pinned at its end with `offset` beyond it, which is
+    /// as near as it gets. The two ways the restore gate in
+    /// `scrollOffsetChanged` is satisfied.
+    private func has(_ sample: ReaderScrollSample, reached offset: CGFloat) -> Bool {
+        let position = max(0, sample.offset)
+        if abs(position - offset) <= Self.scrollThreshold { return true }
+        return offset > sample.maxOffset
+            && position >= sample.maxOffset - Self.scrollThreshold
+    }
+
+    /// Leaves the scroll view where it is, with no offset for SwiftUI to apply
+    /// again.
+    ///
+    /// By `isPositionedByUser`, which is what a finger leaves behind and is
+    /// documented to clear the offset: the scroll view "acts as if it has been
+    /// positioned by the user". MEASURED (iOS 27.2): set as the landing is
+    /// reported, the scroll view does not move, and the re-measure in the
+    /// background leaves it at (-16, 983). Nothing else is touched, so a row id
+    /// or an edge the position holds is left alone.
+    private func takeOffsetOutOfScrollPosition() {
+        guard scrollPosition.y != nil else { return }
+        scrollPosition.isPositionedByUser = true
+    }
+
     // MARK: Verse position
 
     func setVerseToShow(_ verse: Int) {
@@ -689,10 +778,23 @@ final class ReaderPaneModel {
     /// and topmost verses from the old chapter in the 420 ms AFTER the new one's
     /// position was persisted, any of which would have overwritten it.
     func scrollOffsetChanged(_ sample: ReaderScrollSample, from surface: Int) {
-        guard surface == scrollSurface, !isRestoringAfterTransition else { return }
+        guard surface == scrollSurface else { return }
         // A scroll view with no content has not answered the question: its 0 is not
         // the top of the chapter, and persisting it would clobber the saved offset.
-        guard sample.isLaidOut else { return }
+        guard sample.isLaidOut else {
+            reportedSample = nil
+            return
+        }
+        // Ahead of the suppression below. Where the scroll view IS does not
+        // depend on whether the pane is taking its reports for scrolls, and an
+        // offset scroll that has arrived during a size change has arrived.
+        reportedSample = sample
+        if let asked = scrollPosition.y, has(sample, reached: asked) {
+            // The scroll view is where the offset sent it, so the offset comes
+            // out — see `scroll(toOffset:)`.
+            takeOffsetOutOfScrollPosition()
+        }
+        guard !isRestoringAfterTransition else { return }
         let normalized = max(0, sample.offset)
         if let target = outstandingOffsetRestore {
             if abs(normalized - target) <= Self.scrollThreshold {
@@ -873,12 +975,14 @@ final class ReaderPaneModel {
     ///
     /// **A height change replays the scroll offset; a width change re-anchors on
     /// the verse.** The hook fires for both. Height alone re-wraps nothing, so the
-    /// offset still names the same text and is preserved exactly. A width change
-    /// re-wraps every row, and the old width's offset names different text:
-    /// Genesis 1 with a row per verse is 4198 pt tall in portrait and about half
-    /// that in landscape, so the offset of verse 20 is past the end of the
-    /// landscape chapter. Replayed, it pinned the reader there, that was persisted
-    /// as the position, and rotating back replayed IT into the portrait layout.
+    /// offset still names the same text and is preserved exactly — which, for a
+    /// scroll view the change did not move, is by asking nothing of it (see
+    /// `scroll(toOffset:)`). A width change re-wraps every row, and the old
+    /// width's offset names different text: Genesis 1 with a row per verse is
+    /// 4198 pt tall in portrait and about half that in landscape, so the offset
+    /// of verse 20 is past the end of the landscape chapter. Replayed, it pinned
+    /// the reader there, that was persisted as the position, and rotating back
+    /// replayed IT into the portrait layout.
     ///
     /// The flowing layout keeps the offset on a width change too. A prose
     /// paragraph is one flowing `Text`, not one scroll target per verse, so
@@ -935,7 +1039,7 @@ final class ReaderPaneModel {
         Task { @MainActor [weak self] in
             guard let self else { return }
             if let restoreOffset {
-                self.scrollPosition.scrollTo(y: restoreOffset)
+                self.scroll(toOffset: restoreOffset)
             } else if let verseTarget {
                 self.scrollPosition.scrollTo(id: verseTarget, anchor: .top)
             }

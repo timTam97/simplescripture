@@ -4265,6 +4265,243 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// The offset an offset scroll hands to `ScrollPosition` comes out again once
+    /// the scroll view is there, and is not handed to one that already is.
+    ///
+    /// SwiftUI applies an offset it still holds again whenever the content size
+    /// changes, and as a raw content offset where `scrollTo(y:)` landed
+    /// inset-relative. MEASURED (iOS 27.2): a launch restore of 1099 rests at
+    /// content offset (-16, 983); left in the position, it became (0, 1099) when
+    /// the app went to the background — one top inset further on and flush
+    /// against the left screen edge — and that was saved, so every launch that
+    /// was left walked the reader on by the inset. 3 launches in 3.
+    ///
+    /// What is pinned, in the order a launch meets them:
+    ///
+    ///  * the offset is in the position while the scroll is on its way, and out
+    ///    of it as the landing is reported;
+    ///  * the size hook's replay does not put it back. The bars settle after the
+    ///    landing as well as before it, and a scroll view asked to go where it
+    ///    is reports nothing, so nothing would take it out again;
+    ///  * a size change the scroll view DID move through is still answered, and
+    ///    an arrival reported during one — when the pane is not taking reports
+    ///    for scrolls — still counts;
+    ///  * an offset past the end of the chapter comes out where the pane gives
+    ///    up on it;
+    ///  * everything else is as it was: a finger releases the gate and leaves
+    ///    the position to SwiftUI, a verse scroll's row is not disturbed by a
+    ///    late report, and a page turn's new scroll view has reported nothing.
+    @MainActor
+    func testAnOffsetIsTakenOutOfTheScrollPositionOnceTheScrollViewIsThere() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previousScroll = standard.string(forKey: scrollKey)
+        let previousVerse = standard.string(forKey: verseKey)
+        defer {
+            if let previousScroll {
+                standard.set(previousScroll, forKey: scrollKey)
+            } else {
+                standard.removeObject(forKey: scrollKey)
+            }
+            if let previousVerse {
+                standard.set(previousVerse, forKey: verseKey)
+            } else {
+                standard.removeObject(forKey: verseKey)
+            }
+        }
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 2999, containerHeight: 675)
+        }
+        // The hop a pane defers its scroll to.
+        let hop = { for _ in 0..<10 { await Task.yield() } }
+
+        // A launch: the scroll view is laid out at the top, then the restore.
+        standard.set("1099", forKey: scrollKey)
+        standard.set("14", forKey: verseKey)
+        let pane = ReaderPaneModel(mode: .bible)
+        let surface = pane.scrollSurface
+        pane.pendingRestore = .offset(1099)
+        pane.applyPendingWork()
+        pane.scrollOffsetChanged(sample(0), from: surface)
+        await hop()
+        XCTAssertEqual(pane.scrollPosition.y, 1099,
+                       "The restore was not handed to the scroll view.")
+        pane.scrollOffsetChanged(sample(400), from: surface)
+        XCTAssertEqual(pane.scrollPosition.y, 1099,
+                       "The offset was taken out before the scroll view got there.")
+
+        pane.scrollOffsetChanged(sample(1099), from: surface)
+        XCTAssertNil(pane.scrollPosition.y,
+                     "The restore has landed and its offset is still in the scroll "
+                         + "position, where the next content-size change applies it "
+                         + "again as a raw content offset.")
+        XCTAssertTrue(pane.scrollPosition.isPositionedByUser)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1099")
+
+        // The bars settle: height only, and the scroll view has not moved.
+        await sizeChange(pane, widthChanged: false)
+        XCTAssertNil(pane.scrollPosition.y,
+                     "The size hook put the offset back into a scroll view that "
+                         + "was already there, which reports nothing to end it.")
+
+        // A size change that moves the scroll view. What it publishes on the way
+        // is not a scroll, but it is where the scroll view is.
+        pane.prepareForSizeChange()
+        pane.scrollOffsetChanged(sample(700), from: surface)
+        pane.restoreAfterSizeChange(widthChanged: false)
+        await hop()
+        XCTAssertEqual(pane.scrollPosition.y, 1099,
+                       "The scroll view moved during a size change and was not "
+                           + "sent back.")
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1099",
+                       "An offset published during a size change was saved.")
+        // The next step of the size change begins before that lands, so the
+        // landing arrives while reports are not being taken for scrolls.
+        pane.prepareForSizeChange()
+        pane.scrollOffsetChanged(sample(1099), from: surface)
+        XCTAssertNil(pane.scrollPosition.y,
+                     "An arrival reported during a size change did not count.")
+        pane.restoreAfterSizeChange(widthChanged: false)
+        await hop()
+        XCTAssertNil(pane.scrollPosition.y)
+
+        // A saved offset past the end of the chapter: the scroll view pins at
+        // its end, the pane gives up on the target, and so does the position.
+        // No report before the hop this time, which is the other order a launch
+        // runs in.
+        standard.set("100000", forKey: scrollKey)
+        let short = ReaderPaneModel(mode: .bible)
+        short.pendingRestore = .offset(100_000)
+        short.applyPendingWork()
+        await hop()
+        XCTAssertEqual(short.scrollPosition.y, 100_000)
+        short.scrollOffsetChanged(sample(2324), from: short.scrollSurface)
+        XCTAssertNil(short.scrollPosition.y,
+                     "The scroll view is as near as it can get, and the offset "
+                         + "it cannot reach is still in the scroll position.")
+        XCTAssertEqual(standard.string(forKey: scrollKey), "2324")
+        await sizeChange(short, widthChanged: false)
+        XCTAssertNil(short.scrollPosition.y)
+
+        // A finger on the reader before the restore lands. The gate opens, as it
+        // did; the position is SwiftUI's to change, which it does as the user
+        // scrolls.
+        standard.set("1099", forKey: scrollKey)
+        let touched = ReaderPaneModel(mode: .bible)
+        touched.pendingRestore = .offset(1099)
+        touched.applyPendingWork()
+        touched.scrollOffsetChanged(sample(0), from: touched.scrollSurface)
+        await hop()
+        touched.userBeganScrolling()
+        XCTAssertEqual(touched.scrollPosition.y, 1099)
+        touched.scrollOffsetChanged(sample(300), from: touched.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "300")
+
+        // A verse scroll after an offset one replaces it, and a report that
+        // matches the old offset leaves the row alone.
+        let rows = ReaderPaneModel(mode: .bible)
+        rows.versePerLine = true
+        rows.document = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+        rows.pendingRestore = .offset(1099)
+        rows.applyPendingWork()
+        rows.scrollOffsetChanged(sample(0), from: rows.scrollSurface)
+        await hop()
+        rows.scrollToVerse(5)
+        await hop()
+        XCTAssertNil(rows.scrollPosition.y)
+        XCTAssertEqual(targetRow(of: rows), 5)
+        rows.scrollOffsetChanged(sample(1099), from: rows.scrollSurface)
+        XCTAssertEqual(targetRow(of: rows), 5,
+                       "A report at the old offset took the verse scroll's row "
+                           + "out of the scroll position.")
+        XCTAssertFalse(rows.scrollPosition.isPositionedByUser)
+
+        // A page turn starts a new scroll view, and what the old one last
+        // reported says nothing about it: an offset the old one was at is still
+        // handed over.
+        let paged = ReaderPaneModel(mode: .bible)
+        paged.scrollOffsetChanged(sample(1099), from: paged.scrollSurface)
+        paged.pendingRestore = .chapterStart
+        paged.applyPendingWork()
+        XCTAssertEqual(paged.scrollPosition, ScrollPosition(idType: Int.self))
+        paged.pendingRestore = .offset(1099)
+        paged.applyPendingWork()
+        await hop()
+        XCTAssertEqual(paged.scrollPosition.y, 1099,
+                       "A new scroll view was taken to be where the one it "
+                           + "replaced had been.")
+    }
+
+    /// A bookmark change redraws the chapter where it stands, and asks nothing
+    /// of a scroll view that is already there.
+    ///
+    /// The redraw is an offset restore to the pane's own saved offset. It was
+    /// handed to the scroll view all the same, and an offset the scroll view is
+    /// already at is never reported as reached, so it stayed in the scroll
+    /// position. MEASURED (iOS 27.2): add a bookmark at Genesis 1:16 and leave
+    /// the app — the reader came back 116 pt further on, at verse 18, with the
+    /// text flush against the left screen edge. With nothing asked, the redraw
+    /// holds its place (verse 16 at the same 130.5 pt before the bookmark, after
+    /// it, and after leaving the app).
+    ///
+    /// The last step is why the pane notes which chapter it rendered. An offset
+    /// for ANOTHER chapter is not where the scroll view is, whatever it last
+    /// reported: that report was about the chapter it had.
+    @MainActor
+    func testABookmarkRedisplayAsksNothingOfAScrollViewAlreadyThere() async {
+        let standard = UserDefaults.standard
+        let vplKey = standard.psModuleKey(Defaults.vplPreference, BundledModules.bible)
+        let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
+                    Defaults.commentaryVersePosition,
+                    "bibleScrollPosition", "commentaryScrollPosition", vplKey]
+        // By hand: `withPreservedReadingKeys` takes a synchronous closure.
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        standard.set(true, forKey: vplKey)
+        standard.set("Genesis 1", forKey: Defaults.lastRef)
+        standard.set("1", forKey: Defaults.bibleVersePosition)
+        standard.set("1", forKey: Defaults.commentaryVersePosition)
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+
+        // Reading Genesis 1 at verse 20, having scrolled there.
+        let workspace = ReadingWorkspaceModel()
+        workspace.displayChapter("Genesis 1", polling: .bible, restore: .verse)
+        let bible = workspace.bible
+        for _ in 0..<10 { await Task.yield() }
+        bible.scrollOffsetChanged(sample(2700.6), from: bible.scrollSurface)
+        bible.topmostVerseChanged(20, from: bible.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
+
+        // Add Bookmark, Save.
+        workspace.redisplayAfterBookmarksChange()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertNil(bible.scrollPosition.y,
+                     "A bookmark change handed the scroll view the offset it was "
+                         + "already at, where nothing takes it out again.")
+        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
+
+        // The same offset in the next chapter is somewhere the scroll view has
+        // not been.
+        standard.set("Genesis 2", forKey: Defaults.lastRef)
+        workspace.displayChapter("Genesis 2", polling: .bible, restore: .scroll)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(bible.scrollPosition.y, 2700,
+                       "An offset restore into another chapter was dropped on the "
+                           + "strength of a report about the chapter before it.")
+    }
+
     /// Picking the top of the chapter already open persists it.
     ///
     /// A verse scroll resets what the pane believes — offset 0, that verse — and
@@ -4673,11 +4910,25 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(standard.string(forKey: scrollKey), "1310")
         XCTAssertEqual(standard.string(forKey: verseKey), "20")
 
-        // Height alone, at this width: the offset still names the same text.
-        await sizeChange(pane, widthChanged: false)
+        // Height alone, at this width: the offset still names the same text. A
+        // scroll view the change has moved is sent back to it, not to the verse.
+        pane.prepareForSizeChange()
+        pane.scrollOffsetChanged(landscape(1250), from: surface)
+        pane.restoreAfterSizeChange(widthChanged: false)
+        for _ in 0..<10 { await Task.yield() }
         XCTAssertNil(targetRow(of: pane),
                      "A height change re-wraps nothing, and re-anchoring on the "
                          + "verse snaps a row scrolled part-way to its top.")
+        XCTAssertEqual(pane.scrollPosition.y, 1310)
+        pane.scrollOffsetChanged(landscape(1310), from: surface)
+        // One it has not moved is asked for nothing, the verse included. An
+        // offset handed to a scroll view that is already there stays in the
+        // scroll position — see
+        // `testAnOffsetIsTakenOutOfTheScrollPositionOnceTheScrollViewIsThere`.
+        await sizeChange(pane, widthChanged: false)
+        XCTAssertNil(targetRow(of: pane),
+                     "A height change that moved nothing re-anchored on the verse.")
+        XCTAssertNil(pane.scrollPosition.y)
 
         // And back to portrait.
         await sizeChange(pane, widthChanged: true)
