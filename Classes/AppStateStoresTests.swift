@@ -163,6 +163,119 @@ final class AppStateStoresTests: XCTestCase {
         )
     }
 
+    /// Every font the picker offers is one the system can supply.
+    ///
+    /// The list was carried over from the old app. A name with no font behind it
+    /// still takes the checkmark and is named in Settings, while `Font.custom`
+    /// draws a substitute face that is neither that font nor the app default.
+    ///
+    /// The lookup is spelled out here rather than borrowed from `StudyFonts`, so
+    /// the picker's list is checked against the system and not against itself.
+    func testFontPickerOffersOnlyFontsTheSystemCanSupply() {
+        func systemHas(_ name: String) -> Bool {
+            UIFont(name: name, size: 17) != nil
+                || !UIFont.fontNames(forFamilyName: name).isEmpty
+        }
+
+        XCTAssertEqual(
+            StudyFonts.all.filter { !systemHas($0) }, [],
+            "the picker offers fonts this system does not have"
+        )
+
+        // Against an over-eager filter. The two bundled faces resolve because the
+        // app registers them (`UIAppFonts`); "HelveticaNeue-Light" is one face's
+        // PostScript name, and Menlo, Optima and Bodoni 72 are families with no
+        // face of that name.
+        for name in [
+            AppConstants.defaultFontName, "Gentium Plus", "Ezra SIL",
+            "Times New Roman", "Arial", "Helvetica Neue", "HelveticaNeue-Light",
+            "Menlo", "Optima", "Bodoni 72",
+        ] {
+            XCTAssertTrue(StudyFonts.all.contains(name), "\(name) is no longer offered")
+        }
+
+        // A missing font file is not the test. These four have none on iOS 27.2,
+        // but the system answers for them with their successors (PingFang SC / TC,
+        // Kohinoor Bangla / Telugu). Where it does, they still work and stay.
+        for name in ["Heiti SC", "Heiti TC", "Bangla Sangam MN", "Telugu Sangam MN"]
+        where systemHas(name) {
+            XCTAssertTrue(StudyFonts.all.contains(name), "\(name) is no longer offered")
+        }
+    }
+
+    /// A saved font the system cannot supply renders as an absent key renders: in
+    /// the app default, not in whatever face `Font.custom` substitutes.
+    ///
+    /// The stored preference is left alone. Saved font preferences are not
+    /// migrated, so the font comes back if the system ever supplies it again.
+    func testASavedFontTheSystemLacksRendersAsTheDefault() {
+        withPreservedFontKeys { standard in
+            // Code2000 is no longer bundled, so no system has it.
+            XCTAssertNil(UIFont(name: "Code2000", size: 17))
+            standard.set("Code2000", forKey: Defaults.fontNamePreference)
+            XCTAssertEqual(
+                ChapterTextRenderer.Style.current().fontName,
+                AppConstants.defaultFontName
+            )
+            XCTAssertEqual(
+                standard.string(forKey: Defaults.fontNamePreference),
+                "Code2000",
+                "resolving the font rewrote the saved preference"
+            )
+
+            standard.set("Gentium Plus", forKey: Defaults.fontNamePreference)
+            XCTAssertEqual(
+                ChapterTextRenderer.Style.current().fontName,
+                "Gentium Plus"
+            )
+
+            standard.removeObject(forKey: Defaults.fontNamePreference)
+            XCTAssertEqual(
+                ChapterTextRenderer.Style.current().fontName,
+                AppConstants.defaultFontName
+            )
+        }
+    }
+
+    /// Settings names the font in effect, so its row, its preview line and the
+    /// picker's checkmark agree with what the reader draws — and showing it does
+    /// not write it back over the saved preference.
+    @MainActor
+    func testSettingsSnapshotShowsTheFontInEffect() {
+        defaults.set("Code2000", forKey: Defaults.fontNamePreference)
+        let store = SettingsStore(defaults: defaults)
+
+        XCTAssertEqual(store.snapshot().fontName, AppConstants.defaultFontName)
+
+        let model = SettingsModel(store: store)
+        model.reload()
+
+        XCTAssertEqual(model.fontName, AppConstants.defaultFontName)
+        XCTAssertEqual(
+            defaults.string(forKey: Defaults.fontNamePreference),
+            "Code2000",
+            "showing the font in effect rewrote the saved preference"
+        )
+    }
+
+    /// The two global font keys, which `ChapterTextRenderer.Style.current()` reads
+    /// from the standard defaults only.
+    private func withPreservedFontKeys(_ body: (UserDefaults) -> Void) {
+        let standard = UserDefaults.standard
+        let keys = [Defaults.fontNamePreference, Defaults.fontSizePreference]
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        body(standard)
+    }
+
     func testRotationLockUsesInterfaceOrientationRatherThanWindowShape() {
         XCTAssertEqual(
             RotationLock(interfaceOrientation: .landscapeLeft),

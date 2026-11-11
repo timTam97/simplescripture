@@ -29,8 +29,14 @@ final class SettingsStore {
     func snapshot() -> SettingsSnapshot {
         let savedFontSize = defaults.integer(forKey: Defaults.fontSizePreference)
         return SettingsSnapshot(
-            fontName: defaults.string(forKey: Defaults.fontNamePreference)
-                ?? AppConstants.defaultFontName,
+            // The font in effect, which is not always the one saved: a name the
+            // system cannot supply draws as the default (`StudyFonts.resolved`),
+            // and Settings must name the font the reader is drawing with. Nothing
+            // writes this back; `SettingsModel` saves a font only when the user
+            // picks one.
+            fontName: StudyFonts.resolved(
+                defaults.string(forKey: Defaults.fontNamePreference)
+            ),
             fontSize: savedFontSize == 0
                 ? AppConstants.defaultFontSize
                 : savedFontSize,

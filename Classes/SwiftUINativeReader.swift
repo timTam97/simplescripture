@@ -66,9 +66,12 @@ enum ChapterTextRenderer {
         /// chosen in Settings applies identically.
         static func current() -> Style {
             let defaults = UserDefaults.standard
-            var name = (defaults.object(forKey: Defaults.fontNamePreference) as? String)
-                ?? AppConstants.defaultFontName
-            if name.isEmpty { name = AppConstants.defaultFontName }
+            // A saved name the system cannot supply renders as an absent key
+            // renders, in the default face; the stored value is left alone. See
+            // `StudyFonts.resolved`.
+            let name = StudyFonts.resolved(
+                defaults.object(forKey: Defaults.fontNamePreference) as? String
+            )
             let size = defaults.integer(forKey: Defaults.fontSizePreference)
             return Style(
                 fontName: name,
