@@ -480,6 +480,14 @@ final class SearchIndexCoordinator {
         }
     }
 
+    /// Whether any index build is at work in this process right now — including
+    /// a background recovery build (`SearchIndexBackgroundManager`), which goes
+    /// through the same gate and reports nothing here. `isOperationActive` knows
+    /// only this coordinator's own.
+    var isAnyBuildRunning: Bool {
+        buildGate.isHeld
+    }
+
     func refresh(module: String?) {
         guard !isOperationActive else { return }
         guard let module else {
@@ -945,6 +953,47 @@ final class SearchModel {
         }
         if !indexCoordinator.build(module: module) {
             indexBuildFinished(module)
+        }
+    }
+
+    /// Re-checks the index when the app becomes active (the `.active` arm in
+    /// `SimpleScriptureApp`).
+    ///
+    /// The state is otherwise read once per module selection, and a background
+    /// recovery build (`SearchIndexBackgroundManager`) reports to no one: it can
+    /// finish an interrupted build inside this process while the app is
+    /// suspended. Search then kept showing "No Search Index Installed" over the
+    /// finished index, and its Build button — `PSSearchEngine.build` opens with
+    /// `dropIndex()` — threw that index away and spent tens of seconds building
+    /// it again. A background build ends while the app is in the background, so
+    /// an activation always follows it; no callback from the manager is needed.
+    ///
+    /// The same look turns an index that has gone missing into the build prompt,
+    /// instead of a `.ready` that answers every query with nothing (`runQuery`
+    /// checks freshness for itself).
+    func indexMayHaveChanged() {
+        // Unconfigured: `configure(...)` looks for itself, and an activation may
+        // arrive before launch preparation has finished, when the engine must
+        // not be touched.
+        guard let module else { return }
+        let before = indexCoordinator.state
+        // Only the two settled answers. A running build owns the state, and a
+        // cancelled / failed message stays up until the user acts on it.
+        guard before == .unavailable || before == .ready else { return }
+        // Not while a build is still at work. Coming back to the app is exactly
+        // when the system expires a background build, so of every caller of
+        // `refresh` this is the one likely to arrive mid-build — and it would ask
+        // the engine, on the main thread, about a connection that build is
+        // writing through and is about to close (`dropIndex`, on the cancel). The
+        // answer is known without asking: a build stamps the index last, so
+        // while one is running there is no fresh index. If it does finish, the
+        // next activation finds it.
+        guard !indexCoordinator.isAnyBuildRunning else { return }
+        indexCoordinator.refresh(module: module)
+        if before != .ready, indexCoordinator.state == .ready {
+            // As when a foreground build completes: run the query left waiting
+            // in the field.
+            scheduleSearch(immediate: true)
         }
     }
 

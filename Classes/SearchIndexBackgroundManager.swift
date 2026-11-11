@@ -11,6 +11,15 @@ final class SearchIndexBuildGate: @unchecked Sendable {
         defer { lock.unlock() }
         try operation()
     }
+
+    /// Whether a build is inside the gate right now, a foreground or a background
+    /// one. Never waits: it is asked on the main thread, when the app becomes
+    /// active (`SearchModel.indexMayHaveChanged`).
+    var isHeld: Bool {
+        guard lock.try() else { return true }
+        lock.unlock()
+        return false
+    }
 }
 
 final class SearchIndexBackgroundManager {

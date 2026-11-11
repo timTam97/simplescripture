@@ -2554,6 +2554,134 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(resets, 1)
     }
 
+    /// Search re-checks its index when the app becomes active.
+    ///
+    /// A foreground build that dies with the app is finished later by a
+    /// background task (`SearchIndexBackgroundManager`), which can run inside
+    /// this process while it is suspended and reports to no one. A Search
+    /// workspace left on "No Search Index Installed" kept saying so over the
+    /// finished index — nothing looked again short of a module switch or a
+    /// relaunch — and its Build button dropped that index and spent tens of
+    /// seconds rebuilding it. `indexMayHaveChanged()` is the activation hook:
+    /// it adopts the index and runs the query left waiting in the field.
+    ///
+    /// Two things it must NOT do are pinned with it. Before `configure(...)`
+    /// there is no module and nothing is asked: the first activation can
+    /// arrive during launch preparation, when the engine is off limits. And a
+    /// build still running is not asked either: coming back to the app is when
+    /// the system expires a background build, and the engine would be queried
+    /// on the main thread about a connection that build is about to close.
+    @MainActor
+    func testSearchAdoptsAnIndexBuiltOutsideTheWorkspace() async {
+        // What the engine would answer, and how often it was asked.
+        var fresh = false
+        var freshnessChecks = 0
+        let buildGate = SearchIndexBuildGate()
+        let collector = ExpressionCollector()
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in
+                    freshnessChecks += 1
+                    return fresh
+                },
+                buildGate: buildGate,
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, expression, _, _, _ in
+                collector.record(expression)
+                return []
+            }
+        )
+
+        // An activation before `configure(...)`: no module, nothing asked.
+        model.indexMayHaveChanged()
+        XCTAssertEqual(freshnessChecks, 0)
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+
+        // Search opens on the build prompt, and a query typed there waits.
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+        XCTAssertEqual(freshnessChecks, 1)
+        model.query = "love"
+        XCTAssertTrue(collector.snapshot().isEmpty)
+
+        // The background recovery build, through the gate it shares with the
+        // coordinator, held open mid-build.
+        defaults.set("KJV", forKey: Defaults.pendingSearchIndexModule)
+        let backgroundStarted = expectation(description: "Background build started")
+        let backgroundFinished = expectation(description: "Background build finished")
+        let releaseBackground = DispatchSemaphore(value: 0)
+        let manager = SearchIndexBackgroundManager(
+            defaults: defaults,
+            taskIdentifier: "test.search-index",
+            scheduler: SearchIndexBackgroundManager.Scheduler(
+                register: { _, _ in true },
+                submit: { _, completion in completion(nil) },
+                cancel: { _ in }
+            ),
+            buildGate: buildGate,
+            buildOperation: { _, _ in
+                backgroundStarted.fulfill()
+                releaseBackground.wait()
+            }
+        )
+        manager.performPendingBuild(cancellationRequested: { false }) { _, _ in
+            backgroundFinished.fulfill()
+        }
+        await fulfillment(of: [backgroundStarted], timeout: 2)
+
+        // An activation while it is still running leaves the engine alone.
+        model.indexMayHaveChanged()
+        XCTAssertEqual(
+            freshnessChecks,
+            1,
+            "The engine was asked about an index a build was still writing."
+        )
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+
+        // The build finishes: the index is fresh, and nothing has told Search.
+        releaseBackground.signal()
+        await fulfillment(of: [backgroundFinished], timeout: 2)
+        fresh = true
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+        XCTAssertTrue(collector.snapshot().isEmpty)
+
+        // The activation that follows adopts it and runs the waiting query.
+        model.indexMayHaveChanged()
+        XCTAssertEqual(
+            model.indexCoordinator.state,
+            .ready,
+            "Search kept the build prompt over an index built in the background."
+        )
+        await collector.wait(forCount: 1, in: self)
+        XCTAssertEqual(collector.snapshot().count, 1)
+        XCTAssertTrue(collector.snapshot().first?.contains("love") ?? false)
+
+        // A later activation finds nothing new and runs nothing.
+        model.indexMayHaveChanged()
+        XCTAssertEqual(model.indexCoordinator.state, .ready)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(
+            collector.snapshot().count,
+            1,
+            "An activation with nothing changed re-ran the query on screen."
+        )
+
+        // An index that has gone missing becomes the build prompt again, rather
+        // than a ready state that answers every query with nothing.
+        fresh = false
+        model.indexMayHaveChanged()
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []

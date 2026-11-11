@@ -80,6 +80,11 @@ struct SimpleScriptureApp: App {
                 appDelegate.session.resetOnActivationIfRequested {
                     appDelegate.launchCoordinator.resetPreferences()
                 }
+                // The search index can change behind a suspended app too: a
+                // background recovery build finishes there and tells no one. Inert
+                // until Search has been configured, so this does not reach the
+                // engine before launch preparation has finished either.
+                appDelegate.session.search.indexMayHaveChanged()
             @unknown default:
                 break
             }
