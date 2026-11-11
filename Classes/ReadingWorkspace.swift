@@ -30,7 +30,11 @@
 //    scrolling the old one to the top, which did not land reliably. The swap is
 //    also what the page-turn slide animates (`ReaderPaneModel.pageTurn`), so the
 //    scroll view being left stays on screen for the length of the slide — which
-//    is why every scroll callback names the surface it came from.
+//    is why every scroll callback names the surface it came from. The pane a page
+//    turn is DEFERRED into has its position keys reset when the turn is deferred,
+//    not when it drains, and keeps the turn through any redisplay in between
+//    (`ReaderPaneModel.deferRender`): until it has shown the new chapter its keys
+//    describe the old one, and a relaunch or a redisplay restores from them.
 //  * **`bibleScrollPosition` / `commentaryScrollPosition`** are raw `UserDefaults`
 //    string keys with no `Defaults` constant, written as `"%d"` of a `CGFloat`.
 //    They are persisted; `displayChapter`'s `.scroll` arm reads them back into an
@@ -184,7 +188,8 @@ final class ReaderPaneModel {
     }
 
     /// A chapter this pane should render the next time it appears, with the
-    /// position to restore. Set by `displayChapter` for the pane it did NOT poll.
+    /// position to restore. Set by `displayChapter` for the pane it did NOT poll,
+    /// through `deferRender(of:restore:)`.
     @ObservationIgnored var refToShow: String?
     @ObservationIgnored var pendingRestore: PaneRestore?
 
@@ -404,6 +409,12 @@ final class ReaderPaneModel {
             // arriving has a row with the same id.
             outstandingOffsetRestore = nil
             lastScrollOffset = 0
+            // A verse scroll armed before the page turn is spent by it. A `.verse`
+            // load arms one on both panes, and a deferred pane that keeps its page
+            // turn through that load (`deferRender`) drains here rather than through
+            // `.verse`, which is what would have cleared it. Left armed, it scrolls
+            // the pane to that verse the next time it appears with nothing owed.
+            verseToShow = 0
             scrollPosition = ScrollPosition(idType: Int.self)
             scrollSurface += 1
             // Persisted HERE because nothing else will. A scroll view that starts at
@@ -411,7 +422,63 @@ final class ReaderPaneModel {
             // would keep the position in the chapter being left — and `setToPreviousChapter`
             // has just written the destination's LAST verse into the verse key. A
             // relaunch (`.scroll`) or a display toggle (`.verse`) would land there.
+            // (A DEFERRED page turn has had the same two keys written already, by
+            // `deferRender`; this also retitles.)
             persistPosition(verse: 1, scrollOffset: 0)
+        }
+    }
+
+    /// Hands this pane `ref` to render the next time it appears, restoring
+    /// `restore` — unless what the pane already owes says more about where it
+    /// should open than `restore` does.
+    ///
+    /// **`restore` is built from this pane's position keys, and those describe
+    /// the chapter the pane last SHOWED.** A pane that owes a render is about to
+    /// show a different one, so:
+    ///
+    ///  * **A page turn settles the keys here, at defer time.** The pane itself
+    ///    writes verse 1 / offset 0 only when it drains (`apply(.chapterStart)`).
+    ///    Until then a relaunch restores the old chapter's offset in the new one,
+    ///    and every other load rebuilds this deferral from the old chapter's verse
+    ///    — paging BACK guarantees a wrong one, because `setToPreviousChapter`
+    ///    writes the destination's last verse into the commentary's key.
+    ///  * **An owed page turn outlasts a redisplay.** With the keys settled, a
+    ///    display toggle or a font change arrives as `.verse(1)` and a bookmark
+    ///    change as `.offset(0)`. Neither is a chapter start: `.offset(0)` does not
+    ///    scroll at all, so the pane would show the new chapter wherever its
+    ///    scroll view was left in the old one.
+    ///  * **A verse past the first wins**, over an owed page turn too. That is
+    ///    somebody naming a verse: the reference picker, or a `sword://` route —
+    ///    which writes the BIBLE's verse key for a commentary destination as
+    ///    well. Draining `.chapterStart` instead would persist verse 1 over it.
+    ///  * **An offset, or no saved position at all, never replaces an owed verse
+    ///    or chapter start.** A bookmark added after picking John 3:16 would
+    ///    otherwise open the commentary's John 3 at the offset it was left at in
+    ///    whatever chapter it last showed.
+    func deferRender(of ref: String?, restore: PaneRestore) {
+        // Only a restore owed WITH a render counts. One on its own is
+        // `showInCommentary`'s, and is consumed by the switch that follows it.
+        let owed = refToShow == nil ? nil : pendingRestore
+        refToShow = ref
+        switch restore {
+        case .chapterStart:
+            pendingRestore = .chapterStart
+            // The bytes `persistPosition(verse: 1, scrollOffset: 0)` writes, without
+            // the rest of it: `currentShownVerse` still belongs to the scroll view
+            // this pane is holding, and `displayChapter` titles both panes itself.
+            let defaults = UserDefaults.standard
+            defaults.set("0", forKey: scrollPositionKey)
+            defaults.set("1", forKey: versePositionKey)
+        case .verse(let verse) where verse > 1:
+            pendingRestore = restore
+        case .verse:
+            pendingRestore = owed == .chapterStart ? .chapterStart : restore
+        case .offset, .none:
+            if case .offset? = owed {
+                pendingRestore = restore
+            } else {
+                pendingRestore = owed ?? restore
+            }
         }
     }
 
@@ -962,7 +1029,8 @@ final class ReadingWorkspaceModel {
     ///     rendering MHCC. An inbound `sword://` route must DISCARD that deferral
     ///     rather than drain it — see `showRoutedMode(_:)`.
     ///  2. **Each pane's restore is built from its own verse-position pref**; they
-    ///     track position independently.
+    ///     track position independently. The deferred pane's may be overruled by
+    ///     what it already owes — `ReaderPaneModel.deferRender(of:restore:)`.
     ///  3. **Each pane's title verse comes from that pane's OWN verse-position
     ///     pref.** Sharing one value would title the Bible pane with a stale
     ///     commentary verse on a `.verse` restore (e.g. "John 3:4" while scrolled to
@@ -1001,7 +1069,8 @@ final class ReadingWorkspaceModel {
             }
         case .none:
             // Paging — the only caller that passes `.none`. Each pane starts the new
-            // chapter on a new scroll surface, the deferred one when it is drained.
+            // chapter on a new scroll surface, the deferred one when it is drained
+            // (its position keys are reset now, not then — see `deferRender`).
             bibleRestore = .chapterStart
             commentaryRestore = .chapterStart
         }
@@ -1017,21 +1086,17 @@ final class ReadingWorkspaceModel {
             bible.refToShow = nil
             bible.pendingRestore = nil
             bible.render(ref: ref, restore: bibleRestore)
-            commentary.refToShow = ref
-            commentary.pendingRestore = commentaryRestore
+            commentary.deferRender(of: ref, restore: commentaryRestore)
         case .commentary:
             polledPane = commentary
             commentary.refToShow = nil
             commentary.pendingRestore = nil
             commentary.render(ref: ref, restore: commentaryRestore)
-            bible.refToShow = ref
-            bible.pendingRestore = bibleRestore
+            bible.deferRender(of: ref, restore: bibleRestore)
         case .none:
             polledPane = nil
-            bible.refToShow = ref
-            bible.pendingRestore = bibleRestore
-            commentary.refToShow = ref
-            commentary.pendingRestore = commentaryRestore
+            bible.deferRender(of: ref, restore: bibleRestore)
+            commentary.deferRender(of: ref, restore: commentaryRestore)
         }
 
         // `mode`'s `didSet` drains a pane when it APPEARS; this drains one that is
@@ -1148,14 +1213,18 @@ final class ReadingWorkspaceModel {
     /// It polls the Bible even when the commentary is showing (a bookmark edited
     /// in the Library). `displayChapter` then re-renders the commentary as well,
     /// at its own offset, rather than leaving it a deferral it would not drain.
-    private func redisplayAfterBookmarksChange() {
-        bible.refToShow = nil
-        bible.pendingRestore = nil
-        displayChapter(
-            PSModuleController.getCurrentBibleRef(),
-            polling: .bible,
-            restore: .scroll
-        )
+    ///
+    /// **Unless the Bible owes a render.** It is hidden then, and it reads the
+    /// bookmarks when it drains. Polling it here would spend the chapter start or
+    /// the verse it owes on its offset key, which is where it was last LEFT —
+    /// after a page turn that is 0, which does not scroll, so the Bible would
+    /// show the new chapter wherever its scroll view sat in the old one. The pane
+    /// on screen is polled instead, and `deferRender` keeps what the Bible owes.
+    ///
+    /// Not `private` so that a test can call it: posting `bookmarksChanged` on the
+    /// shared centre would reach the host app's own workspace as well.
+    func redisplayAfterBookmarksChange() {
+        redisplay(pane: bible.refToShow == nil ? .bible : mode, restore: .scroll)
     }
 
     // MARK: Chapter paging

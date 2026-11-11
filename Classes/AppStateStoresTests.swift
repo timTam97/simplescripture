@@ -2502,6 +2502,162 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// A page turn owed to the pane that is not on screen is settled in that
+    /// pane's keys when it is deferred, and is still a page turn when it drains.
+    ///
+    /// Only the rendered pane used to write verse 1 / offset 0. The other pane's
+    /// keys went on describing the chapter it last showed, and every later load
+    /// rebuilt its deferral from them: a display toggle or a font change turned
+    /// the owed chapter start into the old chapter's verse, a bookmark add into
+    /// the old chapter's offset, and a relaunch read that offset straight back.
+    @MainActor
+    func testADeferredPageTurnSurvivesARedisplay() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            standard.set("20", forKey: Defaults.commentaryVersePosition)
+            standard.set("4000", forKey: "commentaryScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+
+            workspace.nextChapter()
+            XCTAssertEqual(standard.string(forKey: Defaults.commentaryVersePosition), "1",
+                           "The commentary's verse is still the one in the chapter being left.")
+            XCTAssertEqual(standard.string(forKey: "commentaryScrollPosition"), "0",
+                           "A relaunch would open the new chapter at the old one's offset.")
+
+            // Paging BACK needs no earlier visit to the commentary to go wrong:
+            // `setToPreviousChapter` writes the destination's LAST verse into the
+            // commentary's key itself.
+            workspace.previousChapter()
+            XCTAssertEqual(standard.string(forKey: Defaults.commentaryVersePosition), "1")
+
+            // A display toggle or a font change...
+            workspace.redisplay(pane: .bible, restore: .verse)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
+            // ...and a bookmark added from the verse menu.
+            workspace.redisplayAfterBookmarksChange()
+            XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
+
+            let surface = workspace.commentary.scrollSurface
+            workspace.mode = .commentary
+            XCTAssertEqual(workspace.commentary.scrollSurface, surface + 1,
+                           "The page turn drained as something other than a chapter start.")
+            XCTAssertNil(workspace.commentary.pendingRestore)
+        }
+    }
+
+    /// The mirror: paging in the commentary owes the BIBLE a chapter start.
+    ///
+    /// Its offset key is what a relaunch restores (the app always relaunches into
+    /// the Bible), and a Library bookmark edit used to render the hidden Bible
+    /// there and then at that old offset, throwing the owed page turn away. The
+    /// edit now re-renders the pane on screen and leaves the Bible what it owes.
+    @MainActor
+    func testPagingFromTheCommentaryLeavesTheBibleAtTheChapterStart() {
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            standard.set("20", forKey: Defaults.bibleVersePosition)
+            standard.set("1500", forKey: "bibleScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+            workspace.mode = .commentary
+
+            workspace.nextChapter()
+            XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "0",
+                           "A relaunch would open John 4 at John 3's offset.")
+
+            // A render re-reads the font size, which is how this tells that one ran:
+            // the document it builds is equal to the one it replaces, and an
+            // `@Observable` property set to an equal value notifies nobody.
+            let fontSize = standard.object(forKey: Defaults.fontSizePreference)
+            defer {
+                if let fontSize {
+                    standard.set(fontSize, forKey: Defaults.fontSizePreference)
+                } else {
+                    standard.removeObject(forKey: Defaults.fontSizePreference)
+                }
+            }
+            let probe = Int(workspace.commentary.textStyle.fontSize) + 3
+            standard.set(probe, forKey: Defaults.fontSizePreference)
+
+            workspace.redisplayAfterBookmarksChange()
+            XCTAssertEqual(workspace.bible.pendingRestore, .chapterStart,
+                           "A bookmark edit spent the Bible's page turn while it was hidden.")
+            XCTAssertEqual(
+                PSModuleController.createRefString(workspace.bible.refToShow), "John 4"
+            )
+            // Leaving the Bible alone must not mean leaving the edit unseen: the
+            // commentary's highlights are bookmarks too, and it is the pane on screen.
+            XCTAssertEqual(workspace.commentary.textStyle.fontSize, CGFloat(probe),
+                           "The bookmark edit re-rendered neither pane.")
+
+            // The keep rule is for a restore that names no verse. A commentary
+            // route writes the Bible's verse too (`ReadingStateStore.persist`), and
+            // that verse has to win over the owed chapter start: draining
+            // `.chapterStart` would persist verse 1 over it.
+            standard.set("16", forKey: Defaults.bibleVersePosition)
+            workspace.redisplay(pane: .commentary, restore: .verse)
+            XCTAssertEqual(workspace.bible.pendingRestore, .verse(16))
+        }
+    }
+
+    /// A chapter start replaces a verse scroll that was armed before it.
+    ///
+    /// A `.verse` load arms `verseToShow` on both panes, and the deferred pane's
+    /// copy is spent by the `.verse` restore it drains with. Draining a kept
+    /// `.chapterStart` instead left it armed, and the next time the pane appeared
+    /// with nothing owed it scrolled to that verse.
+    @MainActor
+    func testAChapterStartDisarmsAVerseScrollArmedBeforeIt() {
+        withPreservedPanePositionKeys { standard, scrollKey in
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.setVerseToShow(7)
+            pane.pendingRestore = .chapterStart
+            pane.applyPendingWork()
+
+            // The reader scrolls on into the chapter...
+            let resting = ReaderScrollSample(
+                offset: 700, contentHeight: 2138, containerHeight: 675
+            )
+            pane.scrollOffsetChanged(resting, from: pane.scrollSurface)
+            pane.topmostVerseChanged(9, from: pane.scrollSurface)
+            // ...and the pane appears again with nothing owed.
+            pane.applyPendingWork()
+
+            // A scroll to verse 7 resets where the pane thinks it is, so the same
+            // resting offset then reads as a move and is persisted against verse 7.
+            pane.scrollOffsetChanged(resting, from: pane.scrollSurface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "9",
+                           "A verse scroll armed before the page turn ran after it.")
+            XCTAssertEqual(standard.string(forKey: scrollKey), "700")
+        }
+    }
+
+    /// A bookmark add re-renders the Bible at its scroll OFFSET, and used to hand
+    /// the other pane an offset as well — its own key, which describes whatever
+    /// chapter that pane last showed — over the verse it had been sent to in
+    /// this one.
+    @MainActor
+    func testABookmarkChangeKeepsTheVerseADeferredPaneWasSentTo() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            standard.set("4000", forKey: "commentaryScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+
+            workspace.selectReference(bookName: "John", chapter: 3, verse: 16)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .verse(16))
+
+            workspace.redisplayAfterBookmarksChange()
+            XCTAssertEqual(workspace.commentary.pendingRestore, .verse(16),
+                           "The commentary will open John 3 at Genesis 1's offset.")
+
+            // A pane that has never been shown has no offset key at all, and "no
+            // position" says no more about this chapter than another one's offset.
+            standard.removeObject(forKey: "commentaryScrollPosition")
+            workspace.redisplayAfterBookmarksChange()
+            XCTAssertEqual(workspace.commentary.pendingRestore, .verse(16),
+                           "The commentary will open John 3 at the top, not at the verse.")
+        }
+    }
+
     // MARK: Page-turn slide
 
     /// The scroll view a page turn leaves stays on screen until its slide ends,
