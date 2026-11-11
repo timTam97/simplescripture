@@ -369,22 +369,11 @@ private struct SearchResultList: View {
                     }
                 }
             } header: {
-                // A list cut at the cap is not a count of the matches, and the
-                // bare number passed the cap off as one. "First" says there are
-                // more, further on in the Bible than the list goes (the rows
-                // are in canonical order).
                 Text(
-                    resultsWereTruncated
-                        ? LocalizedStringResource(
-                            "SearchResultCountTruncatedFormat",
-                            defaultValue: "First \(results.count) Results",
-                            comment: "Search result count when the list was cut at the cap; the variable is the number of results listed."
-                        )
-                        : LocalizedStringResource(
-                            "SearchResultCountFormat",
-                            defaultValue: "\(results.count) Results",
-                            comment: "Search result count; the variable is the count."
-                        )
+                    SearchResultCountText.resource(
+                        count: results.count,
+                        truncated: resultsWereTruncated
+                    )
                 )
             }
         }
@@ -396,6 +385,39 @@ private struct SearchResultList: View {
                     .padding()
             }
         }
+    }
+}
+
+/// The result list's header: how many verses it lists.
+///
+/// Out of the list's body so that a test can read the words.
+enum SearchResultCountText {
+    static func resource(count: Int, truncated: Bool) -> LocalizedStringResource {
+        if truncated {
+            // A list cut at the cap is not a count of the matches, and the
+            // bare number passed the cap off as one. "First" says there are
+            // more, further on in the Bible than the list goes (the rows
+            // are in canonical order).
+            return LocalizedStringResource(
+                "SearchResultCountTruncatedFormat",
+                defaultValue: "First \(count) Results",
+                comment: "Search result count when the list was cut at the cap; the variable is the number of results listed."
+            )
+        }
+        if count == 1 {
+            // One verse found read "1 Results": an Exact phrase often finds
+            // exactly one.
+            return LocalizedStringResource(
+                "SearchResultCountOne",
+                defaultValue: "1 Result",
+                comment: "Search result count when exactly one result was found."
+            )
+        }
+        return LocalizedStringResource(
+            "SearchResultCountFormat",
+            defaultValue: "\(count) Results",
+            comment: "Search result count; the variable is the count."
+        )
     }
 }
 

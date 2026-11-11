@@ -3291,6 +3291,25 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(bare.highlightTerms(orQuery: []), [])
     }
 
+    /// One verse found is "1 Result".
+    ///
+    /// The header's count had the one form, and a search that found a single
+    /// verse read "1 Results" — as an Exact phrase often does (`light and there
+    /// was light` finds Genesis 1:3 and nothing else). Seen on the simulator
+    /// while checking the search highlight.
+    func testASingleResultIsCountedInTheSingular() {
+        func header(_ count: Int, truncated: Bool = false) -> String {
+            String(localized: SearchResultCountText.resource(count: count, truncated: truncated))
+        }
+
+        XCTAssertEqual(header(1), "1 Result")
+        XCTAssertEqual(header(2), "2 Results")
+        XCTAssertEqual(header(471), "471 Results")
+        // The cut list keeps its own words; it is never one row long.
+        XCTAssertEqual(header(1_000, truncated: true),
+                       "First \(1_000.formatted()) Results")
+    }
+
     /// A search that matches more verses than the list holds is cut at the cap,
     /// and says it was cut.
     ///
