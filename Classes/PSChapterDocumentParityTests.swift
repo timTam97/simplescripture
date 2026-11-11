@@ -1403,6 +1403,59 @@ final class PSChapterDocumentParityTests: XCTestCase {
         )
     }
 
+    // MARK: - Heading links
+
+    /// The markers in a Psalm's title are links the reader's tap handler reads.
+    ///
+    /// A title has Strong's and morph markers of its own — 116 of the KJV's 138
+    /// canonical headings carry a Strong's token — and they are drawn as the
+    /// raised grey markers the verse text has. The heading row sat outside the
+    /// verse text's link routing, so a tap on one went to the system, which has
+    /// nothing registered for `pslink://`, and did nothing.
+    ///
+    /// This pins the two ends a unit test can reach: the title's rendered text
+    /// carries every marker's link as a URL, and each URL decodes back to the
+    /// typed link the pane routes. What joins them is a view's environment —
+    /// `routesChapterLinks(to:)` on the heading row's `Text` — and that the tap
+    /// reaches the pane can only be seen by tapping one.
+    @MainActor
+    func testAPsalmTitlesMarkersAreLinksTheReaderRoutes() throws {
+        let style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        let psalmBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "Psalms 3", options: .allOn, kind: .bible))
+        let title = try XCTUnwrap(
+            psalmBoth.document.verses.flatMap(\.headings).first { $0.isCanonical },
+            "Psalms 3 has no canonical title"
+        )
+        let typed = title.runs.filter { !$0.text.isEmpty }.compactMap(\.link)
+        // `A Psalm<04210>` — in Psalms 3 that number is in the title alone.
+        XCTAssertTrue(
+            typed.contains(.strongs(type: "Hebrew", value: "04210")),
+            "the title carries no Strong's link for 'A Psalm': \(typed)"
+        )
+        XCTAssertTrue(
+            typed.contains { link in
+                if case .morph = link { return true }
+                return false
+            },
+            "the title carries no morph link: \(typed)"
+        )
+
+        let text = ChapterTextRenderer.text(for: title, style: style)
+        var routed: [InlineLink] = []
+        for run in text.runs {
+            guard let url = run.link else { continue }
+            routed.append(try XCTUnwrap(
+                InlineLink(url: url),
+                "the title's link \(url) is not one the reader's handler reads"
+            ))
+        }
+        XCTAssertEqual(routed, typed,
+                       "the title's text does not carry its markers' links")
+    }
+
     // MARK: - Search highlighting across markers
 
     /// The search terms are matched against the verse's words; the markers between

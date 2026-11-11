@@ -548,6 +548,35 @@ private extension View {
             )
         }
     }
+
+    /// Routes taps on the links in this view's text to the pane.
+    ///
+    /// Links reach the string as `pslink://` URLs and are turned back into typed
+    /// `InlineLink`s here. An `openURL` environment override is used rather than
+    /// `onOpenURL`: the latter is for URLs from outside the app, and would send a
+    /// Strong's tap out through `AppSession`'s `sword://` router.
+    ///
+    /// **On EVERY `Text` that can carry a link, a heading's included.** A Psalm
+    /// title has Strong's and morph markers of its own (116 of the KJV's 138
+    /// canonical headings carry a Strong's token), and its row is a sibling of the
+    /// verse text, not inside it — an override on the verse text does not reach
+    /// it. Without this the title's markers are drawn like the ones in the verse
+    /// below and a tap on one goes to the system, which has nothing registered
+    /// for `pslink://`: nothing happens.
+    ///
+    /// `.handled` is claimed only for a link the pane takes. Anything else is left
+    /// to the system; a `.handled` with no handler behind it swallows the tap.
+    func routesChapterLinks(to pane: ReaderPaneModel) -> some View {
+        environment(\.openURL, OpenURLAction { url in
+            guard let link = InlineLink(url: url) else {
+                // Not one of ours — let the system have it. MHCC's own
+                // `sword://` scripture links arrive here.
+                return .systemAction
+            }
+            pane.handle(link: link)
+            return .handled
+        })
+    }
 }
 
 struct VerseTextAttribute: TextAttribute {
@@ -671,7 +700,7 @@ private struct ParagraphRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(paragraph.headings.enumerated()), id: \.offset) { _, heading in
-                HeadingRow(heading: heading, style: style)
+                HeadingRow(heading: heading, pane: pane, style: style)
             }
             // A paragraph can be the intro alone, with its title hoisted into the
             // heading above and no text left: 117 psalms open `PSALM n.` and then
@@ -724,7 +753,7 @@ private struct VerseRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(verse.headings.enumerated()), id: \.offset) { _, heading in
-                HeadingRow(heading: heading, style: style)
+                HeadingRow(heading: heading, pane: pane, style: style)
             }
             // The intro has no label, and none of its own text once its title has
             // been hoisted into the heading above (`CHAPTER n.`, with Headings on).
@@ -753,8 +782,13 @@ private struct VerseRow: View {
     }
 }
 
+/// A heading above a verse or a paragraph: a chapter title, or a Psalm's own.
+///
+/// Takes the pane for its links alone (`routesChapterLinks(to:)`): a Psalm
+/// title's Strong's and morph markers are as tappable as the verse's.
 private struct HeadingRow: View {
     let heading: ChapterHeading
+    let pane: ReaderPaneModel
     let style: ChapterTextRenderer.Style
 
     var body: some View {
@@ -763,15 +797,12 @@ private struct HeadingRow: View {
             .padding(.top, style.fontSize * 0.7)
             .padding(.bottom, style.fontSize * 0.3)
             .accessibilityAddTraits(.isHeader)
+            .routesChapterLinks(to: pane)
     }
 }
 
-/// A `Text` that routes taps on its links.
-///
-/// Links reach the string as `pslink://` URLs and are turned back into typed
-/// `InlineLink`s here. An `openURL` environment override is used rather than
-/// `onOpenURL`: the latter is for URLs from outside the app, and would send a
-/// Strong's tap out through `AppSession`'s `sword://` router.
+/// The verse text of a row, with its links routed to the pane
+/// (`routesChapterLinks(to:)`).
 private struct ChapterRunsText: View {
     let text: Text
     let pane: ReaderPaneModel
@@ -786,15 +817,7 @@ private struct ChapterRunsText: View {
             )
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .environment(\.openURL, OpenURLAction { url in
-                guard let link = InlineLink(url: url) else {
-                    // Not one of ours — let the system have it. MHCC's own
-                    // `sword://` scripture links arrive here.
-                    return .systemAction
-                }
-                pane.handle(link: link)
-                return .handled
-            })
+            .routesChapterLinks(to: pane)
     }
 }
 
