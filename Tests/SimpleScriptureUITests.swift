@@ -459,23 +459,6 @@ final class SimpleScriptureUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Select Book"].waitForNonExistence(timeout: 5))
     }
 
-    /// The reader's overflow-menu "History and Search" action switches to the
-    /// Search workspace (a tab selection, not a sheet presentation).
-    @MainActor
-    func testReadingOverflowMenuOpensTheSearchWorkspace() throws {
-        selectWorkspace("Read")
-        openReadingOverflowMenu()
-
-        // Matched by label: UIKit renders a SwiftUI menu's rows as cells that
-        // expose their title but drop the accessibility identifier.
-        let historyAndSearch = app.buttons["History and Search"]
-        XCTAssertTrue(historyAndSearch.waitForExistence(timeout: 5))
-        historyAndSearch.tap()
-
-        XCTAssertTrue(app.navigationBars["Search"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.searchFields["Search"].waitForExistence(timeout: 5))
-    }
-
     /// Tapping a search result while the keyboard is still up opens the reader ON
     /// that verse.
     ///
@@ -902,6 +885,14 @@ final class SimpleScriptureUITests: XCTestCase {
         }
     }
 
+    /// The reader's ••• menu is the active module's display toggles and nothing
+    /// else, and a module with none has no ••• button at all.
+    ///
+    /// Only a UI run can see the button: it is the system's, drawn while a
+    /// `ToolbarOverflowMenu` is declared. Declared with nothing in it, it was
+    /// still drawn for the commentary, where this test used to find it, tap it
+    /// and get an empty menu. MEASURED (iOS 27.2) with no menu declared: no
+    /// button, and the rest of the bar stays where it was.
     @MainActor
     func testDisplayTogglesAppearForBibleAndNotCommentary() throws {
         // NB: UIKit renders a SwiftUI menu's rows as cells that expose their LABEL
@@ -915,22 +906,80 @@ final class SimpleScriptureUITests: XCTestCase {
         openReadingOverflowMenu()
         // KJV earns six rows; cross-references is deliberately absent (no
         // OSISScripref filter, no Feature=Scripref).
-        XCTAssertTrue(
-            app.buttons["Strong's Numbers"].waitForExistence(timeout: 5)
-        )
-        XCTAssertTrue(app.buttons["Verse Per Line"].exists)
+        let titles = ["Strong's Numbers", "Morphological Tags", "Headings",
+                      "Footnotes", "Red Letter", "Verse Per Line"]
+        XCTAssertTrue(app.buttons[titles[0]].waitForExistence(timeout: 5))
+        for title in titles {
+            XCTAssertTrue(app.buttons[title].exists,
+                          "The Bible's display menu is missing \(title).")
+        }
         XCTAssertFalse(app.buttons["Cross-references"].exists)
-        dismissMenu()
-
-        selectReadingMode("Commentary")
-        openReadingOverflowMenu()
-        // MHCC advertises nothing, so it contributes no display rows at all — only
-        // the always-present History & Search action.
-        XCTAssertTrue(
-            app.buttons["History and Search"].waitForExistence(timeout: 5)
+        // The toggles are the whole menu. Its "History and Search" action went
+        // with Focus mode: Search is a tab, and the tab bar no longer hides.
+        XCTAssertFalse(app.buttons["History and Search"].exists)
+        // The open menu is the one collection view on screen (iOS 27.2
+        // hierarchy), so its buttons are the rows, in order.
+        XCTAssertEqual(
+            app.collectionViews.buttons.allElementsBoundByIndex.map(\.label),
+            titles,
+            "The Bible's display menu is not exactly its six toggles."
         )
-        XCTAssertFalse(app.buttons["Strong's Numbers"].exists)
-        XCTAssertFalse(app.buttons["Verse Per Line"].exists)
+        dismissMenu()
+        XCTAssertTrue(
+            app.buttons[titles[0]].waitForNonExistence(timeout: 5),
+            "The display menu did not close."
+        )
+
+        // Where the bar and the Bible pane rest, to compare below. The pane by
+        // one of its verse numbers, which only the Bible has, and not through
+        // `reading.chapter-content`: which of the two panes that query lists
+        // first is not fixed. MEASURED (iOS 27.2): back in the Bible after a
+        // visit to the commentary, the first match was the hidden commentary
+        // pane, which exposes no text.
+        let overflow = readingOverflowButton
+        let reference = app.buttons["reading.reference-picker"]
+        let referenceMidX = reference.frame.midX
+        let topVerse = app.links.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "pslink://versemenu/")
+        ).firstMatch
+        XCTAssertTrue(topVerse.waitForExistence(timeout: 5))
+        let topVerseIdentifier = topVerse.identifier
+        let topVerseY = topVerse.frame.minY
+
+        // MHCC advertises nothing, so the commentary has no display menu, and no
+        // button offering one.
+        selectReadingMode("Commentary")
+        XCTAssertTrue(
+            overflow.waitForNonExistence(timeout: 5),
+            "The commentary has a ••• button with no menu behind it."
+        )
+        // Nothing else left with it, and the reference did not slide over into
+        // the space.
+        for identifier in ["reading.mode", "reading.previous-chapter",
+                           "reading.reference-picker", "reading.next-chapter"] {
+            XCTAssertTrue(app.buttons[identifier].exists,
+                          "The commentary's bar lost \(identifier).")
+        }
+        XCTAssertEqual(reference.frame.midX, referenceMidX, accuracy: 1,
+                       "The reference moved when the ••• button went.")
+
+        // The button comes back with a module that has toggles, still opens its
+        // menu, and the Bible pane is where it was left: the toolbar's content
+        // changed, not the panes under it.
+        selectReadingMode("Bible")
+        XCTAssertTrue(
+            overflow.waitForExistence(timeout: 5),
+            "The Bible's ••• button did not come back after the commentary."
+        )
+        let sameVerse = app.links[topVerseIdentifier].firstMatch
+        XCTAssertTrue(
+            sameVerse.waitForExistence(timeout: 5),
+            "The Bible pane lost its place across a visit to the commentary."
+        )
+        XCTAssertEqual(sameVerse.frame.minY, topVerseY, accuracy: 1,
+                       "The Bible pane moved across a visit to the commentary.")
+        openReadingOverflowMenu()
+        XCTAssertTrue(app.buttons[titles[0]].waitForExistence(timeout: 5))
         dismissMenu()
     }
 
@@ -972,7 +1021,7 @@ final class SimpleScriptureUITests: XCTestCase {
 
     // MARK: - Helpers
 
-    /// Opens the reading toolbar's iOS 27 overflow menu.
+    /// The reading toolbar's ••• button, where there is one.
     ///
     /// `ToolbarOverflowMenu` is system-provided, so its button carries the system's
     /// own identity rather than one we set: confirmed on the iOS 27 simulator as
@@ -980,10 +1029,16 @@ final class SimpleScriptureUITests: XCTestCase {
     /// `TopOverflowBarButtonItem`. Matched by the identifier's suffix, which both
     /// share, since the label is localized.
     @MainActor
-    private func openReadingOverflowMenu() {
-        let overflow = app.buttons.matching(
+    private var readingOverflowButton: XCUIElement {
+        app.buttons.matching(
             NSPredicate(format: "identifier ENDSWITH %@", "OverflowBarButtonItem")
         ).firstMatch
+    }
+
+    /// Opens the reading toolbar's iOS 27 overflow menu.
+    @MainActor
+    private func openReadingOverflowMenu() {
+        let overflow = readingOverflowButton
         XCTAssertTrue(
             overflow.waitForExistence(timeout: 5),
             "Could not find the reading toolbar's overflow menu."
