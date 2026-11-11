@@ -1026,6 +1026,85 @@ final class SimpleScriptureUITests: XCTestCase {
                       "The Library section was left on \"\(picker.label)\".")
     }
 
+    /// A dictionary entry left open in the Library follows a font size changed
+    /// in Settings.
+    ///
+    /// The Library is a persistent workspace, so the entry is still up when the
+    /// reader comes back from Settings. Whether it is redrawn in the new size is
+    /// SwiftUI's invalidation, which no unit test can see.
+    ///
+    /// NOT MEASURED: whether this fails with the entry's dependency on the font
+    /// settings taken away (`Style.current(observing:)`). It has only been run
+    /// with the dependency in place, where the line goes from 16 pt tall to 41.
+    ///
+    /// Judged by the height of a line of the entry that fits on one line at
+    /// either size. From the bottom of the slider, where an entry is drawn at its
+    /// 14 pt floor, to the top, 36 pt.
+    ///
+    /// No `-fontSizePreference` argument: it would shadow every size this run
+    /// sets, and the entry could not change. The size is therefore saved, and
+    /// put back in a teardown block, which runs when the test fails as well.
+    /// Picking the lexicon is saved too (`lastDictionary`), and stays: it is
+    /// where the Library's dictionary next opens, as the chapter is for the
+    /// reader.
+    @MainActor
+    func testOpenDictionaryEntryFollowsAFontSizeChange() throws {
+        selectWorkspace("Settings")
+        let slider = app.sliders["settings.font-size"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 5))
+        let savedSize = try XCTUnwrap(
+            (slider.value as? String).flatMap { Int($0) },
+            "The font size slider does not say what size it is on."
+        )
+        addTeardownBlock { @MainActor [self] in
+            self.selectWorkspace("Settings")
+            self.setFontSize(savedSize)
+        }
+        setFontSize(10)
+
+        selectWorkspace("Library")
+        selectLibrarySection("Dictionary")
+        let moduleMenu = app.buttons["dictionary.module-menu"]
+        XCTAssertTrue(moduleMenu.waitForExistence(timeout: 5))
+        moduleMenu.tap()
+        let hebrew = app.buttons["Strong's Hebrew"].firstMatch
+        XCTAssertTrue(hebrew.waitForExistence(timeout: 5))
+        hebrew.tap()
+        let key = app.buttons["dictionary.key.00001"]
+        XCTAssertTrue(key.waitForExistence(timeout: 10))
+        key.tap()
+        let entryBar = app.navigationBars["00001"]
+        XCTAssertTrue(entryBar.waitForExistence(timeout: 5))
+        // H1, "ab": "A primitive word; father…". The first clause is a line of
+        // its own in the entry.
+        let line = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "primitive word")
+        ).firstMatch
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        let smallHeight = line.frame.height
+
+        selectWorkspace("Settings")
+        setFontSize(36)
+        selectWorkspace("Library")
+        XCTAssertTrue(
+            entryBar.waitForExistence(timeout: 5),
+            "The entry did not stay open across a visit to Settings."
+        )
+        let grew = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                line.exists && line.frame.height > smallHeight * 1.5
+            },
+            object: nil
+        )
+        let outcome = XCTWaiter().wait(for: [grew], timeout: 5)
+        let height = line.exists ? "\(line.frame.height)" : "nothing"
+        XCTAssertEqual(
+            outcome, .completed,
+            "The open entry's line was \(smallHeight) pt tall with the font size "
+                + "at 10 and is \(height) pt tall after it was set to 36."
+        )
+    }
+
     /// The chapter is EDGE-TO-EDGE: a full-height scroll view whose content is
     /// inset, so text flows to the physical edges and scrolls beneath the
     /// translucent bars with no line obscured at rest. Both halves are asserted —
@@ -1831,6 +1910,34 @@ final class SimpleScriptureUITests: XCTestCase {
             "Missing library section \(label)"
         )
         option.tap()
+    }
+
+    /// Moves the font-size slider in Settings to `size`, and checks it got there.
+    ///
+    /// `adjust(toNormalizedSliderPosition:)` drags the thumb, and between the
+    /// ends it can land a step out. MEASURED (iOS 27.2): asked for 20 on the
+    /// slider's 10...36 it landed on 21, and on 20 when the aim was moved 0.6 of
+    /// a step the other way. So each miss moves the aim against it, by less each
+    /// time, until the slider's value, which is the size, reads `size`. The two
+    /// ends were reached at the first attempt.
+    @MainActor
+    private func setFontSize(_ size: Int) {
+        let slider = app.sliders["settings.font-size"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 5))
+        func reading() -> Int? {
+            (slider.value as? String).flatMap { Int($0) }
+        }
+        var aim = Double(size)
+        var lean = 0.6
+        for _ in 0..<6 where reading() != size {
+            slider.adjust(toNormalizedSliderPosition: CGFloat((aim - 10) / 26))
+            if let landed = reading(), landed != size {
+                aim = min(max(aim + Double(size - landed) * lean, 10), 36)
+                lean /= 2
+            }
+        }
+        XCTAssertEqual(reading(), size,
+                       "The font size slider could not be put on \(size).")
     }
 
     @MainActor
