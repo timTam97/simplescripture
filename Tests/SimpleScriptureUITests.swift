@@ -68,25 +68,45 @@ final class SimpleScriptureUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Automatic Full Screen"].exists)
     }
 
+    /// Each mode shows its own module's text for the chapter, and only its own.
+    ///
+    /// Judged by text only one pane can show. Both panes carry
+    /// `reading.chapter-content` for the app's lifetime, so that identifier is
+    /// there in either mode, rendered or not. A verse number is a link only in
+    /// the Bible, and the sentence is how MHCC opens Genesis 1; the pane that is
+    /// not showing is hidden from accessibility, so neither can be found in it.
     @MainActor
     func testBibleAndCommentaryModesBothRender() throws {
-        selectWorkspace("Read")
+        // setUp leaves the app in the Read workspace, in the Bible.
+        selectGenesisChapter(1)
+        let bibleVerse = app.links["pslink://versemenu/1"]
         XCTAssertTrue(
-            app.descendants(matching: .any)["reading.chapter-content"]
-                .waitForExistence(timeout: 5)
+            bibleVerse.waitForExistence(timeout: 5),
+            "The Bible pane does not show Genesis 1."
         )
 
         selectReadingMode("Commentary")
+        let commentary = app.staticTexts.containing(
+            NSPredicate(format: "label CONTAINS %@",
+                        "The first verse of the Bible gives us")
+        ).firstMatch
         XCTAssertTrue(
-            app.buttons["reading.reference-picker"].waitForExistence(timeout: 5)
+            commentary.waitForExistence(timeout: 5),
+            "The commentary pane does not show MHCC on Genesis 1."
         )
-        XCTAssertTrue(
-            app.descendants(matching: .any)["reading.chapter-content"].exists
+        XCTAssertFalse(
+            bibleVerse.exists,
+            "The Bible's text is still showing in the commentary."
         )
 
         selectReadingMode("Bible")
         XCTAssertTrue(
-            app.buttons["reading.reference-picker"].waitForExistence(timeout: 5)
+            bibleVerse.waitForExistence(timeout: 5),
+            "The Bible pane did not come back with Genesis 1."
+        )
+        XCTAssertFalse(
+            commentary.exists,
+            "The commentary's text is still showing in the Bible."
         )
     }
 
