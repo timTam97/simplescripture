@@ -529,6 +529,12 @@ final class SimpleScriptureUITests: XCTestCase {
     /// unit test proves the document has no such row; what the reader draws at
     /// the top of a chapter is only here.
     ///
+    /// The two layouts do not fail alike. MEASURED (iOS 27.2) with the document
+    /// keeping the row: flowing prose failed, verse 1's number at x 20.3 where
+    /// its text starts at 16. A row per verse still passed, because the row
+    /// view lays out no text for an intro with nothing to show; with that taken
+    /// out as well it failed, the chapter opening with " ".
+    ///
     /// The first text under the identifier both panes carry is the first thing
     /// the chapter draws: the pane that is not showing is hidden from
     /// accessibility and has none.
@@ -573,6 +579,13 @@ final class SimpleScriptureUITests: XCTestCase {
     /// still takes a line, so neither layout lays one out under the heading. The
     /// unit test proves where the document puts the title. Whether a row is
     /// drawn for text that is not there is only here.
+    ///
+    /// Each layout pins one half. MEASURED (iOS 27.2) with the title left in the
+    /// slot's text: flowing prose failed, with no title of its own. A row per
+    /// verse still passed, because there the slot is a row by itself, and its
+    /// text read "CHAPTER 1." alone. With the title lifted and the empty text
+    /// laid out all the same, a row per verse failed: verse 1 started 25.7 pt
+    /// below the title.
     @MainActor
     func testChapterTitleIsAHeadingOfItsOwnWithHeadingsOn() throws {
         let arguments = app.launchArguments
@@ -1114,8 +1127,9 @@ final class SimpleScriptureUITests: XCTestCase {
     /// the cap, which is the only way the model can know there were more, and
     /// what the header then says, are only here. Asked for exactly the cap, the
     /// model is never handed more than it lists and the header goes back to
-    /// "1,000 Results" with every unit test passing (by the code; this has only
-    /// been run with the query as it is).
+    /// "1,000 Results" with every unit test passing. MEASURED (iOS 27.2) with
+    /// the query asking for exactly the cap: the header for "the" read "1,000
+    /// Results", and this failed.
     ///
     /// "Melchizedek" is in two verses of the KJV (the New Testament spells it
     /// "Melchisedec"), and "the" in far more than a thousand.
@@ -1206,9 +1220,11 @@ final class SimpleScriptureUITests: XCTestCase {
     /// reader comes back from Settings. Whether it is redrawn in the new size is
     /// SwiftUI's invalidation, which no unit test can see.
     ///
-    /// NOT MEASURED: whether this fails with the entry's dependency on the font
-    /// settings taken away (`Style.current(observing:)`). It has only been run
-    /// with the dependency in place, where the line goes from 16 pt tall to 41.
+    /// The entry follows because its body reads the font settings
+    /// (`Style.current(observing:)`); coming back to the tab rebuilds nothing.
+    /// MEASURED (iOS 27.2): with that read in place the line goes from 16 pt
+    /// tall to 41. With the style read from `UserDefaults` instead, it was 16 pt
+    /// at size 10 and still 16 pt at 36, and this failed.
     ///
     /// Judged by the height of a line of the entry that fits on one line at
     /// either size. From the bottom of the slider, where an entry is drawn at its

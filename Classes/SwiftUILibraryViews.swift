@@ -187,11 +187,12 @@ private struct DictionaryEntryView: View {
             // Not `EntryTextView`'s default. That reads the font from `UserDefaults`
             // when this body runs, and nothing else this body reads changes with
             // the font. This workspace is persistent: the entry is still up when the
-            // user comes back from Settings, and with no dependency on the model it
-            // shows the new font only if something else rebuilds it (NOT measured
-            // whether returning to the tab does). The study popup keeps the default
-            // because it is a sheet, and Settings cannot be reached while one is
-            // open.
+            // user comes back from Settings, and with no dependency on the model
+            // nothing rebuilds it. MEASURED (iOS 27.2) with the default: a line of
+            // the entry was 16 pt tall with the size at 10 and still 16 pt after it
+            // was set to 36 (`testOpenDictionaryEntryFollowsAFontSizeChange`). The
+            // study popup keeps the default because it is a sheet, and Settings
+            // cannot be reached while one is open.
             style: .current(observing: settings)
         )
         // Following a cross-link swaps the entry in place, so the scroll offset has

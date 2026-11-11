@@ -730,8 +730,9 @@ final class SearchModel {
                 // One row PAST the cap, on purpose: that row arriving is the
                 // only way `setResults` learns the search matched more than it
                 // lists. Asked for exactly `resultLimit`, the list can never be
-                // marked as cut — and nothing fails, the header just goes back
-                // to giving the cap as the count.
+                // marked as cut — and no unit test fails, the header just goes
+                // back to giving the cap as the count. Only the XCUITest
+                // `testSearchHeaderSaysWhenTheListWasCut` sees it (measured).
                 limit: Int32(SearchModel.resultLimit + 1),
                 strongsTokens: strongsTokens
             )
