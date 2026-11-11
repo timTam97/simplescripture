@@ -58,7 +58,11 @@ final class PSSearchIndexParityTests: XCTestCase {
 
         var db: OpaquePointer?
         let dbPath = engine.dbPath
+        // A failure BEFORE each skip below, as for the build above. The build has
+        // just returned, so an index that will not open or will not read is a
+        // regression — and a bare skip reports it as a skipped test in a green run.
         guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let db else {
+            XCTFail("cannot open the built index at \(dbPath)")
             throw XCTSkip("cannot open the built index at \(dbPath)")
         }
         defer { sqlite3_close(db) }
@@ -68,6 +72,8 @@ final class PSSearchIndexParityTests: XCTestCase {
         let sql = "SELECT reference, book_osis, testament, text_plain, text_norm, lemmas, word_map"
             + " FROM verses ORDER BY rowid;"
         guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else {
+            XCTFail("cannot read the built index: \(String(cString: sqlite3_errmsg(db)))"
+                + " - the seven FTS columns are fixed")
             throw XCTSkip("cannot read the built index")
         }
         defer { sqlite3_finalize(st) }
@@ -126,6 +132,9 @@ final class PSSearchIndexParityTests: XCTestCase {
         do {
             try engine.build(progress: nil)
         } catch {
+            // Failed first, then skipped: run on its own, a bare skip here turned
+            // an index that cannot be built into a skipped test.
+            XCTFail("index build failed: \(error.localizedDescription)")
             throw XCTSkip("build failed: \(error.localizedDescription)")
         }
 
