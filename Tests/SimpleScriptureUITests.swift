@@ -569,11 +569,38 @@ final class SimpleScriptureUITests: XCTestCase {
         // A launch always starts in the Read workspace, in the Bible.
     }
 
+    /// Picks a chapter and verse of Genesis in the reference picker, from
+    /// whatever book the reader is in.
+    ///
+    /// The picker opens with the reader's own book in the middle of a lazy list
+    /// of sixty-six, so Genesis is only there to tap when the reader is near the
+    /// front of the Bible. The tests leave it in Genesis; a reading session on
+    /// the same simulator need not. MEASURED (iOS 27.2) with the app left in
+    /// Psalms 3: no `reference.book.Gen` in the hierarchy, and this failed at
+    /// its first assertion.
+    ///
+    /// So the list is swiped down until Genesis is clear of the picker's bar. A
+    /// row under the bar exists and cannot be tapped. MEASURED: one swipe from
+    /// Psalms 3 and four from Revelation 22, and the sheet stayed up. A swipe is
+    /// only made while Genesis is out of reach, which is with the list away from
+    /// its top; a drag that pulls the sheet down starts with the list at its
+    /// top.
     @MainActor
     private func selectGenesisChapter(_ chapter: Int, verse verseNumber: Int = 1) {
         app.buttons["reading.reference-picker"].tap()
+        let bookList = app.navigationBars["Select Book"]
+        XCTAssertTrue(bookList.waitForExistence(timeout: 5))
         let genesis = app.buttons["reference.book.Gen"]
-        XCTAssertTrue(genesis.waitForExistence(timeout: 5))
+        func genesisIsInTheClear() -> Bool {
+            genesis.exists && genesis.frame.minY >= bookList.frame.maxY
+        }
+        var inTheClear = genesisIsInTheClear()
+        for _ in 0..<8 where !inTheClear {
+            app.swipeDown(velocity: .fast)
+            inTheClear = genesisIsInTheClear()
+        }
+        XCTAssertTrue(inTheClear,
+                      "Scrolling the book list did not bring Genesis up.")
         genesis.tap()
         let chapterButton = app.buttons["reference.chapter.\(chapter)"]
         XCTAssertTrue(chapterButton.waitForExistence(timeout: 5))
