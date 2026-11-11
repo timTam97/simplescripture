@@ -2678,6 +2678,77 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// A quoted phrase in All or Any mode highlights the phrase the query ran,
+    /// without a space left inside its quotes.
+    ///
+    /// The Exact arm's rule (`testExactSearchHighlightsThePhraseTheQueryRan`),
+    /// for the scanner's quoted-phrase branch. The builder trims the input and
+    /// the tokenizer ignores a space at either end of a phrase, so `"Jesus wept `
+    /// — the quote not closed yet, with the trailing space the keyboard's
+    /// predictive bar leaves — finds John 11:35. Both highlighters match the
+    /// term literally, and "Jesus wept " is not in "Jesus wept.": the verse was
+    /// listed and marked nowhere, in the row or in the chapter it opened.
+    @MainActor
+    func testAQuotedPhraseHighlightsWithoutTheSpacesInsideItsQuotes() {
+        func terms(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch
+        ) -> [String] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: matchType,
+                strongs: false
+            )
+        }
+
+        // Unclosed, with the predictive bar's trailing space.
+        XCTAssertEqual(terms("\"Jesus wept "), ["Jesus wept"])
+        XCTAssertEqual(terms("\u{201C}Jesus wept "), ["Jesus wept"])
+        // Closed, with a space inside the quotes at either end.
+        XCTAssertEqual(terms("\"Jesus wept \""), ["Jesus wept"])
+        XCTAssertEqual(terms("\" Jesus wept\""), ["Jesus wept"])
+        XCTAssertEqual(terms("\"Jesus wept \"", .OrSearch), ["Jesus wept"])
+        // Among other words, which are untouched.
+        XCTAssertEqual(
+            terms("\" in the beginning \" God"),
+            ["in the beginning", "God"]
+        )
+        // Nothing left to mark: under two units after the trim, dropped like
+        // any other single character.
+        XCTAssertEqual(terms("\" a \""), [])
+        XCTAssertEqual(terms("\"  \""), [])
+        // A phrase with no stray space is the term it always was.
+        XCTAssertEqual(terms("love \"the world\" a"), ["love", "the world"])
+
+        // The builder's side of the same rule: the unclosed phrase runs
+        // without the trailing space.
+        XCTAssertEqual(
+            PSSearchQuery.fts5Expression(
+                fromUserInput: "\"Jesus wept ",
+                matchType: .AndSearch,
+                fuzzy: false,
+                strongs: false
+            ),
+            "text_norm:\"jesus wept\""
+        )
+
+        // What the rule is for: the reader marks the phrase in the verse the
+        // query found.
+        var style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        style.highlightTerms = terms("\"Jesus wept ")
+        let verse = ChapterTextRenderer.text(
+            for: ChapterVerse(number: 35, runs: [InlineRun(text: "Jesus wept.")]),
+            style: style
+        )
+        var jacketed = ""
+        for run in verse.runs where run.backgroundColor != nil {
+            jacketed += String(verse[run.range].characters)
+        }
+        XCTAssertEqual(jacketed, "Jesus wept")
+    }
+
     /// A phrase in typographic quotes is highlighted as a phrase, and the quotes
     /// stay in the field.
     ///

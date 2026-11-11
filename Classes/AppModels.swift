@@ -1073,10 +1073,18 @@ final class SearchModel {
                 while index < characters.count, characters[index] != 0x22 {
                     index += 1
                 }
+                // Trimmed, as the Exact arm trims its phrase. A space inside the
+                // quotes is ignored by the tokenizer, so the phrase that matched
+                // does not have it, and both highlighters match this term
+                // literally. The one that gets typed is the trailing space the
+                // keyboard's predictive bar leaves while the quote is still
+                // open, when the phrase runs to the end of input: `"Jesus wept `
+                // found John 11:35 and marked nothing, "Jesus wept " not being
+                // in "Jesus wept.".
                 let phrase = String(
                     utf16CodeUnits: Array(characters[start..<index]),
                     count: index - start
-                )
+                ).trimmingCharacters(in: .whitespacesAndNewlines)
                 if index < characters.count {
                     index += 1
                 }
