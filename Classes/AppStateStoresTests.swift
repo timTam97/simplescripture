@@ -4325,9 +4325,20 @@ final class AppStateStoresTests: XCTestCase {
         pane.pendingRestore = .offset(1099)
         pane.applyPendingWork()
         pane.scrollOffsetChanged(sample(0), from: surface)
+        // Read on the turn the report was made on, and not carried over the hop.
+        // This bundle is app-hosted: the host app's own reader is alive in the
+        // same process, on the same position keys, and saves its place on
+        // main-actor turns of its own. A hop yields to them, so a key read
+        // across one may hold the HOST's position.
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1099",
+                       "The top, where the scroll view was before the restore "
+                           + "reached it, was saved over the offset being restored.")
         await hop()
         XCTAssertEqual(pane.scrollPosition.y, 1099,
                        "The restore was not handed to the scroll view.")
+        // Written again for that reason, so that what is read once the restore
+        // has landed is what the two reports after the hop did to it.
+        standard.set("1099", forKey: scrollKey)
         pane.scrollOffsetChanged(sample(400), from: surface)
         XCTAssertEqual(pane.scrollPosition.y, 1099,
                        "The offset was taken out before the scroll view got there.")
@@ -4348,15 +4359,21 @@ final class AppStateStoresTests: XCTestCase {
 
         // A size change that moves the scroll view. What it publishes on the way
         // is not a scroll, but it is where the scroll view is.
+        //
+        // The key is written first and read before the hop, with no await from
+        // the one to the other. The size change above yielded to the host app's
+        // reader, which shares the key and saves its place on turns of its own,
+        // and the hop below does again.
+        standard.set("1099", forKey: scrollKey)
         pane.prepareForSizeChange()
         pane.scrollOffsetChanged(sample(700), from: surface)
         pane.restoreAfterSizeChange(widthChanged: false)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1099",
+                       "An offset published during a size change was saved.")
         await hop()
         XCTAssertEqual(pane.scrollPosition.y, 1099,
                        "The scroll view moved during a size change and was not "
                            + "sent back.")
-        XCTAssertEqual(standard.string(forKey: scrollKey), "1099",
-                       "An offset published during a size change was saved.")
         // The next step of the size change begins before that lands, so the
         // landing arrives while reports are not being taken for scrolls.
         pane.prepareForSizeChange()
@@ -4484,17 +4501,25 @@ final class AppStateStoresTests: XCTestCase {
         bible.topmostVerseChanged(20, from: bible.scrollSurface)
         XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
 
-        // Add Bookmark, Save.
+        // Add Bookmark, Save. The key is read on the turn of the redisplay, ahead
+        // of its hop. This bundle is app-hosted: the host app's own reader is
+        // alive in the same process, on the same position keys, and saves its
+        // place on main-actor turns of its own, which the hop yields to.
         workspace.redisplayAfterBookmarksChange()
+        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
         for _ in 0..<10 { await Task.yield() }
         XCTAssertNil(bible.scrollPosition.y,
                      "A bookmark change handed the scroll view the offset it was "
                          + "already at, where nothing takes it out again.")
-        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
 
         // The same offset in the next chapter is somewhere the scroll view has
         // not been.
+        //
+        // The offset is written here, and not left as the pane saved it before
+        // the hop, because the load below reads it from the key, and the host's
+        // reader may have saved its own place there since.
         standard.set("Genesis 2", forKey: Defaults.lastRef)
+        standard.set("2700", forKey: "bibleScrollPosition")
         workspace.displayChapter("Genesis 2", polling: .bible, restore: .scroll)
         for _ in 0..<10 { await Task.yield() }
         XCTAssertEqual(bible.scrollPosition.y, 2700,
@@ -4816,6 +4841,15 @@ final class AppStateStoresTests: XCTestCase {
 
     /// `ReaderScreen`'s size hook — the two calls, back to back — and then the
     /// hop the pane defers its scroll to.
+    ///
+    /// **A position key is not carried across this, or across any other
+    /// `await` in these tests.** The bundle is app-hosted, so the host app's own
+    /// reader is alive in the same process, on the same `UserDefaults.standard`
+    /// position keys, and it saves its place on main-actor turns of its own: its
+    /// launch restore settling, or a re-render that a notification posted by a
+    /// test provoked. Every yield is a turn it may take. So a test writes a key
+    /// it is about to read, or about to let a pane read, on the same turn as
+    /// the read. A synchronous test cannot be interleaved this way.
     @MainActor
     private func sizeChange(_ pane: ReaderPaneModel, widthChanged: Bool) async {
         pane.prepareForSizeChange()
@@ -4999,8 +5033,20 @@ final class AppStateStoresTests: XCTestCase {
         owing.scrollOffsetChanged(portrait(2700), from: owing.scrollSurface)
         owing.topmostVerseChanged(20, from: owing.scrollSurface)
         owing.deferRender(of: "Genesis 2", restore: .chapterStart)
+        // The keys are the next chapter's from here.
+        XCTAssertEqual(standard.string(forKey: scrollKey), "0")
+        XCTAssertEqual(standard.string(forKey: verseKey), "1")
         await sizeChange(owing, widthChanged: true)
         XCTAssertNil(targetRow(of: owing))
+        // And are written again, now that the size change's hop is over, so that
+        // what is read below is what the landing did to them. This bundle is
+        // app-hosted: the host app's own reader is alive in the same process, on
+        // the same position keys, and saves its place on main-actor turns of its
+        // own, which the hop yields to. MEASURED: 1 run of this class in 5 read
+        // "1144" / "9" below — the host reader's place — after a landing that
+        // had written nothing.
+        standard.set("0", forKey: scrollKey)
+        standard.set("1", forKey: verseKey)
         owing.scrollOffsetChanged(portrait(2700), from: owing.scrollSurface)
         XCTAssertEqual(standard.string(forKey: scrollKey), "0",
                        "Re-anchoring the chapter being left moved its scroll view, "
