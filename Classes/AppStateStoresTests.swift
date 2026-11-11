@@ -4545,6 +4545,107 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(standard.string(forKey: verseKey), "1")
     }
 
+    /// A bookmark change draws the chapter again where it stands, and the verse
+    /// the view measured there is still the verse a rotation returns to.
+    ///
+    /// The redraw arrives as an offset restore to the pane's own saved offset,
+    /// which is `"%d"` of the offset the scroll view is at. Nothing moves: the
+    /// row at the top stays there and reports nothing (a row reports when it
+    /// BECOMES the topmost one), and a scroll view already at the offset
+    /// publishes no landing. Taken for a restore, the redraw left the verse
+    /// unmeasured and the restore in flight until the reader next put a finger
+    /// down, and a rotation in between replayed portrait's offset into the
+    /// landscape layout — add a bookmark at Genesis 1:20, turn the phone, and
+    /// the reader was pinned past the end of the chapter.
+    ///
+    /// Both panes: a bookmark edited in the Library redraws the commentary when
+    /// that is the pane showing.
+    ///
+    /// An offset the scroll view is NOT at is still a restore. Where it lands,
+    /// no row has reported from.
+    @MainActor
+    func testABookmarkChangeKeepsTheMeasuredVerseForTheNextRotation() async {
+        let standard = UserDefaults.standard
+        let vplKey = standard.psModuleKey(Defaults.vplPreference, BundledModules.bible)
+        let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
+                    Defaults.commentaryVersePosition,
+                    "bibleScrollPosition", "commentaryScrollPosition", vplKey]
+        // By hand: `withPreservedReadingKeys` takes a synchronous closure.
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        standard.set(true, forKey: vplKey)
+        standard.set("Genesis 1", forKey: Defaults.lastRef)
+        standard.set("1", forKey: Defaults.bibleVersePosition)
+        standard.set("1", forKey: Defaults.commentaryVersePosition)
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+
+        // Reading Genesis 1 at verse 20, having scrolled there.
+        let workspace = ReadingWorkspaceModel()
+        workspace.displayChapter("Genesis 1", polling: .bible, restore: .verse)
+        let bible = workspace.bible
+        bible.scrollOffsetChanged(sample(2700.6), from: bible.scrollSurface)
+        bible.topmostVerseChanged(20, from: bible.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
+
+        // Add Bookmark, Save. The scroll view is where the key says: it
+        // publishes nothing, and no row reports.
+        workspace.redisplayAfterBookmarksChange()
+        // The redraw's own hop first; the rotation comes after it.
+        for _ in 0..<10 { await Task.yield() }
+        await sizeChange(bible, widthChanged: true)
+        XCTAssertEqual(targetRow(of: bible), 20,
+                       "A bookmark added at verse 20 cost the pane its verse, and "
+                           + "the rotation after it replayed portrait's offset.")
+
+        // The commentary, read down to its third record, and a bookmark edited
+        // in the Library while it shows.
+        workspace.mode = .commentary
+        let commentary = workspace.commentary
+        XCTAssertGreaterThan(commentary.document.verses.count, 2,
+                             "No commentary on Genesis 1 to read down.")
+        let record = commentary.document.verses[2].number
+        commentary.scrollOffsetChanged(sample(900.4), from: commentary.scrollSurface)
+        commentary.topmostVerseChanged(record, from: commentary.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: "commentaryScrollPosition"), "900")
+
+        workspace.redisplayAfterBookmarksChange()
+        for _ in 0..<10 { await Task.yield() }
+        // Nothing is in flight either: the rows settling is saved as it was
+        // before the edit, with no finger on the reader to release a restore.
+        commentary.scrollOffsetChanged(sample(904), from: commentary.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: "commentaryScrollPosition"), "904",
+                       "The redraw left an offset restore in flight that nothing "
+                           + "would see land.")
+        await sizeChange(commentary, widthChanged: true)
+        XCTAssertEqual(targetRow(of: commentary), record,
+                       "A bookmark edited in the Library cost the commentary on "
+                           + "screen its verse.")
+
+        // An offset somewhere else moves the scroll view, and names no verse.
+        let moved = ReaderPaneModel(mode: .bible)
+        moved.versePerLine = true
+        moved.document = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+        moved.scrollOffsetChanged(sample(2700), from: moved.scrollSurface)
+        moved.topmostVerseChanged(20, from: moved.scrollSurface)
+        moved.pendingRestore = .offset(600)
+        moved.applyPendingWork()
+        for _ in 0..<10 { await Task.yield() }
+        await sizeChange(moved, widthChanged: true)
+        XCTAssertNil(targetRow(of: moved),
+                     "An offset restore to another place in the chapter "
+                         + "re-anchored on the verse the reader had left.")
+    }
+
     // MARK: Paging
 
     /// Paging replaces the scroll view and persists the top of the new chapter.

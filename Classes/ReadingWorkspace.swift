@@ -288,9 +288,11 @@ final class ReaderPaneModel {
     /// reported it as the row at the top, or a restore that names a verse (or the
     /// top of the chapter) sent the scroll view there.
     ///
-    /// False after an offset restore, which names no verse: `currentShownVerse`
-    /// is then whatever the pane believed before it — 1 on a pane that has shown
-    /// nothing, which is every launch — until the view reports.
+    /// False after an offset restore that MOVES the scroll view, which names no
+    /// verse: `currentShownVerse` is then whatever the pane believed before it —
+    /// 1 on a pane that has shown nothing, which is every launch — until the
+    /// view reports. An offset the scroll view is already at keeps it (a
+    /// bookmark change — see `apply`).
     /// `restoreAfterSizeChange` reads it. A width change re-anchors on a measured
     /// verse; on a leftover one it would drag a reader restored mid-chapter back
     /// to verse 1.
@@ -442,16 +444,40 @@ final class ReaderPaneModel {
                 outstandingOffsetRestore = nil
                 return
             }
+            // A redisplay IN PLACE: the offset the scroll view is already at, under
+            // a verse the view measured there. A bookmark change is the producer.
+            // It redraws the chapter at the pane's own saved offset, and that key
+            // is `"%d"` of `lastScrollOffset`, so the two agree to within a point.
+            //
+            // Nothing moves, so there is nothing to land and no verse to forget:
+            // the row at the top stays the row at the top, and a row reports only
+            // when it BECOMES the topmost one. Taken for a restore, the pane gave
+            // up a verse nothing would measure again until the reader scrolled a
+            // row past it, and armed a landing a scroll view that does not move
+            // never publishes. A rotation in between replayed the old width's
+            // offset: add a bookmark at Genesis 1:20, turn the phone, and the
+            // reader was pinned past the end of the chapter.
+            //
+            // Asked of what the pane itself knows, and nothing else. Wherever it
+            // cannot vouch for both — a launch, a verse scroll whose landing has
+            // not been reported, a rotation's — the offset is the restore it
+            // always was.
+            let redisplaysInPlace = shownVerseIsMeasured
+                && abs(lastScrollOffset - offset) <= Self.scrollThreshold
             lastScrollOffset = offset
-            // An offset names no verse — see `shownVerseIsMeasured`.
-            shownVerseIsMeasured = false
-            // Recorded BEFORE the hop: the scroll view publishes geometry (and
-            // `scrollOffsetChanged` would persist it) before the hop runs.
-            outstandingOffsetRestore = offset
-            // The verse this offset was saved with — see `offsetRestoreVerse`. The
-            // clamp is `persistPosition`'s.
-            offsetRestoreVerse = UserDefaults.standard.string(forKey: versePositionKey)
-                .map { max(1, ($0 as NSString).integerValue) }
+            if !redisplaysInPlace {
+                // An offset names no verse — see `shownVerseIsMeasured`.
+                shownVerseIsMeasured = false
+                // Recorded BEFORE the hop: the scroll view publishes geometry (and
+                // `scrollOffsetChanged` would persist it) before the hop runs.
+                outstandingOffsetRestore = offset
+                // The verse this offset was saved with — see `offsetRestoreVerse`.
+                // The clamp is `persistPosition`'s.
+                offsetRestoreVerse = UserDefaults.standard
+                    .string(forKey: versePositionKey)
+                    .map { max(1, ($0 as NSString).integerValue) }
+            }
+            // Issued either way. In place it asks for where the view already is.
             Task { @MainActor [weak self] in
                 self?.scrollPosition.scrollTo(y: offset)
             }
