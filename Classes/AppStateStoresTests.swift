@@ -2330,6 +2330,76 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(model.historyItem()?.searchTermToDisplay, curly)
     }
 
+    /// A term with "ae" in it also highlights the æ spelling, and the other way
+    /// round.
+    ///
+    /// The KJV prints Cæsar, Judæa and a dozen other names with the ligature,
+    /// and the query finds them from a typed "ae". Both highlighters — the
+    /// result row and the reader — match a term literally, and "Caesar" does
+    /// not occur in "Render therefore unto Cæsar". So the list carries both
+    /// spellings, or the verses the search found would be marked nowhere.
+    @MainActor
+    func testAnAeTermAlsoHighlightsItsLigatureSpelling() {
+        func terms(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch
+        ) -> [String] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: matchType,
+                strongs: false
+            )
+        }
+
+        XCTAssertEqual(terms("Caesar"), ["Caesar", "C\u{00E6}sar"])
+        XCTAssertEqual(
+            terms("render unto Caesar", .OrSearch),
+            ["render", "unto", "Caesar", "C\u{00E6}sar"]
+        )
+        XCTAssertEqual(
+            terms("\"unto Caesar\" tribute"),
+            ["unto Caesar", "unto C\u{00E6}sar", "tribute"]
+        )
+        XCTAssertEqual(
+            terms("unto Caesar ", .ExactSearch),
+            ["unto Caesar", "unto C\u{00E6}sar"]
+        )
+        // Typed with the ligature, or pasted from a verse.
+        XCTAssertEqual(terms("C\u{00E6}sar"), ["C\u{00E6}sar", "Caesar"])
+        // The ligature on its own is one-character noise, dropped like any
+        // other single character: it would mark the æ inside every such word.
+        XCTAssertEqual(terms("ae"), ["ae"])
+        // Terms without an "ae" are the list they always were.
+        XCTAssertEqual(terms("God so loved"), ["God", "so", "loved"])
+        XCTAssertEqual(terms("God so loved", .ExactSearch), ["God so loved"])
+
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        model.query = "Caesar"
+
+        // The query and the highlight agree on the spellings.
+        XCTAssertEqual(
+            model.expression,
+            "(text_norm:\"caesar\" OR text_norm:\"c\u{00E6}sar\")"
+        )
+        XCTAssertEqual(model.highlightTerms, ["Caesar", "C\u{00E6}sar"])
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []

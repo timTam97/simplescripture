@@ -967,7 +967,7 @@ final class SearchModel {
                 phrase = String(phrase.dropFirst().dropLast())
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
-            return phrase.count >= 2 ? [phrase] : []
+            return phrase.count >= 2 ? highlightSpellings(phrase) : []
         }
 
         var terms: [String] = []
@@ -1014,7 +1014,23 @@ final class SearchModel {
                 }
             }
         }
-        return terms
+        return terms.flatMap { highlightSpellings($0) }
+    }
+
+    /// `term`, with its other ae / æ spelling after it when it has one — the
+    /// rule the query uses (`PSSearchQuery.ligatureSpellings`).
+    ///
+    /// The KJV prints Cæsar, Judæa and a dozen other names with the ligature,
+    /// and the query finds them from a typed "ae". Both highlighters match a
+    /// term literally, and "Caesar" does not occur in "unto Cæsar": with the
+    /// typed spelling alone, the verses the search found were marked nowhere,
+    /// in the result row or in the chapter it opened.
+    ///
+    /// A spelling under two units is dropped, as `highlightTerms` drops any
+    /// term that short. "ae" joins into a lone æ, which would mark the
+    /// ligature inside every word that has one.
+    private static func highlightSpellings(_ term: String) -> [String] {
+        PSSearchQuery.ligatureSpellings(term).filter { $0.utf16.count >= 2 }
     }
 
     /// Whether a module carries Strong's numbers, so its index has lemmas for a

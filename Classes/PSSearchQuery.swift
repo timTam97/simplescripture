@@ -9,6 +9,8 @@
 //      punctuation inside it, like Beer-sheba, is matched as typed)
 //    * Strong's toggle (H0xxx / Hxxx equivalence under a lemmas: column filter)
 //    * Diacritic folding so accented input matches unaccented storage
+//    * ae / æ: a term with either is searched in both spellings, so a typed
+//      Caesar finds the KJV's Cæsar
 //
 //  Also home to the two index-side text rules, `foldForIndex` and
 //  `cleanDisplayText`, shared by the index build (PSSearchEngine.swift) and the
@@ -191,6 +193,57 @@ final class PSSearchQuery: NSObject {
         return String(out)
     }
 
+    // MARK: - Spellings
+
+    /// `term`, followed by its other spelling when it has an "ae" or an æ in
+    /// it: the one with every `ae` joined into the ligature, and the one with
+    /// every ligature split into `ae`. A term with neither comes back alone.
+    ///
+    /// The KJV prints Cæsar, Judæa, Zacchæus and eleven other words with the
+    /// ligature — 96 times, in 86 verses — and a few of them, now and then,
+    /// without it. Nobody types æ, and nothing on the index side turns it into
+    /// `ae`: it has no decomposition, so `foldForIndex` keeps it and the
+    /// tokenizer's `remove_diacritics` does too. `text_norm` holds `cæsar`. A
+    /// typed `Caesar` found 2 of the 24 verses, and not "Render therefore unto
+    /// Cæsar"; `Judaea` found 12 of 43; `Zacchaeus` found none.
+    ///
+    /// So the query asks for both spellings (`atom`). It has to be the query:
+    /// the index rules are pinned by every index already built on a device.
+    /// Any term with an "ae" gets the second spelling, Israel and Michael
+    /// included. `isræl` is in no verse, and the rows such a search returns are
+    /// the ones it returned without it (measured: 2,301 and 15).
+    ///
+    /// All or nothing: a phrase is tried with every `ae` joined and with every
+    /// æ split, not in each mixture of the two. Luke 3:1 is the one verse with
+    /// both spellings in it (`Cæsar … Judæa … Ituraea`).
+    ///
+    /// Case-insensitive so that `SearchModel.highlightTerms` can pass the text
+    /// as typed. The highlighters do not take `ae` for `æ` any more than the
+    /// index does, and need the second spelling to mark what the query found.
+    /// `.literal`, as in `quote`: scalar by scalar, whatever mark follows.
+    class func ligatureSpellings(_ term: String) -> [String] {
+        let options: String.CompareOptions = [.literal, .caseInsensitive]
+        var out = [term]
+        let joined = term.replacingOccurrences(of: "ae", with: "\u{00E6}", options: options)
+        if joined != term { out.append(joined) }
+        let split = term.replacingOccurrences(of: "\u{00E6}", with: "ae", options: options)
+        if split != term, !out.contains(split) { out.append(split) }
+        return out
+    }
+
+    // One atom of the expression for a folded term: `render` applied to each
+    // of its spellings (`ligatureSpellings`), ORed inside parentheses when
+    // there is more than one. The parentheses keep the group a single operand
+    // of the AND / OR join around it.
+    //
+    // A term with one spelling — anything without an "ae" or an æ — comes out
+    // as `render` made it and nothing else: the expression it always built.
+    private static func atom(_ folded: String, _ render: (String) -> String) -> String {
+        let parts = ligatureSpellings(folded).map(render)
+        if parts.count == 1 { return parts[0] }
+        return "(" + parts.joined(separator: " OR ") + ")"
+    }
+
     // MARK: - Escaping
 
     // Escape a token for use inside an FTS5 phrase: double any embedded quotes
@@ -295,10 +348,12 @@ final class PSSearchQuery: NSObject {
             }
             if body.isEmpty { return nil }
             let folded = foldForIndex(body)
-            return "text_norm:\(quote(folded))"
+            return atom(folded) { "text_norm:\(quote($0))" }
         }
 
         // All / Any modes: tokenise, fold each non-phrase, apply fuzzy if set.
+        // Every arm goes through `atom`, which adds a term's other ae / æ
+        // spelling when it has one.
         let tokens = tokenise(text)
         if tokens.isEmpty { return nil }
 
@@ -308,7 +363,7 @@ final class PSSearchQuery: NSObject {
             if folded.isEmpty { continue }
             if tk.isPhrase {
                 // Quoted phrases always match as a phrase, regardless of fuzzy.
-                atoms.append("text_norm:\(quote(folded))")
+                atoms.append(atom(folded) { "text_norm:\(quote($0))" })
             } else if fuzzy {
                 // Prefix match: word*, for a token that is one word — a single
                 // run of letters and digits, whatever punctuation is around it
@@ -326,13 +381,14 @@ final class PSSearchQuery: NSObject {
                 //
                 // The quoted phrase is also what a token with no letter or
                 // digit in it (`--`) gets.
-                if let bare = barewordForPrefix(folded) {
-                    atoms.append("text_norm:\(bare)*")
-                } else {
-                    atoms.append("text_norm:\(quote(folded))")
-                }
+                atoms.append(atom(folded) { spelling in
+                    if let bare = barewordForPrefix(spelling) {
+                        return "text_norm:\(bare)*"
+                    }
+                    return "text_norm:\(quote(spelling))"
+                })
             } else {
-                atoms.append("text_norm:\(quote(folded))")
+                atoms.append(atom(folded) { "text_norm:\(quote($0))" })
             }
         }
         if atoms.isEmpty { return nil }

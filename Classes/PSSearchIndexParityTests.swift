@@ -392,4 +392,98 @@ final class PSSearchIndexParityTests: XCTestCase {
         let prefix = matchAgainstOneRow(expression("God"), verse: exodus20v3)
         XCTAssertEqual(prefix.rows, 1, "FTS5: \(prefix.error)")
     }
+
+    /// A typed "ae" also finds the æ ligature, and the other way round.
+    ///
+    /// The KJV prints Cæsar, Judæa, Zacchæus and eleven other words with the
+    /// ligature, in 86 verses. It has no decomposition, so the index's fold and
+    /// tokenizer both leave it alone, and a typed `Caesar` matched only the two
+    /// verses that happen to be spelt without it — 2 of 24, and not "Render
+    /// therefore unto Cæsar". `Zacchaeus` matched nothing at all.
+    ///
+    /// The index is pinned, so the two spellings are ORed in the query.
+    func testAeSpellingsFindTheLigatureForms() {
+        func expression(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch,
+            fuzzy: Bool = false
+        ) -> String? {
+            PSSearchQuery.fts5Expression(fromUserInput: query, matchType: matchType,
+                                         fuzzy: fuzzy, strongs: false)
+        }
+        let caesar = "(text_norm:\"caesar\" OR text_norm:\"c\u{00E6}sar\")"
+
+        XCTAssertEqual(expression("Caesar"), caesar)
+        XCTAssertEqual(expression("Caesar", fuzzy: true),
+                       "(text_norm:caesar* OR text_norm:c\u{00E6}sar*)")
+        // One operand of the join around it, in parentheses.
+        XCTAssertEqual(expression("render unto Caesar"),
+                       "text_norm:\"render\" AND text_norm:\"unto\" AND \(caesar)")
+        XCTAssertEqual(expression("Caesar tribute", .OrSearch),
+                       "\(caesar) OR text_norm:\"tribute\"")
+        // A phrase, quoted or as the whole of an Exact search.
+        let phrase = "(text_norm:\"unto caesar\" OR text_norm:\"unto c\u{00E6}sar\")"
+        XCTAssertEqual(expression("unto Caesar", .ExactSearch), phrase)
+        XCTAssertEqual(expression("\"unto Caesar\" tribute"),
+                       "\(phrase) AND text_norm:\"tribute\"")
+        // Typed with the ligature (or pasted from a verse), it finds the two
+        // verses spelt without it as well.
+        XCTAssertEqual(expression("C\u{00E6}sar"),
+                       "(text_norm:\"c\u{00E6}sar\" OR text_norm:\"caesar\")")
+        // A possessive under Fuzzy is matched as typed, in each spelling.
+        XCTAssertEqual(
+            expression("Caesar\u{2019}s", fuzzy: true),
+            "(text_norm:\"caesar\u{2019}s\" OR text_norm:\"c\u{00E6}sar\u{2019}s\")")
+        // Every word with "ae" in it takes the second arm, the ones the KJV
+        // never spells with a ligature included. That arm matches nothing.
+        XCTAssertEqual(expression("Israel"),
+                       "(text_norm:\"israel\" OR text_norm:\"isr\u{00E6}l\")")
+
+        // Without an "ae" the expression is what it always was, byte for byte.
+        XCTAssertEqual(expression("God"), "text_norm:\"god\"")
+        XCTAssertEqual(expression("God", fuzzy: true), "text_norm:god*")
+        XCTAssertEqual(expression("God so loved"),
+                       "text_norm:\"god\" AND text_norm:\"so\" AND text_norm:\"loved\"")
+        XCTAssertEqual(expression("God so loved", .OrSearch),
+                       "text_norm:\"god\" OR text_norm:\"so\" OR text_norm:\"loved\"")
+        XCTAssertEqual(expression("God so loved", .ExactSearch),
+                       "text_norm:\"god so loved\"")
+        XCTAssertEqual(expression("\"so loved\" God", fuzzy: true),
+                       "text_norm:\"so loved\" AND text_norm:god*")
+        // A letter apart is not an "ae".
+        XCTAssertEqual(expression("a e"), "text_norm:\"a\" AND text_norm:\"e\"")
+        // Strong's mode searches lemmas, not text, and takes no second spelling.
+        XCTAssertEqual(
+            PSSearchQuery.fts5Expression(fromUserInput: "Caesar", matchType: .AndSearch,
+                                         fuzzy: false, strongs: true),
+            "lemmas:(\"Caesar\")")
+
+        // What FTS5 finds with them, in verses as the KJV prints them: one with
+        // the ligature, one of the two without.
+        let luke20v25 = "And he said unto them, Render therefore unto C\u{00E6}sar the things"
+            + " which be C\u{00E6}sar\u{2019}s, and unto God the things which be God\u{2019}s."
+        let matthew22v17 = "Tell us therefore, What thinkest thou? Is it lawful to give"
+            + " tribute unto Caesar, or not?"
+        let queries: [(query: String, matchType: PSSearchType, fuzzy: Bool)] = [
+            ("Caesar", .AndSearch, false),
+            ("Caesar", .AndSearch, true),
+            ("C\u{00E6}sar", .AndSearch, false),
+            ("unto Caesar", .ExactSearch, false),
+            ("\"unto Caesar\" lawful render", .OrSearch, false),
+        ]
+        for (query, matchType, fuzzy) in queries {
+            let built = expression(query, matchType, fuzzy: fuzzy)
+            for verse in [luke20v25, matthew22v17] {
+                let match = matchAgainstOneRow(built, verse: verse)
+                XCTAssertEqual(match.rows, 1,
+                               "\(query) in \(verse.prefix(24))…, FTS5: \(match.error)")
+            }
+        }
+        let allWords = expression("render unto Caesar")
+        let ligature = matchAgainstOneRow(allWords, verse: luke20v25)
+        XCTAssertEqual(ligature.rows, 1, "FTS5: \(ligature.error)")
+        // Still every word: the verse without "render" is not a match.
+        let other = matchAgainstOneRow(allWords, verse: matthew22v17)
+        XCTAssertEqual(other.rows, 0, "FTS5: \(other.error)")
+    }
 }
