@@ -2915,6 +2915,196 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// A highlight on each pane, as two search results opened one after the other
+    /// in the two modules leave them.
+    @MainActor
+    private func highlightBothPanes(of workspace: ReadingWorkspaceModel) {
+        workspace.highlightSearchTerms(["Noah"], mode: .bible)
+        workspace.highlightSearchTerms(["grace"], mode: .commentary)
+    }
+
+    /// A search result's highlight belongs to the chapter the result was opened
+    /// in, and ends on every way of leaving it — in BOTH panes.
+    ///
+    /// Paging was the only exit that ended it, and only on the pane showing. A
+    /// jump from the reference picker, a bookmark, a history row or a `sword://`
+    /// link carried the terms into the chapter it opened, where every occurrence
+    /// was jacketed in yellow, and so did each jump after it, until a page turn in
+    /// that same pane or a relaunch. The pane NOT showing kept its terms through
+    /// a page turn too, and drew the new chapter with them when it was next shown.
+    @MainActor
+    func testLeavingASearchResultsChapterEndsItsHighlightInBothPanes() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 5", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            // What launch does: the Bible renders, the commentary owes the chapter.
+            workspace.displayChapter("Genesis 5", polling: .bible, restore: .scroll)
+
+            // A verse picked in the SAME chapter is a scroll, and keeps it.
+            highlightBothPanes(of: workspace)
+            workspace.selectReference(bookName: "Genesis", chapter: 5, verse: 29)
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, ["Noah"])
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, ["grace"])
+
+            // The reference picker, to another chapter.
+            workspace.selectReference(bookName: "Genesis", chapter: 9, verse: 1)
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 9")
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed the reference picker into "
+                               + "another chapter.")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, [],
+                           "The chapter the picker opened was drawn with the "
+                               + "result's terms.")
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "The pane not showing kept its highlight for the "
+                               + "chapter the picker opened.")
+
+            // A page turn in the Bible ends the commentary's as well...
+            highlightBothPanes(of: workspace)
+            workspace.nextChapter()
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [])
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "Paging the Bible left the commentary's highlight "
+                               + "for the chapter it follows to.")
+
+            // ...and one in the commentary ends the Bible's, which then draws the
+            // chapter it was owed without it.
+            workspace.mode = .commentary
+            highlightBothPanes(of: workspace)
+            workspace.nextChapter()
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "Paging the commentary left the Bible's highlight "
+                               + "for the chapter it follows to.")
+            workspace.mode = .bible
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 11")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, [],
+                           "The Bible drew the chapter paged to in the "
+                               + "commentary with its old result's terms.")
+
+            // An inbound route: a bookmark, a history row, a `sword://` link.
+            highlightBothPanes(of: workspace)
+            workspace.showRoutedMode(.bible)
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed a routed open.")
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "The pane not showing kept its highlight through a "
+                               + "routed open.")
+        }
+    }
+
+    /// Opening a search result ends whatever highlight was showing and THEN puts
+    /// the result's own terms on — in that order, which is why the hand-off is
+    /// one model method and not two calls at the call site.
+    ///
+    /// A search result opens through the same route as a bookmark, and the route
+    /// ends the highlight in both panes. Terms assigned before the open are wiped
+    /// by it, and nothing else fails: the result just opens unhighlighted, as it
+    /// did for every release in which the highlighter had no caller at all.
+    @MainActor
+    func testASearchResultsTermsGoOnAfterTheOpenThatEndsThePreviousHighlight() {
+        withPreservedReadingKeys { standard in
+            // The route loads the module it names, which writes this key.
+            let lastBible = standard.object(forKey: Defaults.lastBible)
+            defer {
+                if let lastBible {
+                    standard.set(lastBible, forKey: Defaults.lastBible)
+                } else {
+                    standard.removeObject(forKey: Defaults.lastBible)
+                }
+            }
+            standard.set("John 3", forKey: Defaults.lastRef)
+            let library = LibraryModel(
+                bookmarkStore: BookmarkStore(
+                    rootProvider: { PSBookmarkFolder() },
+                    save: { true },
+                    notificationCenter: NotificationCenter()
+                ),
+                // No module to record against, so the route writes no history.
+                historyStore: HistoryStore(
+                    defaults: defaults,
+                    cloudStore: HistoryCloudStoreStub(),
+                    notificationCenter: NotificationCenter(),
+                    moduleNameProvider: { _ in nil }
+                ),
+                dictionaryStore: DictionaryStore(
+                    defaults: defaults,
+                    moduleProvider: { nil },
+                    moduleLoader: { _ in },
+                    moduleTypeProvider: { _ in nil },
+                    keysProvider: { _ in [] },
+                    entryProvider: { _, _ in nil }
+                ),
+                notificationCenter: NotificationCenter()
+            )
+            let session = AppSession(library: library, dismissKeyboard: {})
+            let workspace = ReadingWorkspaceModel(session: session)
+            // Marks the session ready. Until then `open` only parks the URL.
+            session.replayPendingURL()
+
+            // An older result, opened in the commentary.
+            workspace.highlightSearchTerms(["grace"], mode: .commentary)
+            workspace.openSearchResult(
+                "Genesis 5:29",
+                module: BundledModules.bible,
+                terms: ["Noah"],
+                mode: .bible
+            )
+
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 5")
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, ["Noah"],
+                           "The open wiped the terms of the result it was opening.")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, ["Noah"],
+                           "The result's chapter is drawn without its terms.")
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "An older result's terms outlived the open of a new one.")
+
+            // The same route without terms — a bookmark — ends it again.
+            workspace.openLibraryReference("Romans 8:28", module: nil)
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Romans 8")
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed a bookmark into another chapter.")
+        }
+        // A route posts `redisplayPrimaryBible` on the shared centre, so the host
+        // app's own reader followed both of them. With the keys back, return it
+        // to the chapter they name: left on Romans 8, it goes on saving its
+        // scroll position from there, against a `lastRef` that says otherwise.
+        NotificationCenter.default.post(name: .redisplayPrimaryBible, object: nil)
+    }
+
+    /// A reset leaves the result's chapter too, by the one path that is not a
+    /// navigation: it removes `lastRef`, and the `redisplayPrimaryBible` it posts
+    /// next renders Genesis 1. A redisplay is otherwise the SAME chapter drawn
+    /// again, which is why it carries the highlight across. The reset flag is
+    /// set in the Settings app, so it can arrive with a result open.
+    @MainActor
+    func testAResetEndsTheSearchHighlight() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 5", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            // A reset reaches the workspace as a notification, and `start()` is
+            // where it starts listening.
+            workspace.start()
+            highlightBothPanes(of: workspace)
+
+            // Delivered on `OperationQueue.main` in registration order, so by the
+            // time this probe fulfils the workspace's own observer has run.
+            let handled = expectation(description: "appStateDidReset handled")
+            let probe = NotificationCenter.default.addObserver(
+                forName: .appStateDidReset,
+                object: nil,
+                queue: .main
+            ) { _ in handled.fulfill() }
+            defer { NotificationCenter.default.removeObserver(probe) }
+            NotificationCenter.default.post(name: .appStateDidReset, object: nil)
+            wait(for: [handled], timeout: 5)
+
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed a reset to Genesis 1.")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, [])
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [])
+        }
+    }
+
     // MARK: Page-turn slide
 
     /// The scroll view a page turn leaves stays on screen until its slide ends,

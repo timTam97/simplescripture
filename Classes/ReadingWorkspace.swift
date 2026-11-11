@@ -989,9 +989,9 @@ final class ReadingWorkspaceModel {
     /// Renders the persisted chapter and starts observing the notifications that
     /// have posters outside this file: `resetBibleAndCommentaryView` (font/size,
     /// via `SettingsModel`), `redisplayPrimary{Bible,Commentary}` (display toggles
-    /// and the `sword://` router), `bookmarksChanged`, and
+    /// and the `sword://` router), `bookmarksChanged`,
     /// `newPrimary{Bible,Commentary}` (module load, including `render`'s nil-primary
-    /// recovery).
+    /// recovery), and `appStateDidReset` (the Settings-app reset).
     func start() {
         _ = PSModuleController.default()
 
@@ -1016,6 +1016,13 @@ final class ReadingWorkspaceModel {
         }
         observe(.newPrimaryCommentary) { [weak self] in
             self?.commentary.refreshForModuleChange()
+        }
+        // A reset leaves the chapter by the one path that is not a navigation. It
+        // removes `lastRef`, and the `redisplayPrimaryBible` it posts next renders
+        // Genesis 1 through `redisplay` — which is otherwise the SAME chapter
+        // drawn again, and so carries the search highlight across.
+        observe(.appStateDidReset) { [weak self] in
+            self?.clearSearchHighlight()
         }
 
         // The post covers a module *change*; priming directly covers the first
@@ -1233,7 +1240,16 @@ final class ReadingWorkspaceModel {
     ///
     /// The user's own Bible/commentary picker writes `mode` directly and wants the
     /// drain — which is why this clears at the CALL SITE and not in `didSet`.
+    ///
+    /// **An inbound route also ends the search highlight**, in both panes. This
+    /// is the one place a bookmark, a history row and every `sword://` link pass
+    /// through on their way out of the chapter a search result was opened in. It
+    /// ends even when the route is to the chapter already showing: `lastRef` has
+    /// been rewritten by the time this runs, so there is nothing left to compare
+    /// against. A search result arrives by this route too, which is why its own
+    /// terms go on AFTER the open — see `openSearchResult`.
     func showRoutedMode(_ newMode: ReadingMode) {
+        clearSearchHighlight()
         let pane = newMode == .bible ? bible : commentary
         pane.refToShow = nil
         pane.pendingRestore = nil
@@ -1325,8 +1341,10 @@ final class ReadingWorkspaceModel {
     @discardableResult
     private func page(forward: Bool) -> Bool {
         // Paging away from a search result's chapter ends that result's highlight;
-        // otherwise it follows the reader through every later chapter.
-        activePane.searchHighlightTerms = []
+        // otherwise it follows the reader through every later chapter. In both
+        // panes: the one that is not showing follows to the new chapter through
+        // its deferral, and drew it with its own terms when it was next shown.
+        clearSearchHighlight()
         // No position is restored on EITHER pane, so a verse scroll armed before
         // the page turn is spent on both. The pane that is not on screen spends
         // its own when it drains the chapter start it is handed below — but a
@@ -1403,6 +1421,9 @@ final class ReadingWorkspaceModel {
             return
         }
 
+        // Another chapter, so a search result's highlight ends here. The path
+        // above is a scroll within the result's own chapter, and keeps it.
+        clearSearchHighlight()
         displayChapter(
             ref,
             polling: mode == .bible ? .bible : .commentary,
@@ -1492,12 +1513,55 @@ final class ReadingWorkspaceModel {
     /// all/any-words query into words, honours quoted phrases, drops
     /// one-character noise, and returns **empty** for a Strong's search (the
     /// matched text is a lemma, not text present in the verse).
+    ///
+    /// **Not the way to open a result** — that is `openSearchResult`, which owns
+    /// the order. A routed open ends the highlight in both panes, so terms set
+    /// before one are wiped by it.
     func highlightSearchTerms(_ terms: [String], mode: ReadingMode) {
         let pane = mode == .bible ? bible : commentary
         pane.searchHighlightTerms = terms.filter { !$0.isEmpty }
     }
 
+    /// Ends the search highlight in both panes.
+    ///
+    /// A result's highlight belongs to the chapter it was opened in, and every way
+    /// of leaving that chapter ends it: a page turn, the reference picker, an
+    /// inbound route (a bookmark, a history row, a `sword://` link, the next
+    /// search result) and a reset. Drawing the SAME chapter again — a font change,
+    /// a display toggle, a bookmark edit, the Bible/commentary picker — keeps it:
+    /// `render` carries the terms across.
+    ///
+    /// BOTH panes, because the pane that is not showing follows to the new chapter
+    /// through its deferral, and would draw it with its own terms when next shown.
+    func clearSearchHighlight() {
+        bible.searchHighlightTerms = []
+        commentary.searchHighlightTerms = []
+    }
+
     // MARK: Search hand-off
+
+    /// Opens a search result and highlights its terms in the pane that produced
+    /// it.
+    ///
+    /// **The terms go on AFTER the open, and that order is the whole method.** The
+    /// open is a route like any other, so it ends whatever highlight was showing
+    /// (`showRoutedMode`); assigning the terms then re-highlights the chapter it
+    /// rendered. The other way round, the open wipes the terms it was handed and
+    /// the result opens unhighlighted — with nothing failing, which is how the
+    /// highlighter went without a caller for as long as it did. Pinned by
+    /// `testASearchResultsTermsGoOnAfterTheOpenThatEndsThePreviousHighlight`.
+    ///
+    /// A reference the router rejects opens nothing, and its terms still land on
+    /// the chapter showing, as they always have.
+    func openSearchResult(
+        _ reference: String,
+        module: String,
+        terms: [String],
+        mode: ReadingMode
+    ) {
+        openLibraryReference(reference, module: module)
+        highlightSearchTerms(terms, mode: mode)
+    }
 
     /// The module choices the search workspace offers — the two readable modules,
     /// in pane order.
