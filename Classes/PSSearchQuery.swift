@@ -5,7 +5,8 @@
 //  Translates user-typed search input into an FTS5 MATCH expression. Handles:
 //    * quoted "phrases", in straight or typographic (“…”) quotes
 //    * All (AND) / Any (OR) / Exact (whole-input phrase) match types
-//    * Fuzzy toggle (suffix '*' on each non-phrase term)
+//    * Fuzzy toggle (suffix '*' on each non-phrase word; a term with
+//      punctuation inside it, like Beer-sheba, is matched as typed)
 //    * Strong's toggle (H0xxx / Hxxx equivalence under a lemmas: column filter)
 //    * Diacritic folding so accented input matches unaccented storage
 //
@@ -309,11 +310,23 @@ final class PSSearchQuery: NSObject {
                 // Quoted phrases always match as a phrase, regardless of fuzzy.
                 atoms.append("text_norm:\(quote(folded))")
             } else if fuzzy {
-                // Prefix match: word*. Fold to a form FTS5 accepts as a bareword
-                // by stripping non-alphanumerics; fall back to a quoted phrase if
-                // nothing survives.
-                let bare = barewordForPrefix(folded)
-                if !bare.isEmpty {
+                // Prefix match: word*, for a token that is one word — a single
+                // run of letters and digits, whatever punctuation is around it
+                // (`God,`, `(God)`, `sons'`).
+                //
+                // A token with punctuation INSIDE it (`Beer-sheba`, `God’s`) is
+                // matched as typed instead, exactly as with Fuzzy off. The
+                // index's tokenizer splits at that punctuation, so the text
+                // holds `beer` + `sheba` and `god` + `s`. With the halves glued
+                // into one prefix, `beersheba*` found nothing (33 verses with
+                // Fuzzy off) and `gods*` listed the plural in place of the
+                // possessive. Not FTS5's phrase-prefix form (`"lord’s" *`)
+                // either: its prefix lands on the `s`, and that matched 921
+                // verses where the phrase matches 131.
+                //
+                // The quoted phrase is also what a token with no letter or
+                // digit in it (`--`) gets.
+                if let bare = barewordForPrefix(folded) {
                     atoms.append("text_norm:\(bare)*")
                 } else {
                     atoms.append("text_norm:\(quote(folded))")
@@ -353,20 +366,26 @@ final class PSSearchQuery: NSObject {
         return out
     }
 
-    // Produce a bareword suitable for FTS5 prefix syntax (`word*`). Strips
-    // any character that isn't a unicode letter or digit; if the result is
-    // empty we fall back to a quoted phrase.
-    private static func barewordForPrefix(_ s: String) -> String {
+    // The bareword for FTS5 prefix syntax (`word*`): the token's one run of
+    // unicode letters and digits, without the punctuation around it. Nil when
+    // there is no such run, or more than one — something that is not a letter
+    // or digit INSIDE the word — and the caller quotes the token as typed (see
+    // the fuzzy arm of `fts5Expression`).
+    private static func barewordForPrefix(_ s: String) -> String? {
         // Deliberately per UTF-16 unit: surrogate halves of a non-BMP char are
         // individually rejected. CharacterSet.contains(_:UnicodeScalar) would differ
-        // for non-BMP scalars.
+        // for non-BMP scalars. So a non-BMP char ends the run as punctuation does.
         let ok = NSCharacterSet.alphanumerics as NSCharacterSet
         var out: [UInt16] = []
+        var runEnded = false
         for c in s.utf16 {
             if ok.characterIsMember(c) {
+                if runEnded { return nil } // a second run
                 out.append(c)
+            } else if !out.isEmpty {
+                runEnded = true
             }
         }
-        return String(utf16CodeUnits: out, count: out.count)
+        return out.isEmpty ? nil : String(utf16CodeUnits: out, count: out.count)
     }
 }

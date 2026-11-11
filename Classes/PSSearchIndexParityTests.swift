@@ -256,7 +256,13 @@ final class PSSearchIndexParityTests: XCTestCase {
     /// table it matches — the index's tokenizer and its two searched columns —
     /// or nil, with SQLite's message, when the MATCH is rejected. A rejected
     /// MATCH is what the app shows as "No Results". Not the KJV index.
-    private func matchAgainstOneRow(_ expression: String?) -> (rows: Int?, error: String) {
+    ///
+    /// `verse` is the row's text as the verse prints it. It is stored the way
+    /// the build stores `text_norm`: through `foldForIndex`.
+    private func matchAgainstOneRow(
+        _ expression: String?,
+        verse: String = "and they say hi to god"
+    ) -> (rows: Int?, error: String) {
         guard let expression else { return (nil, "no expression was built") }
         var db: OpaquePointer?
         guard sqlite3_open_v2(":memory:", &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
@@ -266,9 +272,12 @@ final class PSSearchIndexParityTests: XCTestCase {
         defer { sqlite3_close(db) }
         func lastError() -> String { String(cString: sqlite3_errmsg(db)) }
 
+        // The text goes into the SQL as a literal, so a `'` of its own is doubled.
+        let textNorm = PSSearchQuery.foldForIndex(verse)
+            .replacingOccurrences(of: "'", with: "''", options: .literal)
         let setUp = "CREATE VIRTUAL TABLE verses USING fts5(text_norm, lemmas,"
             + " tokenize='unicode61 remove_diacritics 2');"
-            + " INSERT INTO verses VALUES('and they say hi to god', 'H430 H0430');"
+            + " INSERT INTO verses VALUES('\(textNorm)', 'H430 H0430');"
         guard sqlite3_exec(db, setUp, nil, nil, nil) == SQLITE_OK else {
             return (nil, "set-up failed: \(lastError())")
         }
@@ -323,5 +332,64 @@ final class PSSearchIndexParityTests: XCTestCase {
             PSSearchQuery.fts5Expression(fromUserInput: "God \"said", matchType: .ExactSearch,
                                          fuzzy: false, strongs: false),
             "text_norm:\"god \"\"said\"")
+    }
+
+    /// Fuzzy matches a word with punctuation inside it as typed, not as its
+    /// halves glued into one prefix.
+    ///
+    /// The fuzzy arm made its prefix by deleting every character that is not a
+    /// letter or digit, so `Beer-sheba` asked for words starting `beersheba` and
+    /// `God’s` for words starting `gods`. The index's tokenizer splits at that
+    /// same punctuation — the text holds `beer` + `sheba` and `god` + `s` — so
+    /// the first found nothing (33 verses with Fuzzy off) and the second listed
+    /// the 215 verses with the plural "gods" in place of the 25 with the
+    /// possessive.
+    func testFuzzyKeepsAPunctuatedWordAsTyped() {
+        func expression(_ query: String, fuzzy: Bool = true) -> String? {
+            PSSearchQuery.fts5Expression(fromUserInput: query, matchType: .AndSearch,
+                                         fuzzy: fuzzy, strongs: false)
+        }
+
+        XCTAssertEqual(expression("Beer-sheba"), "text_norm:\"beer-sheba\"")
+        XCTAssertEqual(expression("God\u{2019}s"), "text_norm:\"god\u{2019}s\"")
+        XCTAssertEqual(expression("God's"), "text_norm:\"god's\"")
+        // Only the punctuated word changes: its neighbour is still a prefix.
+        XCTAssertEqual(expression("God\u{2019}s word"),
+                       "text_norm:\"god\u{2019}s\" AND text_norm:word*")
+        // It is the expression Fuzzy off builds, so turning Fuzzy on can never
+        // find fewer verses than the same search without it.
+        for query in ["Beer-sheba", "God\u{2019}s", "God's", "Abed-nego"] {
+            XCTAssertEqual(expression(query), expression(query, fuzzy: false), query)
+        }
+
+        // Punctuation around a word is not inside it. Each of these is one word
+        // and stays the prefix it always was.
+        XCTAssertEqual(expression("rev"), "text_norm:rev*")
+        XCTAssertEqual(expression("God,"), "text_norm:god*")
+        XCTAssertEqual(expression("(God)"), "text_norm:god*")
+        XCTAssertEqual(expression("sons'"), "text_norm:sons*")
+        XCTAssertEqual(expression("Baal-"), "text_norm:baal*")
+        XCTAssertEqual(expression("-sheba"), "text_norm:sheba*")
+        // No letter or digit to make a prefix of: the quoted fallback, as before.
+        XCTAssertEqual(expression("--"), "text_norm:\"--\"")
+
+        // What FTS5 finds with them, in verses as the KJV prints them: the name
+        // with an en dash, the possessive with a typographic apostrophe. The
+        // typed ASCII hyphen and apostrophe split the word at the same place.
+        let genesis26v23 = "And he went up from thence to Beer\u{2013}sheba."
+        let firstCorinthians3v23 = "And ye are Christ\u{2019}s; and Christ is God\u{2019}s."
+        let exodus20v3 = "Thou shalt have no other gods before me."
+
+        let name = matchAgainstOneRow(expression("Beer-sheba"), verse: genesis26v23)
+        XCTAssertEqual(name.rows, 1, "FTS5: \(name.error)")
+        for query in ["God\u{2019}s", "God's"] {
+            let possessive = matchAgainstOneRow(expression(query), verse: firstCorinthians3v23)
+            XCTAssertEqual(possessive.rows, 1, "\(query), FTS5: \(possessive.error)")
+            let plural = matchAgainstOneRow(expression(query), verse: exodus20v3)
+            XCTAssertEqual(plural.rows, 0, "\(query), FTS5: \(plural.error)")
+        }
+        // A one-word prefix still widens: "God" finds the plural too.
+        let prefix = matchAgainstOneRow(expression("God"), verse: exodus20v3)
+        XCTAssertEqual(prefix.rows, 1, "FTS5: \(prefix.error)")
     }
 }
