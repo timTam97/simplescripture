@@ -220,6 +220,7 @@ struct ChapterVerse: Identifiable, Equatable, Hashable {
     /// A bookmark highlight colour, as the `rgb(r,g,b)` string
     /// `PSBookmarks.getHighlightRGBColourString` returns. Kept as the persisted
     /// string form rather than a `Color` so the model stays free of SwiftUI.
+    /// Always nil on a commentary: the builder looks it up for a Bible only.
     var highlightColour: String?
     /// The intro slot (`i == 0`) has no verse number and renders without a label.
     var isIntro: Bool { number == 0 }
@@ -411,7 +412,12 @@ enum PSChapterDocumentBuilder {
                 verse.headings.append(contentsOf: hoisted)
 
                 verse.runs = runs
-                verse.highlightColour = highlightColour(i)
+                // Bibles only, as in the assembler, whose lookup sits inside its
+                // `case .bible`. A commentary row's number is the loop counter of the
+                // first slot of a verse RANGE (MHCC Genesis 1 has rows 0, 1, 3, 6, …), so
+                // a Bible bookmark on 1:3 would paint the whole "3-5" section and one on
+                // 1:4 nothing.
+                verse.highlightColour = config.kind == .bible ? highlightColour(i) : nil
                 // The KJV's own paragraph marker. All 2,970 sit at the start of a verse's
                 // visible text, so a leading pilcrow is a reliable "new paragraph here".
                 // The glyph itself stays in the text.

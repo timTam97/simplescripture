@@ -936,4 +936,130 @@ final class PSChapterDocumentParityTests: XCTestCase {
         }
         return out
     }
+
+    // MARK: - Bookmark highlights
+
+    /// One chapter rendered both ways with a lookup that calls EVERY verse
+    /// bookmarked, recording which verses each emitter asked it about.
+    ///
+    /// `renderBoth` hands both emitters `{ _ in nil }`, which is why the parity
+    /// comparison says nothing about highlights.
+    private func renderBothAskingForHighlights(
+        module: String,
+        ref: String,
+        kind: PSChapterAssembler.ModuleKind,
+        colour: String
+    ) throws -> (html: PSChapterAssembler.Result, document: ChapterDocument,
+                 askedByAssembler: [Int], askedByBuilder: [Int]) {
+        let store = try store()
+        let resolver = try resolver()
+        let options = PSChapterExpander.Options.allOn
+        let (book, chapter) = try XCTUnwrap(resolver.resolve(ref: ref),
+                                            "\(module) \(ref) did not resolve")
+        let chapterRecords = try XCTUnwrap(
+            store.chapterRecords(module: module, bookOsis: book.osisName,
+                                 chapter: chapter),
+            "\(module) \(ref) has no records")
+        let records = chapterRecords.records
+        let headings = store.headings(module: module, bookName: book.longName,
+                                      chapter: chapter)
+
+        // ── HTML side ──
+        var expanded: [String] = []
+        for record in records {
+            if record.isEmpty {
+                expanded.append("")
+                continue
+            }
+            let expandedRecord = try XCTUnwrap(
+                PSChapterExpander.expand(record, options: options),
+                "\(module) \(ref): a record failed to expand")
+            expanded.append(expandedRecord)
+        }
+        var config = PSChapterAssembler.Config()
+        config.kind = kind
+        config.versePerLine = false
+        config.headingsOn = options.headings
+        var askedByAssembler: [Int] = []
+        let assembled = PSChapterAssembler.assemble(
+            records: expanded,
+            headings: headings,
+            config: config,
+            headingHTML: { PSChapterExpander.expand($0.html, options: options.forHeading) },
+            highlightColour: { verse in
+                askedByAssembler.append(verse)
+                return colour
+            },
+            emptyChapterMessage: "")
+        let html = try XCTUnwrap(assembled, "\(module) \(ref): HTML assembly failed")
+
+        // ── Native side ──
+        var docConfig = PSChapterDocumentBuilder.Config()
+        docConfig.kind = kind
+        docConfig.headingsOn = options.headings
+        var askedByBuilder: [Int] = []
+        let built = PSChapterDocumentBuilder.build(
+            records: records,
+            headings: headings,
+            config: docConfig,
+            options: options,
+            highlightColour: { verse in
+                askedByBuilder.append(verse)
+                return colour
+            },
+            emptyChapterMessage: "")
+        let document = try XCTUnwrap(built, "\(module) \(ref): document build failed")
+
+        return (html, document, askedByAssembler, askedByBuilder)
+    }
+
+    /// The bookmark highlight is looked up for a Bible only — by BOTH emitters.
+    ///
+    /// The assembler's lookup sits inside its `case .bible`. The builder asked for
+    /// every row, and a commentary row's number is the loop counter of the first
+    /// slot of a verse RANGE (MHCC Genesis 1 has rows 0, 1, 3, 6, 14, 20, 26, 29,
+    /// 31). So a Bible bookmark on Genesis 1:3 painted the whole "3-5" section of
+    /// the commentary in its folder's colour, and one on 1:4 painted nothing.
+    ///
+    /// The KJV case is the control — it must keep asking, and keep painting.
+    func testBookmarkHighlightIsLookedUpForABibleOnlyInBothEmitters() throws {
+        let colour = "rgba(255,204,0,0.8)"
+        let cases: [(String, String, PSChapterAssembler.ModuleKind)] = [
+            ("MHCC", "Genesis 1", .commentary),
+            ("MHCC", "John 3", .commentary),
+            ("KJV", "Genesis 1", .bible),
+        ]
+
+        for (module, ref, kind) in cases {
+            let label = "\(module) \(ref)"
+            let rendered = try renderBothAskingForHighlights(
+                module: module, ref: ref, kind: kind, colour: colour)
+            let rows = rendered.document.verses.map(\.number)
+            let painted = rendered.document.verses
+                .filter { $0.highlightColour != nil }
+                .map(\.number)
+
+            XCTAssertEqual(
+                rendered.askedByBuilder, rendered.askedByAssembler,
+                "\(label): the builder looked up bookmarks for verses the assembler did not")
+
+            switch kind {
+            case .commentary:
+                XCTAssertEqual(
+                    painted, [],
+                    "\(label): commentary rows carry a Bible bookmark's colour")
+                XCTAssertFalse(
+                    rendered.html.body.contains("highlightedVerse"),
+                    "\(label): the oracle highlighted a commentary; this test's premise moved")
+            case .bible:
+                XCTAssertFalse(rows.isEmpty, "\(label): the chapter built no rows")
+                XCTAssertEqual(
+                    painted, rows,
+                    "\(label): a bookmarked Bible verse lost its colour")
+                XCTAssertTrue(
+                    rendered.html.body.contains("highlightedVerse"),
+                    "\(label): the oracle did not highlight a Bible; this test's premise moved")
+            }
+        }
+    }
 }
