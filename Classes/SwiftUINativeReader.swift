@@ -85,6 +85,27 @@ enum ChapterTextRenderer {
                     : 1.6
             )
         }
+
+        /// `current()`, for a view body that has to follow a Settings change.
+        ///
+        /// `current()` reads `UserDefaults`, which SwiftUI does not track: a body
+        /// that resolves its style that way does not depend on the font, and picks
+        /// up a change only if something else happens to re-run it. The reader is
+        /// told by notification and re-renders. A view that stays up behind
+        /// Settings (an open Library dictionary entry) is told nothing.
+        ///
+        /// **The two reads are the subscription, and they are all this adds.** They
+        /// look unused; drop one and the calling body no longer depends on that
+        /// setting, silently. The values still come from `current()`, so there is
+        /// one resolver, fallbacks included. That is safe because `SettingsModel`
+        /// saves a new value inside its setter, before SwiftUI re-evaluates
+        /// anything.
+        @MainActor
+        static func current(observing settings: SettingsModel) -> Style {
+            _ = settings.fontName
+            _ = settings.fontSize
+            return current()
+        }
     }
 
     /// The verse number as a superscript label (75% size, semibold, body colour).
@@ -793,6 +814,11 @@ struct EntryTextView: View {
     /// Typography, resolved from the same two GLOBAL font preferences the chapter
     /// reader uses (`ChapterTextRenderer.Style.current()`), so footnotes and
     /// definitions follow the Settings size.
+    ///
+    /// The default is resolved when the PARENT's body builds this view, and a
+    /// `UserDefaults` read subscribes that body to nothing. A parent that can
+    /// stay on screen across a Settings change must pass
+    /// `.current(observing:)` instead, as `DictionaryEntryView` does.
     var style: ChapterTextRenderer.Style = .current()
     /// Whether the body renders in the SYSTEM face instead of the user's font.
     /// Footnotes, morph entries and the Dictionary use the user's font; the

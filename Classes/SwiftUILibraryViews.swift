@@ -3,6 +3,9 @@ import Observation
 
 struct DictionaryView: View {
     let library: LibraryModel
+    /// Handed on to the entry screen, which is the only thing here that reads it.
+    /// Holding the reference subscribes nothing.
+    let settings: SettingsModel
     /// The Library workspace's section switch, hosted in this view's own toolbar.
     /// Each section owns its `NavigationStack`, so the picker has to be declared
     /// inside each of them — see `LibraryWorkspace`.
@@ -22,7 +25,8 @@ struct DictionaryView: View {
                     if let entry = library.dictionaryEntry(key: key) {
                         DictionaryEntryView(
                             initialEntry: entry,
-                            library: library
+                            library: library,
+                            settings: settings
                         )
                     }
                 }
@@ -129,6 +133,7 @@ private struct DictionaryModuleChoice: Identifiable {
 
 private struct DictionaryEntryView: View {
     let library: LibraryModel
+    let settings: SettingsModel
 
     /// Caches the parse of the entry currently on screen, keyed by its identity.
     ///
@@ -161,8 +166,13 @@ private struct DictionaryEntryView: View {
     @State private var shown: DictionaryEntryDocument
     @State private var cache = EntryDocumentCache()
 
-    init(initialEntry: DictionaryEntryDocument, library: LibraryModel) {
+    init(
+        initialEntry: DictionaryEntryDocument,
+        library: LibraryModel,
+        settings: SettingsModel
+    ) {
         self.library = library
+        self.settings = settings
         _shown = State(initialValue: initialEntry)
     }
 
@@ -173,11 +183,21 @@ private struct DictionaryEntryView: View {
                 guard case .lexicon(let module, let key) = link else { return }
                 shown = library.dictionaryEntry(module: module, key: key)
             },
-            topInset: 8
+            topInset: 8,
+            // Not `EntryTextView`'s default. That reads the font from `UserDefaults`
+            // when this body runs, and nothing else this body reads changes with
+            // the font. This workspace is persistent: the entry is still up when the
+            // user comes back from Settings, and with no dependency on the model it
+            // shows the new font only if something else rebuilds it (NOT measured
+            // whether returning to the tab does). The study popup keeps the default
+            // because it is a sheet, and Settings cannot be reached while one is
+            // open.
+            style: .current(observing: settings)
         )
         // Following a cross-link swaps the entry in place, so the scroll offset has
         // to reset with it — the same reason `StudyPopupSheet` puts an `.id` on its
-        // `EntryTextView`.
+        // `EntryTextView`. A font change leaves the id alone, so the scroll view is
+        // not replaced under the reader.
         .id(shown.id)
         .navigationTitle(shown.key)
         .navigationBarTitleDisplayMode(.inline)

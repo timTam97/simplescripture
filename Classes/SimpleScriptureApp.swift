@@ -332,6 +332,10 @@ private struct LibraryWorkspace: View {
             case .dictionary:
                 DictionaryView(
                     library: session.library,
+                    // Passed, never read here: a read of the font in this body
+                    // would re-evaluate the whole workspace under the Settings
+                    // slider. Only the open dictionary entry subscribes.
+                    settings: session.settings,
                     section: $section
                 )
             }

@@ -276,6 +276,50 @@ final class AppStateStoresTests: XCTestCase {
         body(standard)
     }
 
+    /// What ties an open dictionary entry to the font settings.
+    ///
+    /// `Style.current()` reads `UserDefaults`, which SwiftUI does not track, so a
+    /// view body that resolves its style that way does not depend on the font: an
+    /// entry left open in the Library follows a Settings change only if something
+    /// else rebuilds it. `current(observing:)` reads the two observable
+    /// properties, and those reads are the subscription. Drop either and the
+    /// entry no longer depends on that setting, with nothing else to say so.
+    @MainActor
+    func testEntryStyleReadSubscribesToTheFontSettings() {
+        let settings = SettingsModel(store: SettingsStore(defaults: defaults))
+        let changes: [(String, () -> Void)] = [
+            ("size", { settings.fontSize = 31 }),
+            ("name", { settings.fontName = "Gentium Plus" }),
+        ]
+        for (what, change) in changes {
+            let changed = OSAllocatedUnfairLock(initialState: false)
+            withObservationTracking {
+                _ = ChapterTextRenderer.Style.current(observing: settings)
+            } onChange: {
+                changed.withLock { $0 = true }
+            }
+
+            change()
+
+            XCTAssertTrue(
+                changed.withLock { $0 },
+                "a font \(what) change does not invalidate a body that read the style"
+            )
+        }
+
+        // And the style a re-run body resolves is the new one: the model's setter
+        // has saved the value before SwiftUI gets to re-evaluate anything.
+        withPreservedFontKeys { _ in
+            let live = SettingsModel(store: SettingsStore())
+            live.fontSize = 31
+            live.fontName = "Gentium Plus"
+
+            let style = ChapterTextRenderer.Style.current(observing: live)
+            XCTAssertEqual(style.fontSize, 31)
+            XCTAssertEqual(style.fontName, "Gentium Plus")
+        }
+    }
+
     func testRotationLockUsesInterfaceOrientationRatherThanWindowShape() {
         XCTAssertEqual(
             RotationLock(interfaceOrientation: .landscapeLeft),
