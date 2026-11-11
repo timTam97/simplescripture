@@ -501,6 +501,36 @@ final class SimpleScriptureUITests: XCTestCase {
         XCTAssertEqual(!firstVerse.links["pslink://versemenu/2"].exists, enabled)
     }
 
+    /// Relaunches at the top of Genesis 1 with the KJV's Strong's numbers showing.
+    ///
+    /// By launch argument, so the two lexicon tests need nothing from the
+    /// container or from the test before them. Strong's numbers are off until
+    /// someone turns them on, which is every fresh install and every simulator
+    /// clone `xcodebuild` makes, and there both used to skip and report green.
+    /// An argument shadows its key for the run and writes nothing; a tap on the
+    /// menu's toggle would leave the numbers on for every later test and run.
+    ///
+    /// The place is seeded the same way, as
+    /// `testReaderControlsStayVisibleAfterTapsAndScrolling` seeds it. That suits
+    /// a test that opens a popup over the chapter and goes nowhere: a seeded
+    /// `lastRef` hides every chapter change from the app for the whole run, so
+    /// do not page or pick a reference after this. It is also why the reference
+    /// picker is not used here. MEASURED (iOS 27.2): relaunched into Genesis 3
+    /// flowing with the numbers on, every element query took 2.2 s where it
+    /// takes 0.35 s, and the four taps to Genesis 1 took 31 s.
+    @MainActor
+    private func openGenesis1WithStrongsNumbers() {
+        app.terminate()
+        app.launchArguments += [
+            "-strongsPreference_KJV", "YES",
+            "-lastRef", "Genesis 1",
+            "-bibleScrollPosition", "0",
+            "-bibleVersePosition", "1",
+        ]
+        app.launch()
+        // A launch always starts in the Read workspace, in the Bible.
+    }
+
     @MainActor
     private func selectGenesisChapter(_ chapter: Int, verse verseNumber: Int = 1) {
         app.buttons["reading.reference-picker"].tap()
@@ -947,15 +977,13 @@ final class SimpleScriptureUITests: XCTestCase {
     /// so the whole tap path is driven from the test.
     @MainActor
     func testStrongsLinkOpensItsLexiconEntry() throws {
-        XCTAssertTrue(
-            app.descendants(matching: .any)["reading.chapter-content"]
-                .waitForExistence(timeout: 10)
-        )
+        openGenesis1WithStrongsNumbers()
         // Genesis 1:1's first Strong's number, H07225 (bereshith).
         let strongs = app.links["pslink://strongs/Hebrew/07225"]
-        guard strongs.waitForExistence(timeout: 5) else {
-            throw XCTSkip("Strong's numbers are switched off for this module")
-        }
+        XCTAssertTrue(
+            strongs.waitForExistence(timeout: 10),
+            "Genesis 1:1 shows no H07225 marker with Strong's numbers on"
+        )
         strongs.tap()
 
         let popup = app.descendants(matching: .any)["study.popup"]
@@ -978,14 +1006,12 @@ final class SimpleScriptureUITests: XCTestCase {
     /// TARGET, not merely on something being tappable.
     @MainActor
     func testLexiconCrossLinkNavigatesWithinThePopup() throws {
-        XCTAssertTrue(
-            app.descendants(matching: .any)["reading.chapter-content"]
-                .waitForExistence(timeout: 10)
-        )
+        openGenesis1WithStrongsNumbers()
         let strongs = app.links["pslink://strongs/Hebrew/07225"]
-        guard strongs.waitForExistence(timeout: 5) else {
-            throw XCTSkip("Strong's numbers are switched off for this module")
-        }
+        XCTAssertTrue(
+            strongs.waitForExistence(timeout: 10),
+            "Genesis 1:1 shows no H07225 marker with Strong's numbers on"
+        )
         strongs.tap()
 
         let popup = app.descendants(matching: .any)["study.popup"]
@@ -993,10 +1019,13 @@ final class SimpleScriptureUITests: XCTestCase {
                       "the study popup did not open")
 
         // The cross-link is a real, addressable element — not a span of dead text.
+        // The content is fixed and the entry does name H07218, so a link that is
+        // not there is the renderer losing it: a failure, not a skip.
         let crossLink = app.links["pslink://lexicon/StrongsRealHebrew?key=07218"]
-        guard crossLink.waitForExistence(timeout: 5) else {
-            throw XCTSkip("H07225's entry does not cross-link to H07218 in this build")
-        }
+        XCTAssertTrue(
+            crossLink.waitForExistence(timeout: 5),
+            "H07225's entry lost its cross-link to H07218"
+        )
         crossLink.tap()
 
         // Following it swaps the entry in place and offers a way back. "Back" is the
