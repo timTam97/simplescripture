@@ -225,6 +225,20 @@ struct ChapterVerse: Identifiable, Equatable, Hashable {
     /// The intro slot (`i == 0`) has no verse number and renders without a label.
     var isIntro: Bool { number == 0 }
 
+    /// Whether any run has something to draw.
+    ///
+    /// False for an intro whose title was hoisted into `headings`, which has no
+    /// runs left. The row views ask this before laying out the text: an empty
+    /// `Text` still takes a line.
+    ///
+    /// Computed, so the synthesized `Equatable` and memberwise `init` the parity
+    /// tests build on are untouched.
+    var hasVisibleText: Bool {
+        runs.contains {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+
     /// Whether this verse OPENS a paragraph.
     ///
     /// The KJV marks paragraph starts with a pilcrow (`&#182;`), and it does so
@@ -492,10 +506,25 @@ enum PSChapterDocumentBuilder {
     /// Moves title blocks that lead a record into headings, returning them.
     ///
     /// A title token expands to a block in both emitters; keeping it inline would
-    /// render a Psalm's interverse title as bold text mid-paragraph.
+    /// render a chapter's title as bold text run into its first verse.
+    ///
+    /// **"Leads" means after the runs `stripLeadingWhitespace` blanked.** That
+    /// strip empties a leading whitespace run and leaves it in the array, and every
+    /// title in the corpus follows one: all 1,184 are slot 0 of a KJV chapter,
+    /// shaped `" " + <title>`. Tested against `runs.first` alone, this hoisted
+    /// nothing at all.
+    ///
+    /// Also where `.titleMarker` ends: a title that does not lead stays inline,
+    /// bold, and loses the marker here, so none reaches the document.
     private static func hoistLeadingTitles(_ runs: inout [InlineRun]) -> [ChapterHeading] {
         var hoisted: [ChapterHeading] = []
-        while let first = runs.first, first.style.contains(.titleMarker) {
+        while true {
+            // Step over the blanked runs, but only on the way to a title: a verse
+            // with no title keeps exactly the runs it had. A zero-width run that
+            // carries a link (`scripRef`) is content, and is not stepped over.
+            let lead = runs.prefix { $0.text.isEmpty && $0.link == nil }.count
+            guard lead < runs.count, runs[lead].style.contains(.titleMarker) else { break }
+            runs.removeFirst(lead)
             // Collect the run span belonging to this title.
             var titleRuns: [InlineRun] = []
             while let run = runs.first, run.style.contains(.titleMarker) {
@@ -505,6 +534,9 @@ enum PSChapterDocumentBuilder {
                 runs.removeFirst()
             }
             hoisted.append(ChapterHeading(runs: titleRuns, isCanonical: false))
+        }
+        for index in runs.indices {
+            runs[index].style.remove(.titleMarker)
         }
         return hoisted
     }

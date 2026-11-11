@@ -1062,4 +1062,111 @@ final class PSChapterDocumentParityTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - The intro slot and its title
+
+    /// The joined text of each heading.
+    private func headingTexts(_ headings: [ChapterHeading]) -> [String] {
+        headings.map { $0.runs.map(\.text).joined() }
+    }
+
+    /// The text of every run, in a verse or a heading, that still carries the
+    /// builder's internal title marker.
+    private func runsCarryingTheTitleMarker(in document: ChapterDocument) -> [String] {
+        document.verses
+            .flatMap { $0.runs + $0.headings.flatMap(\.runs) }
+            .filter { $0.style.contains(.titleMarker) }
+            .map(\.text)
+    }
+
+    /// A title token that leads a record becomes a HEADING, not bold text in the
+    /// verse.
+    ///
+    /// Every title in the KJV sits in slot 0 as `" " + <title>` — 1,184 chapters.
+    /// The leading-whitespace strip blanks that space but leaves its run in the
+    /// array, and the hoist looked only at the first run, so it never fired. With
+    /// Headings on and Verse Per Line off the chapter opened `CHAPTER 1.`,
+    /// superscript 1, `In the beginning` as one line of prose, and the builder's
+    /// internal `.titleMarker` reached the view.
+    ///
+    /// The parity comparison cannot see any of it: it joins headings and runs with
+    /// a space, so it does not know which of the two a title is in.
+    func testLeadingTitleTokenBecomesAHeading() throws {
+        var config = PSChapterDocumentBuilder.Config()
+        config.kind = .bible
+        config.headingsOn = true
+        var options = PSChapterExpander.Options.allOff
+        options.headings = true
+
+        // ── The corpus shape, synthetic ──
+        let built = PSChapterDocumentBuilder.build(
+            records: [" \u{000B}CHAPTER 1.\u{000C}", "In the beginning", "And the earth"],
+            headings: [:],
+            config: config,
+            options: options,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let document = try XCTUnwrap(built)
+        XCTAssertEqual(document.verses.map(\.number), [0, 1, 2])
+        XCTAssertEqual(document.entryCount, 3)
+
+        let intro = try XCTUnwrap(document.verses.first)
+        XCTAssertEqual(headingTexts(intro.headings), ["CHAPTER 1."],
+                       "the title was not hoisted out of the intro's runs")
+        XCTAssertFalse(intro.hasVisibleText,
+                       "the intro still has text to draw: \(intro.runs.map(\.text))")
+        XCTAssertEqual(runsCarryingTheTitleMarker(in: document), [],
+                       "the builder's internal title marker reached the document")
+
+        // Prose: the title heads the first paragraph and verse 1 flows under it.
+        let first = try XCTUnwrap(document.paragraphs.first)
+        XCTAssertEqual(headingTexts(first.headings), ["CHAPTER 1."])
+        XCTAssertEqual(first.verses.map(\.number), [0, 1, 2])
+        XCTAssertFalse(
+            first.verses.flatMap(\.runs).map(\.text).joined().contains("CHAPTER"),
+            "the title is still inside the flowed paragraph text")
+
+        // ── A title that does NOT lead stays inline: bold, and unmarked ──
+        let inlineBuilt = PSChapterDocumentBuilder.build(
+            records: ["", "Text \u{000B}MID\u{000C} more"],
+            headings: [:],
+            config: config,
+            options: options,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let inline = try XCTUnwrap(inlineBuilt)
+        XCTAssertEqual(inline.verses.map(\.number), [1])
+        let verse = try XCTUnwrap(inline.verses.first)
+        XCTAssertEqual(verse.headings, [])
+        XCTAssertEqual(verse.runs.map(\.text).joined(), "Text MID more")
+        XCTAssertEqual(verse.runs.first { $0.text == "MID" }?.style, InlineStyle.bold)
+        XCTAssertEqual(runsCarryingTheTitleMarker(in: inline), [],
+                       "an inline title kept the builder's internal marker")
+
+        // ── The store's own records ──
+        let genesisBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "Genesis 1", options: options, kind: .bible))
+        let genesis = genesisBoth.document
+        XCTAssertEqual(headingTexts(genesis.verses.first?.headings ?? []), ["CHAPTER 1."])
+        XCTAssertEqual(genesis.verses.first?.hasVisibleText, false)
+        XCTAssertEqual(headingTexts(genesis.paragraphs.first?.headings ?? []),
+                       ["CHAPTER 1."])
+        XCTAssertEqual(genesis.paragraphs.first?.verses.map(\.number), [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(runsCarryingTheTitleMarker(in: genesis), [])
+
+        let psalmBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "Psalms 3", options: options, kind: .bible))
+        let psalm = psalmBoth.document
+        XCTAssertEqual(
+            psalm.verses.prefix(2).map { headingTexts($0.headings) },
+            [["PSALM 3."], ["A Psalm of David, when he fled from Absalom his son."]])
+        // The psalm's own title breaks the paragraph at verse 1, so the intro is a
+        // paragraph by itself with nothing but its heading — the row the views must
+        // not lay an empty `Text` under. 117 psalms have this shape.
+        let opening = Array(psalm.paragraphs.prefix(2))
+        XCTAssertEqual(opening.map(\.id), [0, 1])
+        XCTAssertEqual(opening.first?.verses.map(\.number), [0])
+        XCTAssertEqual(opening.first?.verses.contains(where: \.hasVisibleText), false)
+        XCTAssertEqual(runsCarryingTheTitleMarker(in: psalm), [])
+    }
 }

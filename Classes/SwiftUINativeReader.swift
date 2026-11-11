@@ -517,19 +517,25 @@ private struct ParagraphRow: View {
             ForEach(Array(paragraph.headings.enumerated()), id: \.offset) { _, heading in
                 HeadingRow(heading: heading, style: style)
             }
-            ChapterRunsText(
-                text: flowed,
-                pane: pane,
-                style: style,
-                verseLayoutStore: verseLayoutStore
-            )
-                .tracksTopmostVerse(
-                    fallbackVerse: paragraph.verses.first?.number ?? 1,
-                    layoutStore: verseLayoutStore,
+            // A paragraph can be the intro alone, with its title hoisted into the
+            // heading above and no text left: 117 psalms open `PSALM n.` and then
+            // break at verse 1's own title. That row is its heading. An empty `Text`
+            // under it would still take a line, and the padding below it.
+            if paragraph.verses.contains(where: { !$0.isIntro || $0.hasVisibleText }) {
+                ChapterRunsText(
+                    text: flowed,
                     pane: pane,
-                    surface: surface
+                    style: style,
+                    verseLayoutStore: verseLayoutStore
                 )
-                .padding(.bottom, style.fontSize * 0.55)
+                    .tracksTopmostVerse(
+                        fallbackVerse: paragraph.verses.first?.number ?? 1,
+                        layoutStore: verseLayoutStore,
+                        pane: pane,
+                        surface: surface
+                    )
+                    .padding(.bottom, style.fontSize * 0.55)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -569,8 +575,14 @@ private struct VerseRow: View {
             ForEach(Array(verse.headings.enumerated()), id: \.offset) { _, heading in
                 HeadingRow(heading: heading, style: style)
             }
-            ChapterRunsText(text: Text(labelled), pane: pane, style: style)
-                .padding(.bottom, style.fontSize * 0.35)
+            // The intro has no label, and none of its own text once its title has
+            // been hoisted into the heading above (`CHAPTER n.`, with Headings on).
+            // That row is its heading. An empty `Text` under it would still take a
+            // line, and the padding below it.
+            if !verse.isIntro || verse.hasVisibleText {
+                ChapterRunsText(text: Text(labelled), pane: pane, style: style)
+                    .padding(.bottom, style.fontSize * 0.35)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
