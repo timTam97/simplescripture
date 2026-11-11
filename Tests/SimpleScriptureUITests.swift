@@ -811,8 +811,9 @@ final class SimpleScriptureUITests: XCTestCase {
     ///
     /// The picker opens with the reader's own book in the middle of a lazy list
     /// of sixty-six, so Genesis is only there to tap when the reader is near the
-    /// front of the Bible. The tests leave it in Genesis; a reading session on
-    /// the same simulator need not. MEASURED (iOS 27.2) with the app left in
+    /// front of the Bible. Most tests leave it in Genesis;
+    /// `testStrongsLinkInAPsalmTitleOpensItsLexiconEntry` and a reading session
+    /// on the same simulator do not. MEASURED (iOS 27.2) with the app left in
     /// Psalms 3: no `reference.book.Gen` in the hierarchy, and this failed at
     /// its first assertion.
     ///
@@ -824,6 +825,28 @@ final class SimpleScriptureUITests: XCTestCase {
     /// top.
     @MainActor
     private func selectGenesisChapter(_ chapter: Int, verse verseNumber: Int = 1) {
+        selectChapter(chapter, verse: verseNumber, ofBook: "Gen", named: "Genesis")
+    }
+
+    /// Picks a chapter and verse of any book in the reference picker, from
+    /// whatever book the reader is in. `bookID` is the book's OSIS name, which
+    /// identifies its row, and `bookName` the name the picker's bar gives it.
+    ///
+    /// A book off screen in the lazy list is not in the hierarchy, so which way
+    /// it lies cannot be asked. Genesis is brought up first, as
+    /// `selectGenesisChapter` describes, which puts every other book below. The
+    /// list is then dragged up until the book can be tapped, each drag held
+    /// still before the finger lifts so the list moves the drag's own length
+    /// and does not coast: under half of what the list shows at once, so the
+    /// book cannot pass through the screen between two looks. MEASURED (iOS
+    /// 27.2, iPhone 18 Pro): one drag brings Psalms, the nineteenth book, into
+    /// reach, with the reader in Genesis 1 and, after the one swipe down, in
+    /// Psalms 3.
+    @MainActor
+    private func selectChapter(
+        _ chapter: Int, verse verseNumber: Int = 1,
+        ofBook bookID: String, named bookName: String
+    ) {
         app.buttons["reading.reference-picker"].tap()
         let bookList = app.navigationBars["Select Book"]
         XCTAssertTrue(bookList.waitForExistence(timeout: 5))
@@ -838,7 +861,24 @@ final class SimpleScriptureUITests: XCTestCase {
         }
         XCTAssertTrue(inTheClear,
                       "Scrolling the book list did not bring Genesis up.")
-        genesis.tap()
+
+        let book = app.buttons["reference.book.\(bookID)"]
+        func bookIsInReach() -> Bool {
+            book.exists && book.frame.minY >= bookList.frame.maxY && book.isHittable
+        }
+        var inReach = bookID == "Gen" || bookIsInReach()
+        for _ in 0..<12 where !inReach {
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.7))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            start.press(
+                forDuration: 0.05, thenDragTo: end,
+                withVelocity: .slow, thenHoldForDuration: 0.5
+            )
+            inReach = bookIsInReach()
+        }
+        XCTAssertTrue(inReach,
+                      "Scrolling the book list did not bring \(bookName) into reach.")
+        book.tap()
         let chapterButton = app.buttons["reference.chapter.\(chapter)"]
         XCTAssertTrue(chapterButton.waitForExistence(timeout: 5))
         chapterButton.tap()
@@ -849,7 +889,7 @@ final class SimpleScriptureUITests: XCTestCase {
         // whose bar takes the page's title, so by now "Select Book" is two pushes
         // gone and waiting for it to go waits for nothing.
         XCTAssertTrue(
-            app.navigationBars["Genesis \(chapter)"].waitForNonExistence(timeout: 5),
+            app.navigationBars["\(bookName) \(chapter)"].waitForNonExistence(timeout: 5),
             "Choosing a verse did not close the reference picker."
         )
     }
@@ -1588,6 +1628,79 @@ final class SimpleScriptureUITests: XCTestCase {
         let popup = app.descendants(matching: .any)["study.popup"]
         XCTAssertTrue(popup.firstMatch.waitForExistence(timeout: 10),
                       "tapping a Strong's number did not open the study popup")
+    }
+
+    /// A Strong's number in a Psalm's TITLE opens its lexicon entry, as one in
+    /// the verse under it does.
+    ///
+    /// A Psalm's title is a heading row, beside the verse text and not inside
+    /// it, so the reader's link routing has to be on the heading in its own
+    /// right (`routesChapterLinks(to:)`). Without it the title's markers are
+    /// drawn like the verse's, and a tap on one goes to the system, which has
+    /// nothing registered for `pslink://`. The unit test proves the title's text
+    /// carries its links. That a tap on one reaches the pane is only here.
+    /// MEASURED (iOS 27.2) with the routing taken off the heading row: the
+    /// marker was found and tapped, and no popup opened.
+    ///
+    /// Psalms 3 is titled "A Psalm<04210> of David<01732>, when he fled…".
+    /// The marker is looked for inside the title's own text, so it is the
+    /// heading's link that is tapped. The header trait leaves it a link:
+    /// MEASURED (iOS 27.2) it is a `Link` under the title's `StaticText`, and
+    /// hittable.
+    ///
+    /// The chapter is picked, so the test starts from whatever book the app was
+    /// left in, and it leaves the app in Psalms 3. Strong's numbers, Headings
+    /// and the layout are launch arguments, which write nothing. Headings are
+    /// on so the page is the fullest one: "PSALM 3." is a row above the title,
+    /// and the pick of verse 1 lands on it with the title under it.
+    @MainActor
+    func testStrongsLinkInAPsalmTitleOpensItsLexiconEntry() throws {
+        app.terminate()
+        app.launchArguments += [
+            "-strongsPreference_KJV", "YES",
+            "-headingsPreference_KJV", "YES",
+            "-vplPreference_KJV", "YES",
+        ]
+        app.launch()
+        XCTAssertTrue(
+            app.buttons["reading.reference-picker"].waitForExistence(timeout: 20),
+            "SimpleScripture did not finish initialization."
+        )
+        selectChapter(3, ofBook: "Ps", named: "Psalms")
+
+        let title = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "A Psalm")
+        ).firstMatch
+        XCTAssertTrue(
+            title.waitForExistence(timeout: 10),
+            "Psalms 3 shows no title of its own."
+        )
+        // H04210 (mizmor), the title's first Strong's number.
+        let marker = title.links["pslink://strongs/Hebrew/04210"]
+        XCTAssertTrue(
+            marker.exists,
+            "Psalms 3's title shows no H04210 marker with Strong's numbers on: "
+                + "\"\(title.label)\""
+        )
+        XCTAssertTrue(
+            marker.isHittable,
+            "The title's H04210 marker is at \(marker.frame), where it cannot "
+                + "be tapped."
+        )
+        marker.tap()
+
+        let popup = app.descendants(matching: .any)["study.popup"]
+        XCTAssertTrue(
+            popup.firstMatch.waitForExistence(timeout: 10),
+            "tapping a Strong's number in a Psalm title did not open the study popup"
+        )
+        // The entry the marker names: the popup's header gives its number.
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "H4210")
+            ).firstMatch.exists,
+            "the study popup did not open on H4210"
+        )
     }
 
     /// A cross-link INSIDE a lexicon entry navigates to the entry it names.
