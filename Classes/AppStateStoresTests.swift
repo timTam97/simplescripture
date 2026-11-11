@@ -2148,6 +2148,80 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(model.expression, "text_norm:\"go\"")
     }
 
+    /// A query that has been typed and not yet searched is pending, not empty.
+    ///
+    /// Typing is debounced (0.25 s in production), and `isSearching` is raised
+    /// only when the query starts. Until the timer fired, nothing told the empty
+    /// state a search was owed, so with no rows on screen it read "No Results
+    /// for …" about text that had not been searched: on every keystroke of a
+    /// search typed into an empty list, and for the debounce after the last one.
+    ///
+    /// The wait has its own flag, and `isSearching` stays down through it on
+    /// purpose. The result list's corner spinner reads `isSearching`; raised at
+    /// arming, it would spin over the previous query's rows on every keystroke.
+    @MainActor
+    func testATypedQueryIsPendingThroughTheDebounce() {
+        // 60 s, so the timer cannot fire during the test: every state read below
+        // is the debounce window's.
+        func makeModel(indexIsBuilt: Bool) -> SearchModel {
+            let model = SearchModel(
+                optionsStore: SearchOptionsStore(defaults: defaults),
+                indexCoordinator: SearchIndexCoordinator(
+                    freshnessProvider: { _ in indexIsBuilt },
+                    buildOperation: { _, _ in }
+                ),
+                debounceInterval: 60,
+                featureProvider: { _, _ in true },
+                queryOperation: { _, _, _, _, _ in [] }
+            )
+            model.configure(
+                modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+                preferredModule: "KJV",
+                currentBookName: "Genesis",
+                restoring: nil
+            )
+            return model
+        }
+
+        let model = makeModel(indexIsBuilt: true)
+        XCTAssertFalse(model.isSearchPending)
+
+        model.query = "beginning"
+        XCTAssertTrue(
+            model.isSearchPending,
+            "Nothing says a search is owed, so the empty state reads No Results."
+        )
+        XCTAssertFalse(
+            model.isSearching,
+            "The debounce raised the flag the result list's spinner reads."
+        )
+        XCTAssertTrue(model.results.isEmpty)
+
+        // Every way out of the wait ends it. Nothing left to search:
+        model.query = ""
+        XCTAssertFalse(model.isSearchPending)
+
+        // The results being cleared, which is also what a module change does:
+        model.query = "x"
+        XCTAssertTrue(model.isSearchPending)
+        model.clearResults()
+        XCTAssertFalse(model.isSearchPending)
+
+        // And the search starting — here by the Search key, through the same
+        // `runSearch` the timer calls. This also leaves no timer behind.
+        model.query = "light"
+        XCTAssertTrue(model.isSearchPending)
+        model.searchNow()
+        XCTAssertFalse(model.isSearchPending)
+        XCTAssertTrue(model.isSearching)
+
+        // An index that is not built owes no search.
+        let unbuilt = makeModel(indexIsBuilt: false)
+        unbuilt.query = "beginning"
+        XCTAssertFalse(unbuilt.isSearchPending)
+        XCTAssertFalse(unbuilt.isSearching)
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []

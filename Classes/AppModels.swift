@@ -618,6 +618,19 @@ final class SearchModel {
     private(set) var moduleKind: ReadingMode = .bible
     private(set) var strongsAvailable = false
     private(set) var isSearching = false
+    /// A search is owed for the text in the field and has not started: the
+    /// debounce is still running.
+    ///
+    /// Read only by the empty state. `isSearching` is raised when the query
+    /// starts, so through the debounce nothing said a search was coming, and with
+    /// no rows on screen the empty state read "No Results for …" about text that
+    /// had not been searched — on every keystroke of a search typed into an empty
+    /// list, and for the debounce after the last one.
+    ///
+    /// Deliberately not folded into `isSearching`: the result list's corner
+    /// spinner reads that, and raised at arming it would spin over the previous
+    /// query's rows on every keystroke.
+    private(set) var isSearchPending = false
     private(set) var highlightTerms: [String] = []
 
     @ObservationIgnored private let optionsStore: SearchOptionsStore
@@ -627,7 +640,23 @@ final class SearchModel {
     @ObservationIgnored private let debounceInterval: TimeInterval
     @ObservationIgnored private let indexBuildStarted: (String) -> Void
     @ObservationIgnored private let indexBuildFinished: (String) -> Void
-    @ObservationIgnored private var debounceTimer: Timer?
+    /// `isSearchPending` is exactly "a debounce timer is armed", and is kept in
+    /// step here rather than at each call site, so that no way out of the wait —
+    /// an emptied field, cleared results, the Search key, the timer firing into
+    /// `runSearch` — can leave it set with no search owed.
+    ///
+    /// Written only on a change, so the `nil` that `runSearch` and `clearResults`
+    /// assign with no timer armed is not a mutation the view has to answer. A
+    /// keystroke clears the timer and re-arms it in one turn of the main thread
+    /// (`scheduleSearch`), so the view never renders the gap between the two.
+    @ObservationIgnored private var debounceTimer: Timer? {
+        didSet {
+            let pending = debounceTimer != nil
+            if isSearchPending != pending {
+                isSearchPending = pending
+            }
+        }
+    }
     @ObservationIgnored private var queryGeneration: UInt = 0
     @ObservationIgnored private var isApplyingInternalInputs = false
     @ObservationIgnored private var currentBookName: String?
@@ -1077,6 +1106,9 @@ final class SearchModel {
             return
         }
 
+        // A search is owed from here until the timer fires. Arming it raises
+        // `isSearchPending` (see `debounceTimer`), which is what keeps the empty
+        // state from saying "No Results" about text that has not been run.
         debounceTimer = Timer.scheduledTimer(
             withTimeInterval: debounceInterval,
             repeats: false

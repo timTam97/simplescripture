@@ -194,6 +194,7 @@ private struct SearchWorkspaceContent: View {
                     fuzzy: search.fuzzySearch,
                     strongs: search.strongsSearch,
                     isSearching: search.isSearching,
+                    isSearchPending: search.isSearchPending,
                     module: search.module,
                     openResult: openResult
                 )
@@ -284,6 +285,9 @@ private struct SearchReadyContent: View {
     let fuzzy: Bool
     let strongs: Bool
     let isSearching: Bool
+    /// The debounce is running. For the empty arm only — the result list is
+    /// not given it, so typing over rows leaves them and their corner alone.
+    let isSearchPending: Bool
     let module: String?
     let openResult: (_ reference: String, _ module: String) -> Void
 
@@ -294,7 +298,10 @@ private struct SearchReadyContent: View {
                 systemImage: "magnifyingglass",
                 description: Text("SearchEmptyPromptMessage")
             )
-        } else if results.isEmpty, isSearching {
+        } else if results.isEmpty, isSearching || isSearchPending {
+            // Running, or owed and waiting out the debounce. "No Results" is a
+            // statement about a search that has finished, and until the timer
+            // fires the text in the field has not been searched.
             ProgressView()
         } else if results.isEmpty {
             ContentUnavailableView.search(text: query)
