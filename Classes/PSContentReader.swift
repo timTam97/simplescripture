@@ -24,8 +24,8 @@
 //  through `PSContentStore.fail` (assertionFailure in debug, alog in release)
 //  and return nil. One malformed chapter must not brick the app:
 //
-//    5. A chunk that fails to inflate, or whose row_count / raw_size disagrees
-//       with its blob.
+//    5. A chunk that fails to inflate or is not UTF-8, or whose row_count /
+//       raw_size disagrees with its blob.
 //    6. A chapter blob whose record count disagrees with entry_count.
 //    7. An MHCC body id that does not resolve in `bodies`.
 //    8. A malformed token stream (unterminated token, wrong field count, unknown
@@ -36,6 +36,13 @@
 //  NOT failures: a chapter absent from `chapters` (wholly-empty chapters are
 //  omitted; the reader shows the "empty chapter" message), and a dictionary or
 //  note lookup that misses (nil is the right answer).
+//
+//  For a chapter, the reader cannot yet tell 5-7 from that absent case:
+//  `PSContentStore.chapterRecords` reports the failure and then returns the same
+//  nil for both, so in a release build a corrupt chapter is logged and shown as
+//  the "empty chapter" message rather than returned as nil. Neither occurs over
+//  the bundled store: both modules hold all 1,189 chapters, and every one
+//  inflates, decodes and counts consistently.
 //
 
 import Foundation
