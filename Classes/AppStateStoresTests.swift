@@ -2334,6 +2334,54 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// Picking the top of the chapter already open persists it.
+    ///
+    /// A verse scroll resets what the pane believes — offset 0, that verse — and
+    /// leaves the saving to the view's report of where it landed. The chapter's
+    /// first row lands on exactly those values, so neither report reads as a
+    /// change, and the keys kept the position the reader had just LEFT: a display
+    /// toggle, a bookmark or a relaunch went back there.
+    ///
+    /// Jude, because verse 1 is its first row. 1,184 of the KJV's 1,189 chapters
+    /// open with an intro row above verse 1, which puts verse 1 a line down,
+    /// where its landing is seen. With Verse Per Line off the first PARAGRAPH is
+    /// the first row in every chapter.
+    @MainActor
+    func testPickingTheTopOfTheOpenChapterPersistsIt() {
+        withPreservedReadingKeys { standard in
+            standard.set("Jude 1", forKey: Defaults.lastRef)
+            standard.set("1", forKey: Defaults.bibleVersePosition)
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter("Jude 1", polling: .bible, restore: .verse)
+            let pane = workspace.bible
+            XCTAssertEqual(pane.document.verses.first?.number, 1,
+                           "Jude no longer opens on verse 1; this needs another chapter.")
+
+            // Reading at verse 20...
+            let surface = pane.scrollSurface
+            pane.scrollOffsetChanged(
+                ReaderScrollSample(offset: 1500, contentHeight: 3000, containerHeight: 675),
+                from: surface
+            )
+            pane.topmostVerseChanged(20, from: surface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "20")
+            XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "1500")
+
+            // ...the reader picks Jude 1:1, and the view reports the landing.
+            workspace.selectReference(bookName: "Jude", chapter: 1, verse: 1)
+            pane.scrollOffsetChanged(
+                ReaderScrollSample(offset: 0, contentHeight: 3000, containerHeight: 675),
+                from: surface
+            )
+            pane.topmostVerseChanged(1, from: surface)
+
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1",
+                           "A display toggle would jump back to the verse being left.")
+            XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "0",
+                           "A bookmark or a relaunch would restore the offset being left.")
+        }
+    }
+
     // MARK: Paging
 
     /// Paging replaces the scroll view and persists the top of the new chapter.
@@ -2777,6 +2825,44 @@ final class AppStateStoresTests: XCTestCase {
             XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1",
                            "Showing the Bible scrolled the chapter paged to back to "
                                + "the verse picked in the one before it.")
+        }
+    }
+
+    /// Picking a verse in the chapter already open reaches a pane that has not
+    /// rendered that chapter yet.
+    ///
+    /// The picker's same-chapter path scrolled both panes. In the Bible the
+    /// commentary almost always still OWES the chapter — every Bible load defers
+    /// into it, launch included — so the scroll moved a document about to be
+    /// replaced, and the commentary then opened wherever its old deferral said,
+    /// under a title naming the picked verse. Neither verse key was written
+    /// either, unlike a pick in any other chapter.
+    @MainActor
+    func testPickingAVerseInTheOpenChapterReachesThePaneThatHasNotRenderedIt() {
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            standard.set("4", forKey: Defaults.bibleVersePosition)
+            standard.set("9", forKey: Defaults.commentaryVersePosition)
+            standard.set("700", forKey: "commentaryScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+            // What launch does.
+            workspace.displayChapter("John 3", polling: .bible, restore: .scroll)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .offset(700))
+
+            workspace.selectReference(bookName: "John", chapter: 3, verse: 16)
+
+            XCTAssertEqual(workspace.commentary.pendingRestore, .verse(16),
+                           "The commentary will open John 3 where it was last left, "
+                               + "not at the verse picked.")
+            XCTAssertNotNil(workspace.commentary.refToShow)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "16")
+            XCTAssertEqual(standard.string(forKey: Defaults.commentaryVersePosition), "16")
+
+            // A page turn the pane still owes IS the top of the chapter, and stays
+            // one: picking verse 1 is no reason to open it on the old scroll view.
+            workspace.nextChapter()
+            workspace.selectReference(bookName: "John", chapter: 4, verse: 1)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
         }
     }
 

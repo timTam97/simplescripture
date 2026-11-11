@@ -189,7 +189,8 @@ final class ReaderPaneModel {
 
     /// A chapter this pane should render the next time it appears, with the
     /// position to restore. Set by `displayChapter` for the pane it did NOT poll,
-    /// through `deferRender(of:restore:)`.
+    /// through `deferRender(of:restore:)`; `selectReference` re-aims the restore
+    /// of a chapter already owed the same way.
     @ObservationIgnored var refToShow: String?
     @ObservationIgnored var pendingRestore: PaneRestore?
 
@@ -379,6 +380,21 @@ final class ReaderPaneModel {
             currentShownVerse = verse
             verseToShow = 0
             let target = rowID(containing: verse)
+            // The chapter's first row is the one landing nothing may report. It
+            // rests at offset 0, which `lastScrollOffset` was just reset to, so
+            // `scrollOffsetChanged` sees no move — and when the verse asked for is
+            // the one at its top, `topmostVerseChanged` sees no change either. The
+            // keys then kept the position the reader had just LEFT, and a display
+            // toggle, a bookmark or a relaunch went back there. So it is persisted
+            // here, as `.chapterStart` persists its own. (The first row's id is the
+            // first verse's number in either layout.)
+            //
+            // Only the first row. Any row below it lands past the threshold and is
+            // persisted when it does; writing offset 0 for one of those would be
+            // wrong until then, and for good if the re-render never moves the view.
+            if target == document.verses.first?.number {
+                persistPosition(verse: verse, scrollOffset: 0)
+            }
             Task { @MainActor [weak self] in
                 self?.scrollPosition.scrollTo(id: target, anchor: .top)
             }
@@ -1318,14 +1334,34 @@ final class ReadingWorkspaceModel {
     /// The same-chapter fast path is preserved: selecting a verse in the chapter
     /// already on screen scrolls both panes rather than re-rendering, which is
     /// the difference between an instant jump and a visible reload.
+    ///
+    /// **Only a pane that has rendered the chapter is scrolled.** One that still
+    /// owes it (`refToShow` — the commentary after any Bible navigation, and
+    /// always straight after launch) is holding the chapter it last showed, or
+    /// nothing. Scrolling that moved a document about to be replaced, and a
+    /// pending ref outranks everything when the pane drains, so it then opened
+    /// this chapter wherever its old deferral said, under a title naming the
+    /// verse picked. Its deferral is re-aimed at the verse instead, through
+    /// `deferRender`, so a page turn it still owes is kept for verse 1.
+    ///
+    /// Both paths write both verse keys. On the fast path nothing else would
+    /// until a scroll moved the view, and every later `.verse` load reads them.
     func selectReference(bookName: String, chapter: Int, verse: Int) {
         let ref = "\(bookName) \(chapter)"
         let verseString = "\(verse)"
         let controller = PSModuleController.default()
+        let defaults = UserDefaults.standard
+        defaults.set(verseString, forKey: Defaults.bibleVersePosition)
+        defaults.set(verseString, forKey: Defaults.commentaryVersePosition)
 
         if PSModuleController.getCurrentBibleRef() == ref {
-            bible.scrollToVerse(verse)
-            commentary.scrollToVerse(verse)
+            for pane in [bible, commentary] {
+                if let owed = pane.refToShow {
+                    pane.deferRender(of: owed, restore: .verse(verse))
+                } else {
+                    pane.scrollToVerse(verse)
+                }
+            }
             if controller?.primaryBibleName != nil {
                 bible.setTitle("\(ref):\(verseString)")
             }
@@ -1335,9 +1371,6 @@ final class ReadingWorkspaceModel {
             return
         }
 
-        let defaults = UserDefaults.standard
-        defaults.set(verseString, forKey: Defaults.bibleVersePosition)
-        defaults.set(verseString, forKey: Defaults.commentaryVersePosition)
         displayChapter(
             ref,
             polling: mode == .bible ? .bible : .commentary,
