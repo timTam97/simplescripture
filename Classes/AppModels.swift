@@ -402,7 +402,34 @@ struct SearchResultRow: Identifiable, Equatable {
 
     let reference: String
     let text: String?
+    /// The words of the verse a Strong's search matched: the ones tagged with
+    /// the number (`PSSearchEngine.runQuery`). Empty for a text search, and for
+    /// a row restored from the saved history.
     let strongsHighlightWords: [String]
+    /// Those words as the row marks them: whole words, like any other term,
+    /// and with no minimum length — `I` is one of them, and marks the word.
+    /// Made here, once, and not in the row's body.
+    let strongsHighlightTerms: [SearchHighlightTerm]
+
+    init(reference: String, text: String?, strongsHighlightWords: [String]) {
+        self.reference = reference
+        self.text = text
+        self.strongsHighlightWords = strongsHighlightWords
+        self.strongsHighlightTerms = strongsHighlightWords
+            .map { SearchHighlightTerm($0) }
+            .filter { !$0.tokens.isEmpty }
+    }
+
+    /// What this row marks: its own Strong's words when it has any, and the
+    /// query's terms otherwise.
+    ///
+    /// By what the row holds, not by the Strong's toggle as it stands. A row a
+    /// Strong's search found holds the words tagged with the number (the query
+    /// matched a lemma and has no terms of its own); a text search's row holds
+    /// none. Here and not in the list's body, so that a test can read it.
+    func highlightTerms(orQuery terms: [SearchHighlightTerm]) -> [SearchHighlightTerm] {
+        strongsHighlightTerms.isEmpty ? terms : strongsHighlightTerms
+    }
 }
 
 struct SearchModuleChoice: Identifiable, Equatable {
@@ -670,7 +697,14 @@ final class SearchModel {
     /// spinner reads that, and raised at arming it would spin over the previous
     /// query's rows on every keystroke.
     private(set) var isSearchPending = false
-    private(set) var highlightTerms: [String] = []
+    /// What the rows mark, and what a result carries into the reader: the
+    /// terms of the query last run, as it matched them, with the options it
+    /// ran under.
+    ///
+    /// Set when the query STARTS (`runSearch`), with its rows still to come. In
+    /// between — the length of the query, a frame or so — the rows on screen
+    /// are the previous query's, drawn with these. As before; left alone.
+    private(set) var highlightTerms: [SearchHighlightTerm] = []
 
     @ObservationIgnored private let optionsStore: SearchOptionsStore
     @ObservationIgnored let indexCoordinator: SearchIndexCoordinator
@@ -1049,107 +1083,35 @@ final class SearchModel {
         return item
     }
 
+    /// The terms a query highlights, each with the way the query matched it.
+    ///
+    /// The query builder's own (`PSSearchQuery.highlightTerms(fromUserInput:…)`):
+    /// the list it renders into the MATCH expression, so the two cannot differ.
+    /// This used to be a second reading of the input, kept in step with the
+    /// builder by hand, and every rule it lacked was a search that found its
+    /// verses and marked nothing.
+    ///
+    /// No term is dropped for being short. One-character terms were, when a
+    /// term was looked for anywhere in the text: `a` would have marked every a
+    /// in the verse. A term is a whole word now (`PSSearchQuery.highlightRanges`),
+    /// and kept, the drop would only cost marks: an Any search for `I am`
+    /// finds 6,031 verses, and the 5,220 found on their `I` alone would have
+    /// none (MEASURED on the KJV index).
+    ///
+    /// Empty for a Strong's search: the match is a lemma, not text in the
+    /// verse. The rows mark the verse's tagged words instead.
     static func highlightTerms(
         query: String,
         matchType: PSSearchType,
+        fuzzy: Bool,
         strongs: Bool
-    ) -> [String] {
-        guard !strongs, !query.isEmpty else { return [] }
-        // Typographic quotes are phrase quotes, here as in the query: the mapping
-        // `PSSearchQuery.fts5Expression` applies, so the highlight and the query
-        // agree on what a phrase is. Left curly, they became part of the first
-        // and last words — terms that occur nowhere in the text — and stayed on
-        // both ends of an Exact phrase. A local copy: the field and the saved
-        // history keep what the user typed.
-        let text = PSSearchQuery.straighteningQuotes(query)
-        if matchType == .ExactSearch {
-            // The phrase the query ran, not the field text. The Exact arm of
-            // `PSSearchQuery.fts5Expression` trims the input and strips one pair
-            // of surrounding quotes before it builds the phrase, and both
-            // highlighters (the result row and the reader) match this term
-            // literally — so the raw text, with the trailing space the keyboard's
-            // predictive bar leaves or with the quotes still on it, found its
-            // verses and marked nothing. Keep the two rules in step.
-            //
-            // The second trim is for a space left inside the quotes: the
-            // tokenizer ignores it, so the phrase that matched does not have it.
-            var phrase = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if phrase.hasPrefix("\"") && phrase.hasSuffix("\"") && phrase.count >= 2 {
-                phrase = String(phrase.dropFirst().dropLast())
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            return phrase.count >= 2 ? highlightSpellings(phrase) : []
-        }
-
-        var terms: [String] = []
-        let characters = Array(text.utf16)
-        var index = 0
-        while index < characters.count {
-            let character = characters[index]
-            if character == 0x20 || character == 0x09 || character == 0x0A {
-                index += 1
-                continue
-            }
-            if character == 0x22 {
-                index += 1
-                let start = index
-                while index < characters.count, characters[index] != 0x22 {
-                    index += 1
-                }
-                // Trimmed, as the Exact arm trims its phrase. A space inside the
-                // quotes is ignored by the tokenizer, so the phrase that matched
-                // does not have it, and both highlighters match this term
-                // literally. The one that gets typed is the trailing space the
-                // keyboard's predictive bar leaves while the quote is still
-                // open, when the phrase runs to the end of input: `"Jesus wept `
-                // found John 11:35 and marked nothing, "Jesus wept " not being
-                // in "Jesus wept.".
-                let phrase = String(
-                    utf16CodeUnits: Array(characters[start..<index]),
-                    count: index - start
-                ).trimmingCharacters(in: .whitespacesAndNewlines)
-                if index < characters.count {
-                    index += 1
-                }
-                if phrase.utf16.count >= 2 {
-                    terms.append(phrase)
-                }
-            } else {
-                let start = index
-                while index < characters.count {
-                    let value = characters[index]
-                    if value == 0x20 || value == 0x09
-                        || value == 0x0A || value == 0x22 {
-                        break
-                    }
-                    index += 1
-                }
-                let word = String(
-                    utf16CodeUnits: Array(characters[start..<index]),
-                    count: index - start
-                )
-                if word.utf16.count >= 2 {
-                    terms.append(word)
-                }
-            }
-        }
-        return terms.flatMap { highlightSpellings($0) }
-    }
-
-    /// `term`, with its other ae / æ spelling after it when it has one — the
-    /// rule the query uses (`PSSearchQuery.ligatureSpellings`).
-    ///
-    /// The KJV prints Cæsar, Judæa and a dozen other names with the ligature,
-    /// and the query finds them from a typed "ae". Both highlighters match a
-    /// term literally, and "Caesar" does not occur in "unto Cæsar": with the
-    /// typed spelling alone, the verses the search found were marked nowhere,
-    /// in the result row or in the chapter it opened.
-    ///
-    /// A spelling under two units is dropped, as `highlightTerms` drops any
-    /// term that short. "ae" joins into a lone æ, which would mark the
-    /// ligature inside every word that has one.
-    private static func highlightSpellings(_ term: String) -> [String] {
-        PSSearchQuery.ligatureSpellings(term).filter { $0.utf16.count >= 2 }
+    ) -> [SearchHighlightTerm] {
+        PSSearchQuery.highlightTerms(
+            fromUserInput: query,
+            matchType: matchType,
+            fuzzy: fuzzy,
+            strongs: strongs
+        )
     }
 
     /// Whether a module carries Strong's numbers, so its index has lemmas for a
@@ -1217,6 +1179,7 @@ final class SearchModel {
         highlightTerms = Self.highlightTerms(
             query: query,
             matchType: matchType,
+            fuzzy: fuzzySearch,
             strongs: strongsSearch
         )
         persistOptions()
@@ -1310,6 +1273,7 @@ final class SearchModel {
         highlightTerms = Self.highlightTerms(
             query: query,
             matchType: matchType,
+            fuzzy: fuzzySearch,
             strongs: strongsSearch
         )
         let capturedRange = range

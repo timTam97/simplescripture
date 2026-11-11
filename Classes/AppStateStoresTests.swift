@@ -1867,6 +1867,8 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(model.results.first?.id, "John 3:16")
         XCTAssertEqual(model.results.first?.text, "For God so loved the world")
         XCTAssertEqual(model.results.first?.strongsHighlightWords, ["loved"])
+        // Made into terms with the row, once: whole words, as the row marks them.
+        XCTAssertEqual(model.results.first?.strongsHighlightTerms, ["loved"])
     }
 
     /// A SECOND "Find all occurrences" must run the new term, not re-show the
@@ -2308,9 +2310,10 @@ final class AppStateStoresTests: XCTestCase {
             SearchModel.highlightTerms(
                 query: "love \"the world\" a",
                 matchType: .AndSearch,
+                fuzzy: false,
                 strongs: false
             ),
-            ["love", "the world"]
+            ["love", "the world", "a"]
         )
     }
 
@@ -2715,15 +2718,21 @@ final class AppStateStoresTests: XCTestCase {
     /// `PSSearchQuery.fts5Expression` trims the input and strips one pair of
     /// surrounding quotes before it builds the phrase. The highlight term was
     /// the field text as typed, and both highlighters — the result row and the
-    /// reader — match it literally. So "Jesus wept " (the trailing space the
-    /// keyboard's predictive bar leaves) or a phrase typed in quotes found its
-    /// verses and marked nothing, in the row and in the opened chapter alike.
+    /// reader — matched it character for character. So "Jesus wept " (the
+    /// trailing space the keyboard's predictive bar leaves) or a phrase typed
+    /// in quotes found its verses and marked nothing, in the row and in the
+    /// opened chapter alike.
+    ///
+    /// The term is the builder's own now, and terms compare as the words they
+    /// match, so a stray space or quote cannot cost the highlight again. What
+    /// this still holds is that an Exact search is ONE term: the whole phrase.
     @MainActor
     func testExactSearchHighlightsThePhraseTheQueryRan() {
-        func terms(_ query: String) -> [String] {
+        func terms(_ query: String) -> [SearchHighlightTerm] {
             SearchModel.highlightTerms(
                 query: query,
                 matchType: .ExactSearch,
+                fuzzy: false,
                 strongs: false
             )
         }
@@ -2740,12 +2749,16 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(terms("Jesus wept "), ["Jesus wept"])
         XCTAssertEqual(terms(" Jesus wept"), ["Jesus wept"])
         XCTAssertEqual(terms("\"Jesus wept\""), ["Jesus wept"])
-        // A space left inside the quotes: the tokenizer ignores it, so the term
-        // must too.
+        // A space left inside the quotes: still the one term. (Terms compare
+        // as the words they match, so this no longer tells a kept space from a
+        // trimmed one; the expression below does.)
         XCTAssertEqual(terms(" \"in the beginning \" "), ["in the beginning"])
         // Nothing left to mark.
         XCTAssertEqual(terms("\"\""), [])
-        XCTAssertEqual(terms(" a "), [])
+        // One letter is a term like any other. It was dropped as noise when a
+        // term was looked for anywhere in the text — every a in the verse — and
+        // as a whole word it marks the word.
+        XCTAssertEqual(terms(" a "), ["a"])
 
         // The builder's side of the same rule, so the two cannot drift apart
         // unnoticed: each of these inputs runs as the one phrase.
@@ -2765,26 +2778,32 @@ final class AppStateStoresTests: XCTestCase {
     /// for the scanner's quoted-phrase branch. The builder trims the input and
     /// the tokenizer ignores a space at either end of a phrase, so `"Jesus wept `
     /// — the quote not closed yet, with the trailing space the keyboard's
-    /// predictive bar leaves — finds John 11:35. Both highlighters match the
-    /// term literally, and "Jesus wept " is not in "Jesus wept.": the verse was
-    /// listed and marked nowhere, in the row or in the chapter it opened.
+    /// predictive bar leaves — finds John 11:35. Both highlighters matched the
+    /// term character for character, and "Jesus wept " is not in "Jesus wept.":
+    /// the verse was listed and marked nowhere, in the row or in the chapter it
+    /// opened. (They match a term's words now, and the terms are the builder's
+    /// own. What this still holds is that a quoted phrase is ONE term.)
     @MainActor
     func testAQuotedPhraseHighlightsWithoutTheSpacesInsideItsQuotes() {
         func terms(
             _ query: String,
             _ matchType: PSSearchType = .AndSearch
-        ) -> [String] {
+        ) -> [SearchHighlightTerm] {
             SearchModel.highlightTerms(
                 query: query,
                 matchType: matchType,
+                fuzzy: false,
                 strongs: false
             )
         }
 
-        // Unclosed, with the predictive bar's trailing space.
+        // Unclosed, with the predictive bar's trailing space: one term, the
+        // phrase. (Terms compare as the words they match, so the space itself
+        // is not what these tell apart; the second fails if a typographic
+        // quote stops opening a phrase.)
         XCTAssertEqual(terms("\"Jesus wept "), ["Jesus wept"])
         XCTAssertEqual(terms("\u{201C}Jesus wept "), ["Jesus wept"])
-        // Closed, with a space inside the quotes at either end.
+        // Closed, with a space inside the quotes at either end: one term.
         XCTAssertEqual(terms("\"Jesus wept \""), ["Jesus wept"])
         XCTAssertEqual(terms("\" Jesus wept\""), ["Jesus wept"])
         XCTAssertEqual(terms("\"Jesus wept \"", .OrSearch), ["Jesus wept"])
@@ -2793,12 +2812,13 @@ final class AppStateStoresTests: XCTestCase {
             terms("\" in the beginning \" God"),
             ["in the beginning", "God"]
         )
-        // Nothing left to mark: under two units after the trim, dropped like
-        // any other single character.
-        XCTAssertEqual(terms("\" a \""), [])
+        // One letter is a term like any other: a whole word, it marks the
+        // word (see `testExactSearchHighlightsThePhraseTheQueryRan`).
+        XCTAssertEqual(terms("\" a \""), ["a"])
+        // Nothing left to mark.
         XCTAssertEqual(terms("\"  \""), [])
         // A phrase with no stray space is the term it always was.
-        XCTAssertEqual(terms("love \"the world\" a"), ["love", "the world"])
+        XCTAssertEqual(terms("love \"the world\" a"), ["love", "the world", "a"])
 
         // The builder's side of the same rule: the unclosed phrase runs
         // without the trailing space.
@@ -2842,10 +2862,11 @@ final class AppStateStoresTests: XCTestCase {
     /// typed is still what the field shows and what the history saves.
     @MainActor
     func testTypographicQuotesHighlightThePhrase() {
-        func terms(_ query: String, _ matchType: PSSearchType) -> [String] {
+        func terms(_ query: String, _ matchType: PSSearchType) -> [SearchHighlightTerm] {
             SearchModel.highlightTerms(
                 query: query,
                 matchType: matchType,
+                fuzzy: false,
                 strongs: false
             )
         }
@@ -2894,18 +2915,20 @@ final class AppStateStoresTests: XCTestCase {
     ///
     /// The KJV prints Cæsar, Judæa and a dozen other names with the ligature,
     /// and the query finds them from a typed "ae". Both highlighters — the
-    /// result row and the reader — match a term literally, and "Caesar" does
-    /// not occur in "Render therefore unto Cæsar". So the list carries both
+    /// result row and the reader — match a term as the index holds it, and the
+    /// index does not take `ae` for `æ`: "Caesar" is no word of "Render
+    /// therefore unto Cæsar". So the list carries both
     /// spellings, or the verses the search found would be marked nowhere.
     @MainActor
     func testAnAeTermAlsoHighlightsItsLigatureSpelling() {
         func terms(
             _ query: String,
             _ matchType: PSSearchType = .AndSearch
-        ) -> [String] {
+        ) -> [SearchHighlightTerm] {
             SearchModel.highlightTerms(
                 query: query,
                 matchType: matchType,
+                fuzzy: false,
                 strongs: false
             )
         }
@@ -2925,9 +2948,11 @@ final class AppStateStoresTests: XCTestCase {
         )
         // Typed with the ligature, or pasted from a verse.
         XCTAssertEqual(terms("C\u{00E6}sar"), ["C\u{00E6}sar", "Caesar"])
-        // The ligature on its own is one-character noise, dropped like any
-        // other single character: it would mark the æ inside every such word.
-        XCTAssertEqual(terms("ae"), ["ae"])
+        // The ligature on its own is a term too. As a whole word it marks only
+        // a word that is one; it was dropped when it would have marked the æ
+        // inside every word that has one, and with it went the only mark on
+        // the three verses a fuzzy `Ae` finds (Ænon, Æneas).
+        XCTAssertEqual(terms("ae"), ["ae", "\u{00E6}"])
         // Terms without an "ae" are the list they always were.
         XCTAssertEqual(terms("God so loved"), ["God", "so", "loved"])
         XCTAssertEqual(terms("God so loved", .ExactSearch), ["God so loved"])
@@ -2957,6 +2982,313 @@ final class AppStateStoresTests: XCTestCase {
             "(text_norm:\"caesar\" OR text_norm:\"c\u{00E6}sar\")"
         )
         XCTAssertEqual(model.highlightTerms, ["Caesar", "C\u{00E6}sar"])
+    }
+
+    /// Under Fuzzy a term is a prefix exactly where the query ran one, and the
+    /// terms are the ones the query ran under.
+    ///
+    /// With Fuzzy on, a bare word in All or Any mode runs as `word*`: every
+    /// word that begins with it. The result row was told about the option
+    /// separately — the live toggle, not the search the rows came from — and
+    /// stretched each mark to the end of its word wherever in the word the
+    /// letters had been found, for a quoted phrase and an Exact search too,
+    /// which the query matches as typed. The reader was not told at all, so
+    /// the chapter a fuzzy result opened marked the typed letters only.
+    ///
+    /// The option now travels in the term, and the term is the query
+    /// builder's own: the spelling it rendered as `word*`.
+    @MainActor
+    func testAFuzzyTermIsAPrefixExactlyWhereTheQueryRanOne() {
+        func terms(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch,
+            fuzzy: Bool = true
+        ) -> [SearchHighlightTerm] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: matchType,
+                fuzzy: fuzzy,
+                strongs: false
+            )
+        }
+        func prefix(_ text: String) -> SearchHighlightTerm {
+            SearchHighlightTerm(text, matchesPrefix: true)
+        }
+
+        XCTAssertEqual(terms("lov"), [prefix("lov")])
+        XCTAssertEqual(terms("lov", .OrSearch), [prefix("lov")])
+        XCTAssertEqual(terms("lov", fuzzy: false), ["lov"])
+        // Punctuation around a word is not inside it: still one word.
+        XCTAssertEqual(terms("God,"), [prefix("God,")])
+        // A quoted phrase is matched as typed, and its neighbour is a prefix.
+        XCTAssertEqual(terms("\"so loved\" God"), ["so loved", prefix("God")])
+        XCTAssertEqual(terms("\"lov\""), ["lov"])
+        // So is a word with punctuation inside it.
+        XCTAssertEqual(terms("God\u{2019}s word"), ["God\u{2019}s", prefix("word")])
+        XCTAssertEqual(terms("Beer-sheba"), ["Beer-sheba"])
+        // The Exact arm ignores the option.
+        XCTAssertEqual(terms("lov", .ExactSearch), ["lov"])
+        // Each spelling of an ae word is the prefix the query made of it.
+        XCTAssertEqual(terms("Caesar"), [prefix("Caesar"), prefix("C\u{00E6}sar")])
+
+        // The builder's side of the same rule, so the two cannot drift apart
+        // unnoticed: a one-word query's term is a prefix exactly when its
+        // expression is one.
+        for word in ["lov", "God,", "(God)", "sons'", "God's", "God\u{2019}s",
+                     "Beer-sheba", "Baal-", "Caesar", "C\u{00E6}sar\u{2019}s", "x1"] {
+            for matchType in [PSSearchType.AndSearch, .OrSearch, .ExactSearch] {
+                for fuzzy in [false, true] {
+                    let expression = PSSearchQuery.fts5Expression(
+                        fromUserInput: word,
+                        matchType: matchType,
+                        fuzzy: fuzzy,
+                        strongs: false
+                    ) ?? ""
+                    let made = terms(word, matchType, fuzzy: fuzzy)
+                    XCTAssertFalse(made.isEmpty, word)
+                    for term in made {
+                        XCTAssertEqual(
+                            term.matchesPrefix,
+                            expression.contains("*"),
+                            "\(word), fuzzy \(fuzzy): \(expression)"
+                        )
+                    }
+                }
+            }
+        }
+
+        // The terms belong to the search that ran. The option is read when the
+        // query runs, not when a row is drawn.
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+        model.fuzzySearch = false
+        model.query = "lov"
+        XCTAssertEqual(model.expression, "text_norm:\"lov\"")
+        XCTAssertEqual(model.highlightTerms, ["lov"])
+
+        model.fuzzySearch = true
+        XCTAssertEqual(model.expression, "text_norm:lov*")
+        XCTAssertEqual(model.highlightTerms, [prefix("lov")])
+    }
+
+    /// A result row marks a search term as a whole word, and a Strong's row
+    /// its tagged words likewise.
+    ///
+    /// The row looked for the term's letters anywhere in the verse. Genesis
+    /// 46:3 has one "the" and three more words with those letters in them, and
+    /// all four were marked; under Fuzzy the mark ran on to the end of each
+    /// word, "ther" in "father" included. The query matched none of that: FTS5
+    /// matches whole words, and under Fuzzy the words that begin with the term.
+    ///
+    /// The marks are read back from the row's own attributed string, so this
+    /// fails if the row stops asking `PSSearchQuery.highlightRanges`.
+    @MainActor
+    func testAResultRowMarksASearchTermAsAWholeWord() {
+        func marked(_ terms: [SearchHighlightTerm], in verse: String) -> [String] {
+            let text = NSAttributedString(
+                SearchHighlightedText.make(verse, terms: terms)
+            )
+            XCTAssertEqual(text.string, verse, "marking \(terms) changed the text")
+            var out: [String] = []
+            text.enumerateAttribute(
+                .backgroundColor,
+                in: NSRange(location: 0, length: text.length)
+            ) { value, range, _ in
+                if value != nil {
+                    out.append((text.string as NSString).substring(with: range))
+                }
+            }
+            return out
+        }
+        let genesis46v3 = "And he said, I am God, the God of thy father: fear not to go"
+            + " down into Egypt; for I will there make of thee a great nation:"
+
+        XCTAssertEqual(marked(["the"], in: genesis46v3), ["the"])
+        XCTAssertEqual(marked(["he"], in: genesis46v3), ["he"])
+        XCTAssertEqual(marked(["God", "the"], in: genesis46v3), ["God", "the", "God"])
+        XCTAssertEqual(
+            marked([SearchHighlightTerm("the", matchesPrefix: true)], in: genesis46v3),
+            ["the", "there", "thee"]
+        )
+        // A phrase across the comma the verse prints inside it.
+        XCTAssertEqual(marked(["am God the"], in: genesis46v3), ["am God, the"])
+        // Nothing to mark leaves the text unmarked.
+        XCTAssertEqual(marked([], in: genesis46v3), [])
+        XCTAssertEqual(marked(["fat"], in: genesis46v3), [])
+
+        // The KJV text has non-ASCII characters before a match in 86 verses
+        // (the æ words) and in every verse with a possessive: the mark is
+        // placed by UTF-16 offset in the row's string and must not drift.
+        let luke20v25 = "And he said unto them, Render therefore unto C\u{00E6}sar the things"
+            + " which be C\u{00E6}sar\u{2019}s, and unto God the things which be God\u{2019}s."
+        XCTAssertEqual(marked(["the"], in: luke20v25), ["the", "the"])
+        XCTAssertEqual(marked(["God's"], in: luke20v25), ["God\u{2019}s"])
+    }
+
+    /// A Strong's row marks the words of the verse tagged with its number: whole
+    /// words, the divine name among them, and a one-letter word as that word.
+    ///
+    /// A Strong's search matches a lemma, so its row marks the verse's words
+    /// the index holds against that number (`word_map`). Three things were
+    /// wrong with it, on the same substring search the text terms had.
+    ///
+    /// A word was marked inside longer ones. `I` is the word under G1473, and
+    /// John 14:6 had it marked in "saith", "him" and "life" as well.
+    ///
+    /// The divine name was marked nowhere. The index stores it in markup —
+    /// `that the <divineName>Lord</divineName>` — and no verse contains that:
+    /// a search for H3068 listed 5,521 verses and marked a word in one.
+    ///
+    /// And the row chose between its own words and the query's terms by the
+    /// Strong's toggle as it stood, not by what the row held
+    /// (`SearchResultRow.highlightTerms(orQuery:)` now).
+    ///
+    /// The word maps below are the index's own lines for these verses.
+    @MainActor
+    func testAStrongsRowMarksTheWordsTaggedWithItsNumber() {
+        /// What the row of `verse` marks for a search on `numbers`, through
+        /// the row's own attributed string.
+        func marked(_ numbers: Set<String>, wordMap: String, in verse: String) -> [String] {
+            let row = SearchResultRow(
+                reference: "a verse",
+                text: verse,
+                strongsHighlightWords: PSSearchEngine.surfaceWords(
+                    inWordMap: wordMap, taggedWith: numbers)
+            )
+            let text = NSAttributedString(
+                SearchHighlightedText.make(verse, terms: row.strongsHighlightTerms)
+            )
+            var out: [String] = []
+            text.enumerateAttribute(
+                .backgroundColor,
+                in: NSRange(location: 0, length: text.length)
+            ) { value, range, _ in
+                if value != nil {
+                    out.append((text.string as NSString).substring(with: range))
+                }
+            }
+            return out
+        }
+
+        let john14v6 = "Jesus saith unto him, I am the way, the truth, and the life:"
+            + " no man cometh unto the Father, but by me."
+        let john14v6Words = [
+            "Jesus\tG3588 G2424 \u{03BF} \u{03B9}\u{03B7}\u{03C3}\u{03BF}\u{03C5}\u{03C2}",
+            "saith\tG3004 \u{03BB}\u{03B5}\u{03B3}\u{03B5}\u{03B9}",
+            "unto him\tG846 \u{03B1}\u{03C5}\u{03C4}\u{03C9}",
+            "I\tG1473 \u{03B5}\u{03B3}\u{03C9}",
+            "am\tG1510 \u{03B5}\u{03B9}\u{03BC}\u{03B9}",
+            "the way\tG3588 G3598 \u{03B7} \u{03BF}\u{03B4}\u{03BF}\u{03C2}",
+            "the truth\tG3588 G225 \u{03B7} \u{03B1}\u{03BB}\u{03B7}\u{03B8}\u{03B5}\u{03B9}\u{03B1}",
+            "and\tG2532 \u{03BA}\u{03B1}\u{03B9}",
+            "the life\tG3588 G2222 \u{03B7} \u{03B6}\u{03C9}\u{03B7}",
+            "no man\tG3762 \u{03BF}\u{03C5}\u{03B4}\u{03B5}\u{03B9}\u{03C2}",
+            "cometh\tG2064 \u{03B5}\u{03C1}\u{03C7}\u{03B5}\u{03C4}\u{03B1}\u{03B9}",
+            "unto\tG4314 \u{03C0}\u{03C1}\u{03BF}\u{03C2}",
+            "the Father\tG3588 G3962 \u{03C4}\u{03BF}\u{03BD} \u{03C0}\u{03B1}\u{03C4}\u{03B5}\u{03C1}\u{03B1}",
+            "but\tG3361 \u{03BC}\u{03B7}",
+            "by\tG1223 \u{03B4}\u{03B9}",
+            "me\tG1700 \u{03B5}\u{03BC}\u{03BF}\u{03C5}",
+        ].joined(separator: "\n")
+
+        // One letter, and the word only: not the i in "saith", "him", "life".
+        XCTAssertEqual(marked(["G1473"], wordMap: john14v6Words, in: john14v6), ["I"])
+        // A tagged run of words is marked whole.
+        XCTAssertEqual(marked(["G846"], wordMap: john14v6Words, in: john14v6), ["unto him"])
+        // Every run of words under the number, in the verse's order.
+        XCTAssertEqual(
+            marked(["G3588"], wordMap: john14v6Words, in: john14v6),
+            ["Jesus", "the way", "the truth", "the life", "the Father"]
+        )
+        // No word of the verse carries the number: nothing to mark.
+        XCTAssertEqual(marked(["G9999"], wordMap: john14v6Words, in: john14v6), [])
+
+        // The divine name, which the index stores in markup.
+        let genesis2v4 = "These are the generations of the heavens and of the earth when"
+            + " they were created, in the day that the LORD God made the earth and the"
+            + " heavens,"
+        let genesis2v4Words = [
+            "These\tH0428 H428",
+            "the generations\tH08435 H8435",
+            "of the heavens\tH08064 H8064",
+            "and of the earth\tH0776 H776",
+            "when they were created\tH01254 H1254",
+            "in the day\tH03117 H3117",
+            "that the <divineName>Lord</divineName>\tH03068 H3068",
+            "God\tH0430 H430",
+            "made\tH06213 H6213",
+            "the earth\tH0776 H776",
+            "and the heavens\tH08064 H8064",
+        ].joined(separator: "\n")
+        let lord: Set<String> = ["H03068", "H3068"]
+
+        XCTAssertEqual(
+            PSSearchEngine.surfaceWords(inWordMap: genesis2v4Words, taggedWith: lord),
+            ["that the Lord"],
+            "the surface word still carries the index's markup"
+        )
+        XCTAssertEqual(marked(lord, wordMap: genesis2v4Words, in: genesis2v4),
+                       ["that the LORD"])
+        // Two runs of words under one number, each where it is in the verse.
+        XCTAssertEqual(
+            marked(["H0776", "H776"], wordMap: genesis2v4Words, in: genesis2v4),
+            ["and of the earth", "the earth"]
+        )
+
+        // A word of a Psalm's title is in the word map and not in the row's
+        // text. It marks nothing, and the name beside it is still found.
+        let psalms3v1 = "LORD, how are they increased that trouble me! many are they that"
+            + " rise up against me."
+        let psalms3v1Words = [
+            "A Psalm\tH04210 H4210",
+            "of David\tH01732 H1732",
+            "<divineName>Lord</divineName>\tH03068 H3068",
+            "how are they increased\tH07231 H7231",
+        ].joined(separator: "\n")
+        XCTAssertEqual(marked(["H04210", "H4210"], wordMap: psalms3v1Words, in: psalms3v1), [])
+        XCTAssertEqual(marked(lord, wordMap: psalms3v1Words, in: psalms3v1), ["LORD"])
+
+        // Which terms a row marks is the row's to say: its own words when it
+        // has any — a Strong's search has no terms, and whatever the list holds
+        // is some other query's — and the query's terms when it has none, as
+        // every row of a text search does.
+        let query: [SearchHighlightTerm] = ["the", SearchHighlightTerm("lov", matchesPrefix: true)]
+        let strongsRow = SearchResultRow(
+            reference: "Genesis 2:4",
+            text: genesis2v4,
+            strongsHighlightWords: PSSearchEngine.surfaceWords(
+                inWordMap: genesis2v4Words, taggedWith: lord)
+        )
+        XCTAssertEqual(strongsRow.highlightTerms(orQuery: []), ["that the Lord"])
+        XCTAssertEqual(strongsRow.highlightTerms(orQuery: query), ["that the Lord"])
+        let textRow = SearchResultRow(
+            reference: "Genesis 2:4", text: genesis2v4, strongsHighlightWords: [])
+        XCTAssertEqual(textRow.strongsHighlightTerms, [])
+        XCTAssertEqual(textRow.highlightTerms(orQuery: query), query)
+        XCTAssertEqual(textRow.highlightTerms(orQuery: []), [])
+        // A Strong's row whose word map has no word for the number (683 of
+        // G3588's rows) has nothing of its own to mark and nothing to borrow.
+        let bare = SearchResultRow(
+            reference: "John 14:6",
+            text: john14v6,
+            strongsHighlightWords: PSSearchEngine.surfaceWords(
+                inWordMap: john14v6Words, taggedWith: ["G9999"])
+        )
+        XCTAssertEqual(bare.highlightTerms(orQuery: []), [])
     }
 
     /// A search that matches more verses than the list holds is cut at the cap,
@@ -5770,18 +6102,25 @@ final class AppStateStoresTests: XCTestCase {
 
             // An older result, opened in the commentary.
             workspace.highlightSearchTerms(["grace"], mode: .commentary)
+            // A whole word and a word Fuzzy ran as a prefix: how a term was
+            // matched has to arrive with it.
+            let terms: [SearchHighlightTerm] = [
+                "Noah", SearchHighlightTerm("comf", matchesPrefix: true),
+            ]
             workspace.openSearchResult(
                 "Genesis 5:29",
                 module: BundledModules.bible,
-                terms: ["Noah"],
+                terms: terms,
                 mode: .bible
             )
 
             XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 5")
-            XCTAssertEqual(workspace.bible.searchHighlightTerms, ["Noah"],
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, terms,
                            "The open wiped the terms of the result it was opening.")
-            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, ["Noah"],
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, terms,
                            "The result's chapter is drawn without its terms.")
+            XCTAssertNotEqual(workspace.bible.textStyle.highlightTerms, ["Noah", "comf"],
+                              "A fuzzy term reached the reader as a whole word.")
             XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
                            "An older result's terms outlived the open of a new one.")
 

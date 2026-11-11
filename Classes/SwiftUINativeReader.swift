@@ -58,9 +58,10 @@ enum ChapterTextRenderer {
         /// `createHTMLString`'s `line-height`: 1.4 on iPhone, 1.6 on iPad.
         var lineSpacingMultiple: CGFloat
 
-        /// The terms to highlight, case-insensitively. Empty for a Strong's search,
+        /// The search terms to highlight, each marked where the query matched it
+        /// (`PSSearchQuery.highlightRanges(of:in:)`). Empty for a Strong's search,
         /// where the match is a lemma rather than text present in the verse.
-        var highlightTerms: [String] = []
+        var highlightTerms: [SearchHighlightTerm] = []
 
         /// Resolve from the same defaults keys the HTML shell used, so a font
         /// chosen in Settings applies identically.
@@ -167,7 +168,7 @@ enum ChapterTextRenderer {
             out[painted].backgroundColor = background
             out[painted].foregroundColor = .black
         }
-        let terms = style.highlightTerms.filter { !$0.isEmpty }
+        let terms = style.highlightTerms.filter { !$0.tokens.isEmpty }
         if !terms.isEmpty {
             applyHighlights(terms, over: verse.runs, to: &out)
         }
@@ -220,7 +221,46 @@ enum ChapterTextRenderer {
         return pieces
     }
 
-    /// Jacket every case-insensitive occurrence of each term in yellow (black text).
+    /// A verse's words as the search highlight reads them: every run that is
+    /// not a marker, joined with NOTHING between — and, for mapping a match
+    /// back, each stretch's span in the words with where it starts in the
+    /// rendered text (`attributed(runs:)`), all counted in unicode scalars.
+    ///
+    /// Nothing between, because a word can be two runs: "LORD" is a capital and
+    /// three small ones. And no marker, because a marker's text is no word of
+    /// the verse. The search matched the words of the store's plain text, and
+    /// these cut into the same words for every verse of the Bible
+    /// (`testTheReadersWordsAreTheWordsTheSearchMatched` reads `words` here).
+    static func searchableWords(of runs: [InlineRun]) -> (
+        words: String,
+        stretches: [(inWords: Range<Int>, inText: Int)],
+        renderedCount: Int
+    ) {
+        var words = ""
+        var stretches: [(inWords: Range<Int>, inText: Int)] = []
+        var wordsCount = 0
+        var textCount = 0
+        for run in runs where !run.text.isEmpty {
+            let count = run.text.unicodeScalars.count
+            if !run.isMarker {
+                words += run.text
+                stretches.append((inWords: wordsCount..<(wordsCount + count),
+                                  inText: textCount))
+                wordsCount += count
+            }
+            textCount += count
+        }
+        return (words, stretches, textCount)
+    }
+
+    /// Jacket each term in yellow (black text) wherever the query matched it.
+    ///
+    /// **Where that is, is not decided here.** `PSSearchQuery.highlightRanges`
+    /// says, for the result row and for this alike: a term is the whole words
+    /// the index holds for it, so `the` is not marked inside "there", and a
+    /// word Fuzzy ran as a prefix is marked over every word that begins with it.
+    /// A row and the chapter it opens mark the same words because they ask the
+    /// same function.
     ///
     /// **The terms are matched against the verse's WORDS — its runs with the
     /// Strong's, morph and footnote markers left out — not against the rendered
@@ -240,23 +280,10 @@ enum ChapterTextRenderer {
     /// indices only at the point of use, so none is carried across a jacket: each
     /// jacket mutates the string, and an `AttributedString.Index` taken before a
     /// mutation is not promised to be valid after it.
-    private static func applyHighlights(_ terms: [String], over runs: [InlineRun],
+    private static func applyHighlights(_ terms: [SearchHighlightTerm],
+                                        over runs: [InlineRun],
                                         to text: inout AttributedString) {
-        var words = ""
-        // Each stretch of words: its span in `words`, and where it starts in `text`.
-        var stretches: [(inWords: Range<Int>, inText: Int)] = []
-        var wordsCount = 0
-        var textCount = 0
-        for run in runs where !run.text.isEmpty {
-            let count = run.text.unicodeScalars.count
-            if !run.isMarker {
-                words += run.text
-                stretches.append((inWords: wordsCount..<(wordsCount + count),
-                                  inText: textCount))
-                wordsCount += count
-            }
-            textCount += count
-        }
+        let (words, stretches, textCount) = searchableWords(of: runs)
         // Out of step with `attributed(runs:)`, a jacket would land on the wrong
         // letters or run off the end. No highlight is the better failure.
         guard textCount == text.unicodeScalars.count else {
@@ -268,32 +295,29 @@ enum ChapterTextRenderer {
             .backgroundColor(.yellow)
             .foregroundColor(.black)
         let scalars = words.unicodeScalars
-        for term in terms {
-            var from = words.startIndex
-            while from < words.endIndex,
-                  let found = words.range(of: term, options: .caseInsensitive,
-                                          range: from..<words.endIndex),
-                  !found.isEmpty {
-                let lower = scalars.distance(from: scalars.startIndex,
-                                             to: found.lowerBound)
-                let upper = scalars.distance(from: scalars.startIndex,
-                                             to: found.upperBound)
-                for stretch in stretches
-                where stretch.inWords.lowerBound < upper
-                    && stretch.inWords.upperBound > lower {
-                    // The part of the match inside this stretch, moved from its
-                    // place in the words to its place in the text.
-                    let first = max(lower, stretch.inWords.lowerBound)
-                    let last = min(upper, stretch.inWords.upperBound)
-                    let start = text.index(
-                        text.startIndex,
-                        offsetByUnicodeScalars:
-                            stretch.inText + first - stretch.inWords.lowerBound
-                    )
-                    let end = text.index(start, offsetByUnicodeScalars: last - first)
-                    text[start..<end].mergeAttributes(jacket)
-                }
-                from = found.upperBound
+        // The ranges come in reading order, so each one's place is counted on
+        // from the one before and not from the start of the verse again.
+        var counted = scalars.startIndex
+        var lower = 0
+        for found in PSSearchQuery.highlightRanges(of: terms, in: words) {
+            lower += scalars.distance(from: counted, to: found.lowerBound)
+            counted = found.lowerBound
+            let upper = lower + scalars.distance(from: found.lowerBound,
+                                                 to: found.upperBound)
+            for stretch in stretches
+            where stretch.inWords.lowerBound < upper
+                && stretch.inWords.upperBound > lower {
+                // The part of the match inside this stretch, moved from its
+                // place in the words to its place in the text.
+                let first = max(lower, stretch.inWords.lowerBound)
+                let last = min(upper, stretch.inWords.upperBound)
+                let start = text.index(
+                    text.startIndex,
+                    offsetByUnicodeScalars:
+                        stretch.inText + first - stretch.inWords.lowerBound
+                )
+                let end = text.index(start, offsetByUnicodeScalars: last - first)
+                text[start..<end].mergeAttributes(jacket)
             }
         }
     }

@@ -206,6 +206,7 @@ final class PSSearchIndexParityTests: XCTestCase {
             ("a\u{20D0}b", "ab"),
             ("x\u{FE20}y", "xy"),
             ("q\u{1DC0}r", "qr"),
+            ("m\u{1AB0}n", "mn"),
         ]
         for c in cases {
             XCTAssertEqual(PSSearchQuery.foldForIndex(c.input), c.expected,
@@ -494,5 +495,311 @@ final class PSSearchIndexParityTests: XCTestCase {
         // Still every word: the verse without "render" is not a match.
         let other = matchAgainstOneRow(allWords, verse: matthew22v17)
         XCTAssertEqual(other.rows, 0, "FTS5: \(other.error)")
+    }
+
+    // MARK: - Highlighting
+
+    /// A search term is marked where the query matched it: on whole words.
+    ///
+    /// FTS5 holds a verse as tokens, its runs of letters and digits, and a typed
+    /// word is one of them. Both highlighters — the result row and the reader —
+    /// looked for the term's characters anywhere in the text instead. So `the`
+    /// was marked inside "father", "there" and "thee", `is` inside "his", and
+    /// with Fuzzy on the mark ran from wherever the letters were found to the
+    /// end of that word ("ther" in "father"); while a phrase the query found
+    /// across a comma or a colon, or a possessive typed with the other
+    /// apostrophe, was marked nowhere.
+    ///
+    /// `PSSearchQuery.highlightRanges(of:in:)` now decides for both. This pins
+    /// what it marks in verses as the KJV prints them, and then holds it to
+    /// FTS5 itself: over every query and verse below, a verse has a mark exactly
+    /// when the query's own expression matches it.
+    @MainActor
+    func testASearchTermIsMarkedWhereTheQueryMatchedIt() {
+        /// The stretches of `verse` marked for `query`, in reading order,
+        /// whatever order the terms were typed in.
+        func marked(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch,
+            fuzzy: Bool = false,
+            in verse: String
+        ) -> [String] {
+            let terms = SearchModel.highlightTerms(
+                query: query, matchType: matchType, fuzzy: fuzzy, strongs: false)
+            return PSSearchQuery.highlightRanges(of: terms, in: verse)
+                .map { String(verse[$0]) }
+        }
+
+        let genesis46v3 = "And he said, I am God, the God of thy father: fear not to go"
+            + " down into Egypt; for I will there make of thee a great nation:"
+        let genesis1v3 = "And God said, Let there be light: and there was light."
+        let isaiah6v3 = "And one cried unto another, and said, Holy, holy, holy, is the"
+            + " LORD of hosts: the whole earth is full of his glory."
+        let firstCorinthians3v23 = "And ye are Christ\u{2019}s; and Christ is God\u{2019}s."
+        let genesis26v23 = "And he went up from thence to Beer\u{2013}sheba."
+        let luke20v25 = "And he said unto them, Render therefore unto C\u{00E6}sar the things"
+            + " which be C\u{00E6}sar\u{2019}s, and unto God the things which be God\u{2019}s."
+        let firstJohn4v11 = "Beloved, if God so loved us, we ought also to love one another."
+
+        // The reported case. One "the" in the verse, and three more words with
+        // those letters in them.
+        XCTAssertEqual(marked("the", in: genesis46v3), ["the"])
+        XCTAssertEqual(marked("he", in: genesis46v3), ["he"])
+        XCTAssertEqual(marked("is", in: isaiah6v3), ["is", "is"])
+        XCTAssertEqual(marked("the", in: luke20v25), ["the", "the"])
+        // Letters that are no word of the verse mark nothing.
+        XCTAssertEqual(marked("fat", in: genesis46v3), [])
+        XCTAssertEqual(marked("ther", in: genesis46v3), [])
+        // Case, and punctuation typed against the word, change nothing.
+        XCTAssertEqual(marked("GOD", in: genesis46v3), ["God", "God"])
+        XCTAssertEqual(marked("light.", in: genesis1v3), ["light", "light"])
+        XCTAssertEqual(marked("lord", in: isaiah6v3), ["LORD"])
+
+        // Fuzzy runs a word as a prefix: every word that BEGINS with it, whole.
+        // Not "father", which only contains it.
+        XCTAssertEqual(marked("the", fuzzy: true, in: genesis46v3),
+                       ["the", "there", "thee"])
+        XCTAssertEqual(marked("fat", fuzzy: true, in: genesis46v3), ["father"])
+        XCTAssertEqual(marked("ther", fuzzy: true, in: genesis46v3), ["there"])
+        XCTAssertEqual(marked("lov", fuzzy: true, in: firstJohn4v11), ["loved", "love"])
+        // An Exact search and a quoted phrase are not prefixes, whatever the
+        // option says.
+        XCTAssertEqual(marked("lov", .ExactSearch, fuzzy: true, in: firstJohn4v11), [])
+        XCTAssertEqual(marked("\"lov\"", fuzzy: true, in: firstJohn4v11), [])
+
+        // A phrase is its words in a row, across whatever the verse prints
+        // between them; the mark takes that in, and stops at the last word.
+        XCTAssertEqual(marked("light and there was light", .ExactSearch, in: genesis1v3),
+                       ["light: and there was light"])
+        XCTAssertEqual(marked("\"said let\"", in: genesis1v3), ["said, Let"])
+        XCTAssertEqual(marked("\"God, the God\"", in: genesis46v3), ["God, the God"])
+        // A phrase that repeats a word fits twice here, one word apart, and
+        // the two are one mark: all three words, as FTS5's own highlight()
+        // brackets them.
+        XCTAssertEqual(marked("holy holy", .ExactSearch, in: isaiah6v3),
+                       ["Holy, holy, holy"])
+        // Several terms come back in reading order, whatever order they were
+        // typed in.
+        XCTAssertEqual(marked("father God the", .OrSearch, in: genesis46v3),
+                       ["God", "the", "God", "father"])
+        // One letter is a word like any other.
+        XCTAssertEqual(marked("I", in: genesis46v3), ["I", "I"])
+        XCTAssertEqual(marked("a", in: genesis46v3), ["a"])
+        // The words out of order are not the phrase.
+        XCTAssertEqual(marked("light said", .ExactSearch, in: genesis1v3), [])
+
+        // A possessive and a hyphenated name are split where the index splits
+        // them, so either apostrophe and either dash finds what is printed.
+        for query in ["God's", "God\u{2019}s"] {
+            XCTAssertEqual(marked(query, in: firstCorinthians3v23), ["God\u{2019}s"], query)
+            // As typed under Fuzzy too: the builder does not make a prefix of it.
+            XCTAssertEqual(marked(query, fuzzy: true, in: firstCorinthians3v23),
+                           ["God\u{2019}s"], query)
+        }
+        XCTAssertEqual(marked("Christ", in: firstCorinthians3v23), ["Christ", "Christ"])
+        XCTAssertEqual(marked("Beer-sheba", in: genesis26v23), ["Beer\u{2013}sheba"])
+        XCTAssertEqual(marked("sheba", in: genesis26v23), ["sheba"])
+        XCTAssertEqual(marked("he", in: genesis26v23), ["he"])
+        // Both spellings of an ae word are terms, and each is a whole word.
+        XCTAssertEqual(marked("Caesar", in: luke20v25), ["C\u{00E6}sar", "C\u{00E6}sar"])
+
+        // Held to FTS5: a verse is marked exactly when the query matches it.
+        // One term or one phrase to a query, so that "matches" means this term.
+        let verses = [genesis46v3, genesis1v3, isaiah6v3, firstCorinthians3v23,
+                      genesis26v23, luke20v25, firstJohn4v11]
+        let queries = [
+            "the", "he", "is", "an", "or", "art", "ye", "us", "so", "hat", "I", "a", "s",
+            "God", "god's", "God\u{2019}s", "gods", "Christ", "lord", "holy", "whole",
+            "light", "there", "fat", "ther", "lov", "love", "loved", "beloved", "be",
+            "Beer-sheba", "beer", "sheba", "Caesar", "C\u{00E6}sar", "Caesar's", "thing",
+            "light.", "(God)", "--",
+            "\"said let\"", "\"holy holy\"", "\"the god\"", "\"god the\"",
+            "\"unto caesar\"", "\"and christ is\"", "\"to beer sheba\"", "\"lov\"",
+        ]
+        var compared = 0
+        var matched = 0
+        for query in queries {
+            for (matchType, fuzzy) in [(PSSearchType.AndSearch, false), (.AndSearch, true),
+                                       (.ExactSearch, false), (.ExactSearch, true)] {
+                let expression = PSSearchQuery.fts5Expression(
+                    fromUserInput: query, matchType: matchType, fuzzy: fuzzy, strongs: false)
+                for verse in verses {
+                    let match = matchAgainstOneRow(expression, verse: verse)
+                    guard let rows = match.rows else {
+                        XCTFail("\(query): FTS5 rejected \(expression ?? "nil"): \(match.error)")
+                        continue
+                    }
+                    let marks = marked(query, matchType, fuzzy: fuzzy, in: verse)
+                    XCTAssertEqual(
+                        !marks.isEmpty, rows == 1,
+                        "\(query) (\(matchType == .ExactSearch ? "Exact" : "All"),"
+                            + " fuzzy \(fuzzy)) in \(verse.prefix(28))…: FTS5 matched"
+                            + " \(rows) row(s), marked \(marks)")
+                    compared += 1
+                    matched += rows
+                }
+            }
+        }
+        // Neither side of the comparison is vacuous.
+        XCTAssertEqual(compared, queries.count * 4 * verses.count)
+        XCTAssertGreaterThan(matched, 100, "FTS5 matched almost nothing: \(matched)")
+        XCTAssertLessThan(matched, compared - 100, "FTS5 matched almost everything")
+    }
+
+    /// The highlighter cuts a text into words where the index's tokenizer does,
+    /// character by character.
+    ///
+    /// Whole-word marking is only as good as its idea of a word. The index's is
+    /// FTS5's `unicode61` over `foldForIndex(text)`; the highlighter's is its
+    /// own (`PSSearchQuery.highlightTokens`: letters and digits, with the marks
+    /// the fold deletes stepped over), because it has to keep each word's place
+    /// in the text as displayed. This holds one to the other on the simulator's
+    /// own SQLite: for every character `c` of the scripts the modules are in,
+    /// `x`+`c`+`y` is two words, one word `xy`, or one longer word to both.
+    ///
+    /// The ranges are Latin, the combining marks, Greek and Cyrillic
+    /// (U+0001–052F), Hebrew (U+0590–05FF), and Latin Extended Additional
+    /// through General Punctuation (U+1E00–2064): the apostrophes, dashes and
+    /// quotes a verse is printed with are in the last. Then the rest of what
+    /// the highlighter's rule names and those scripts do not use: the other
+    /// four ranges of marks the fold deletes (U+1AB0–1AFF, U+1DC0–1DFF,
+    /// U+20D0–20FF, U+FE20–FE2F), digits that are not ASCII (U+0660–0669),
+    /// letter numbers (U+2160–2188) and private use (U+E000–E0FF).
+    ///
+    /// Measured on macOS (SQLite 3.54.1) over the whole BMP, the two disagree
+    /// on 1,731 of 63,488 code points, none of them here. FTS5's tables are
+    /// Unicode 6.1's and it takes every code point that was unassigned then
+    /// for part of a word: 1,331 still unassigned, and 379 symbols and marks
+    /// assigned since (the Turkish lira sign U+20BA, the bidi isolates
+    /// U+2066–2069). And 21 marks have become letters since: 19 New Tai Lue
+    /// vowel signs and tone marks and 2 Vedic signs. An unassigned code point
+    /// is skipped below for the first reason.
+    func testTheHighlighterCutsWordsWhereTheIndexDoes() throws {
+        var handle: OpaquePointer?
+        guard sqlite3_open_v2(":memory:", &handle,
+                              SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nil) == SQLITE_OK,
+              let db = handle else {
+            return XCTFail("cannot open an in-memory database")
+        }
+        defer { sqlite3_close(db) }
+        func lastError() -> String { String(cString: sqlite3_errmsg(db)) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+        // One row per character: `x`+`c`+`y`, stored as the build stores
+        // `text_norm`, under the index's tokenizer. The rowid is the code point.
+        guard sqlite3_exec(db, "CREATE VIRTUAL TABLE verses USING fts5(text_norm,"
+                           + " tokenize='unicode61 remove_diacritics 2'); BEGIN;",
+                           nil, nil, nil) == SQLITE_OK else {
+            return XCTFail("set-up failed: \(lastError())")
+        }
+        var insert: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "INSERT INTO verses(rowid, text_norm) VALUES (?, ?);",
+                                 -1, &insert, nil) == SQLITE_OK else {
+            return XCTFail("prepare failed: \(lastError())")
+        }
+        var characters: [Unicode.Scalar] = []
+        let ranges: [ClosedRange<UInt32>] = [
+            0x0001...0x052F, 0x0590...0x05FF, 0x1E00...0x2064,
+            0x1AB0...0x1AFF, 0x1DC0...0x1DFF, 0x20D0...0x20FF, 0xFE20...0xFE2F,
+            0x0660...0x0669, 0x2160...0x2188, 0xE000...0xE0FF,
+        ]
+        for range in ranges {
+            for value in range {
+                guard let scalar = Unicode.Scalar(value),
+                      scalar.properties.generalCategory != .unassigned else { continue }
+                characters.append(scalar)
+                sqlite3_bind_int64(insert, 1, sqlite3_int64(value))
+                sqlite3_bind_text(insert, 2, PSSearchQuery.foldForIndex("x\(scalar)y"),
+                                  -1, transient)
+                guard sqlite3_step(insert) == SQLITE_DONE else {
+                    sqlite3_finalize(insert)
+                    return XCTFail("insert failed at U+\(String(value, radix: 16)):"
+                                   + " \(lastError())")
+                }
+                sqlite3_reset(insert)
+            }
+        }
+        sqlite3_finalize(insert)
+        guard sqlite3_exec(db, "COMMIT;", nil, nil, nil) == SQLITE_OK else {
+            return XCTFail("commit failed: \(lastError())")
+        }
+
+        /// The code points whose row FTS5 matches with `expression`.
+        func rows(matching expression: String) -> Set<UInt32>? {
+            var st: OpaquePointer?
+            guard sqlite3_prepare_v2(db, "SELECT rowid FROM verses WHERE verses MATCH ?;",
+                                     -1, &st, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(st) }
+            sqlite3_bind_text(st, 1, expression, -1, transient)
+            var out = Set<UInt32>()
+            while true {
+                let rc = sqlite3_step(st)
+                if rc == SQLITE_ROW {
+                    out.insert(UInt32(sqlite3_column_int64(st, 0)))
+                } else if rc == SQLITE_DONE {
+                    return out
+                } else {
+                    return nil
+                }
+            }
+        }
+        // Two words: the phrase "x y" is found. One word "xy": the character
+        // was no part of it and split nothing.
+        let between = try XCTUnwrap(rows(matching: "text_norm:\"x y\""),
+                                    "FTS5: \(lastError())")
+        let nothing = try XCTUnwrap(rows(matching: "text_norm:\"xy\""),
+                                    "FTS5: \(lastError())")
+        XCTAssertTrue(between.isDisjoint(with: nothing))
+
+        enum Cut: String { case separatesWords, isNoPartOfAWord, isPartOfAWord }
+        var disagreements: [String] = []
+        var seen: [Cut: Int] = [:]
+        for scalar in characters {
+            let index: Cut = between.contains(scalar.value) ? .separatesWords
+                : nothing.contains(scalar.value) ? .isNoPartOfAWord : .isPartOfAWord
+            let text = "x\(scalar)y"
+            let highlighter: Cut =
+                !PSSearchQuery.highlightRanges(of: ["x y"], in: text).isEmpty ? .separatesWords
+                : !PSSearchQuery.highlightRanges(of: ["xy"], in: text).isEmpty ? .isNoPartOfAWord
+                : .isPartOfAWord
+            seen[index, default: 0] += 1
+            if index != highlighter {
+                disagreements.append(
+                    "U+\(String(scalar.value, radix: 16, uppercase: true)):"
+                        + " the index says it \(index.rawValue),"
+                        + " the highlighter that it \(highlighter.rawValue)")
+            }
+        }
+        XCTAssertEqual(disagreements, [])
+
+        // All three answers are in play, in about the numbers measured on
+        // macOS with Unicode 17's tables (297 separators, 338 marks the fold
+        // deletes, 1,839 letters and digits). How many code points of the
+        // newer mark ranges are assigned depends on the system's own tables.
+        XCTAssertGreaterThan(characters.count, 2_300)
+        XCTAssertGreaterThan(seen[.separatesWords] ?? 0, 250)
+        XCTAssertGreaterThan(seen[.isNoPartOfAWord] ?? 0, 280)
+        XCTAssertGreaterThan(seen[.isPartOfAWord] ?? 0, 1_700)
+        // Each of the fold's six ranges is walked, and each kind of word
+        // character that is not a plain letter.
+        for value: UInt32 in [0x0301, 0x05B0, 0x1AB0, 0x1DC0, 0x20D0, 0xFE20] {
+            XCTAssertTrue(nothing.contains(value),
+                          "U+\(String(value, radix: 16)) is not deleted by the fold")
+        }
+        for value: UInt32 in [0x0661, 0x2160, 0xE000] {
+            XCTAssertFalse(between.contains(value) || nothing.contains(value),
+                           "U+\(String(value, radix: 16)) is not part of a word to FTS5")
+        }
+        // The characters the KJV text is printed with, by name.
+        for (scalar, cut): (Unicode.Scalar, Cut) in [
+            ("\u{2019}", .separatesWords), ("\u{2013}", .separatesWords),
+            ("\u{2014}", .separatesWords), ("'", .separatesWords), ("-", .separatesWords),
+            ("\u{00E6}", .isPartOfAWord), ("\u{00C6}", .isPartOfAWord),
+        ] {
+            XCTAssertTrue(characters.contains(scalar), "U+\(scalar.value) is not covered")
+            let index: Cut = between.contains(scalar.value) ? .separatesWords
+                : nothing.contains(scalar.value) ? .isNoPartOfAWord : .isPartOfAWord
+            XCTAssertEqual(index, cut, "U+\(String(scalar.value, radix: 16))")
+        }
     }
 }

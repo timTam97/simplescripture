@@ -269,7 +269,10 @@ private struct SearchWorkspace: View {
                 reading.savedSearchResultsMode = session.search.moduleKind
                 // Carry the results list's own highlight terms into the chapter,
                 // so the verse you land on marks the words the row did. The same
-                // `search.highlightTerms` the rows use, so the two cannot disagree.
+                // `search.highlightTerms` the rows use, through the same matcher
+                // (`PSSearchQuery.highlightRanges`), so the two cannot disagree.
+                // A Strong's search has none: its rows mark their own tagged
+                // words and the chapter opens unmarked.
                 // One call, because the order is the model's to keep: the open
                 // ends the highlight that was showing, so the terms go on after it.
                 reading.openSearchResult(

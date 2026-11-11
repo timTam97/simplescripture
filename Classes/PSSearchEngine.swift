@@ -437,6 +437,43 @@ final class PSSearchEngine {
 
     // MARK: - Query
 
+    /// The words of a verse tagged with any of `tokens`, from its `word_map`:
+    /// one line per tagged word or run of words, `surface TAB lemma lemma …`.
+    /// Each distinct surface once, in the verse's order.
+    ///
+    /// **The surface is returned as words, with its markup taken off.** The
+    /// column carries one tag, around the divine name: Genesis 2:4 has `that
+    /// the <divineName>Lord</divineName>` for H3068, where the verse reads
+    /// "that the LORD God made". Handed on as stored, the surface is in no
+    /// verse, tags and all, and the result row had nothing to mark. MEASURED on
+    /// the KJV index (6,878 of 349,514 lines carry the tag): a search for H3068
+    /// listed 5,521 verses and marked a word in one of them; H3069 in none of
+    /// 295. With the tag off, every tagged surface is in its verse except 424
+    /// that are words of a Psalm's title, which the row's text does not hold.
+    ///
+    /// Read-side only. The column is as the store ships it and as the index
+    /// digest pins it.
+    static func surfaceWords(inWordMap map: String,
+                             taggedWith tokens: Set<String>) -> [String] {
+        var words: [String] = []
+        var seen = Set<String>()
+        for line in map.components(separatedBy: "\n") {
+            guard let tab = line.range(of: "\t") else { continue }
+            let lemmaStr = String(line[tab.upperBound...])
+            let surface = String(line[line.startIndex..<tab.lowerBound])
+                .replacingOccurrences(of: "<[^>]*>", with: "",
+                                      options: .regularExpression)
+            if surface.isEmpty || lemmaStr.isEmpty { continue }
+            let hit = lemmaStr.components(separatedBy: " ")
+                .contains { !$0.isEmpty && tokens.contains($0) }
+            if !hit { continue }
+            if seen.contains(surface) { continue }
+            seen.insert(surface)
+            words.append(surface)
+        }
+        return words
+    }
+
     /// Runs a query against an already-built index. Returns an empty array if the
     /// index isn't fresh. The FTS5 expression should be produced by `PSSearchQuery`.
     /// If `strongsTokens` is non-empty, each returned result has its
@@ -522,20 +559,7 @@ final class PSSearchEngine {
                 let result = PSSearchResult(reference: ref, fullText: Self.text(st, 1))
 
                 if wantWordMap, let map = Self.text(st, 2), !map.isEmpty {
-                    var words: [String] = []
-                    var seen = Set<String>()
-                    for line in map.components(separatedBy: "\n") {
-                        guard let tab = line.range(of: "\t") else { continue }
-                        let surface = String(line[line.startIndex..<tab.lowerBound])
-                        let lemmaStr = String(line[tab.upperBound...])
-                        if surface.isEmpty || lemmaStr.isEmpty { continue }
-                        let hit = lemmaStr.components(separatedBy: " ")
-                            .contains { !$0.isEmpty && tokenSet.contains($0) }
-                        if !hit { continue }
-                        if seen.contains(surface) { continue }
-                        seen.insert(surface)
-                        words.append(surface)
-                    }
+                    let words = Self.surfaceWords(inWordMap: map, taggedWith: tokenSet)
                     if !words.isEmpty { result.strongsHighlightWords = words }
                 }
 

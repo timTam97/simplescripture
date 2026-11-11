@@ -179,8 +179,10 @@ final class ReaderPaneModel {
     /// without reloading the chapter. Clear it by assigning `[]`.
     ///
     /// A list because an "all words" / "any words" query matches on several, and
-    /// the results list highlights each of them.
-    var searchHighlightTerms: [String] = [] {
+    /// the results list highlights each of them. Each term says how the query
+    /// matched it (a whole word or phrase, or under Fuzzy a word's beginning),
+    /// so the chapter marks what the row that opened it marked.
+    var searchHighlightTerms: [SearchHighlightTerm] = [] {
         didSet {
             guard searchHighlightTerms != oldValue else { return }
             textStyle.highlightTerms = searchHighlightTerms
@@ -1747,21 +1749,21 @@ final class ReadingWorkspaceModel {
         session?.selectedWorkspace = .search
     }
 
-    /// Highlights every occurrence of the search terms in the pane that produced
-    /// the results. The terms are pane state applied while rendering, so they
+    /// Highlights the search terms in the pane that produced the results,
+    /// wherever the query would match them (`PSSearchQuery.highlightRanges`). The terms are pane state applied while rendering, so they
     /// cannot drift from the content; clear by assigning an empty list.
     ///
-    /// Takes the term LIST from `SearchModel.highlightTerms`, which splits an
-    /// all/any-words query into words, honours quoted phrases, drops
-    /// one-character noise, and returns **empty** for a Strong's search (the
-    /// matched text is a lemma, not text present in the verse).
+    /// Takes the term LIST from `SearchModel.highlightTerms` — the query's own
+    /// terms: an all/any-words query's words, a quoted phrase whole, the words
+    /// Fuzzy ran as prefixes marked as such — which is **empty** for a Strong's
+    /// search (the matched text is a lemma, not text present in the verse).
     ///
     /// **Not the way to open a result** — that is `openSearchResult`, which owns
     /// the order. A routed open ends the highlight in both panes, so terms set
     /// before one are wiped by it.
-    func highlightSearchTerms(_ terms: [String], mode: ReadingMode) {
+    func highlightSearchTerms(_ terms: [SearchHighlightTerm], mode: ReadingMode) {
         let pane = mode == .bible ? bible : commentary
-        pane.searchHighlightTerms = terms.filter { !$0.isEmpty }
+        pane.searchHighlightTerms = terms.filter { !$0.tokens.isEmpty }
     }
 
     /// Ends the search highlight in both panes.
@@ -1798,7 +1800,7 @@ final class ReadingWorkspaceModel {
     func openSearchResult(
         _ reference: String,
         module: String,
-        terms: [String],
+        terms: [SearchHighlightTerm],
         mode: ReadingMode
     ) {
         openLibraryReference(reference, module: module)

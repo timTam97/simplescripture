@@ -24,6 +24,8 @@
 //  Tiering: the default tier covers a fixed sample chosen to hit every structural
 //  feature (see `sampleRefs`) at BOTH option endpoints. `PSDOC_EXHAUSTIVE=1` walks
 //  all 1,189 chapters × 2 modules × 2 endpoints (4,756 builds, ~30 s).
+//  `testTheReadersWordsAreTheWordsTheSearchMatched` is tiered the same way (the
+//  sample by default, every KJV chapter under the switch, ~8 s in all).
 //
 
 import XCTest
@@ -876,7 +878,7 @@ final class PSChapterDocumentParityTests: XCTestCase {
 
         XCTAssertEqual(
             SearchModel.highlightTerms(
-                query: "H430", matchType: .AndSearch, strongs: true
+                query: "H430", matchType: .AndSearch, fuzzy: false, strongs: true
             ),
             [],
             "a Strong's query must contribute no highlight terms"
@@ -1491,7 +1493,7 @@ final class PSChapterDocumentParityTests: XCTestCase {
 
         /// The jacketed stretches for `terms`, in order. The text itself must come
         /// through untouched whatever is highlighted.
-        func jacketed(_ terms: [String], line: UInt = #line) -> [String] {
+        func jacketed(_ terms: [SearchHighlightTerm], line: UInt = #line) -> [String] {
             var style = base
             style.highlightTerms = terms
             let text = ChapterTextRenderer.text(for: verse, style: style)
@@ -1507,16 +1509,236 @@ final class PSChapterDocumentParityTests: XCTestCase {
         // A phrase whose words have a marker between them: both words, and not
         // the marker.
         XCTAssertEqual(jacketed(["beginning God"]), ["beginning", " God"])
-        XCTAssertEqual(jacketed(["created."]), ["created", "."])
+        // A term is its words. The full stop typed after one is no part of what
+        // the query matched, and is not jacketed (it was, when a term was
+        // matched character for character).
+        XCTAssertEqual(jacketed(["created."]), ["created"])
         // Case-insensitively, as before, and starting inside a run.
         XCTAssertEqual(jacketed(["GOD CREATED"]), ["God", " created"])
         // A marker's own text is not searched.
         XCTAssertEqual(jacketed(["0430"]), [])
-        XCTAssertEqual(jacketed(["880"]), [])
+        XCTAssertEqual(jacketed(["8804"]), [])
         // Every term still gets its turn.
         XCTAssertEqual(jacketed(["beginning God", "the"]), ["the", "beginning", " God"])
         // Control: a term inside one run is jacketed as it always was.
         XCTAssertEqual(jacketed(["God"]), ["God"])
+    }
+
+    /// The reader marks a search term as a whole word, as the row that opened
+    /// the chapter did, and a fuzzy term over every word that begins with it.
+    ///
+    /// The reader looked for the term's letters anywhere in the verse's words,
+    /// so the chapter a search for `the` opened had it marked inside "father",
+    /// "there" and "thee". And it was never told about Fuzzy: a result found by
+    /// `lov*` opened with "lov" marked inside "loved", where its row had marked
+    /// the word.
+    ///
+    /// Both now ask `PSSearchQuery.highlightRanges`, with the terms the query
+    /// ran. This pins the reader's half: the marks land on the right words of
+    /// the rendered text with a marker after nearly every one of them, which is
+    /// the reader's own work (`applyHighlights` maps a match in the words back
+    /// onto the text).
+    @MainActor
+    func testTheReaderMarksASearchTermAsAWholeWord() throws {
+        // Genesis 46:3 as the reader holds it with Strong's numbers on: one
+        // "the", and "father", "there" and "thee" with those letters in them.
+        let verse = ChapterVerse(
+            number: 3,
+            runs: [
+                InlineRun(text: "And he said"),
+                InlineRun(text: "<0559>", isMarker: true),
+                InlineRun(text: ", I am God"),
+                InlineRun(text: "<0410>", isMarker: true),
+                InlineRun(text: ", the God"),
+                InlineRun(text: "<0430>", isMarker: true),
+                InlineRun(text: " of thy father"),
+                InlineRun(text: "<01>", isMarker: true),
+                InlineRun(text: ": fear"),
+                InlineRun(text: "<03372>", isMarker: true),
+                InlineRun(text: " not to go down"),
+                InlineRun(text: "<03381>", isMarker: true),
+                InlineRun(text: " into Egypt"),
+                InlineRun(text: "<04714>", isMarker: true),
+                InlineRun(text: "; for I will there make"),
+                InlineRun(text: "<07760>", isMarker: true),
+                InlineRun(text: " of thee a great"),
+                InlineRun(text: "<01419>", isMarker: true),
+                InlineRun(text: " nation"),
+                InlineRun(text: "<01471>", isMarker: true),
+                InlineRun(text: ":"),
+            ]
+        )
+        let rendered = verse.runs.map(\.text).joined()
+        let base = ChapterTextRenderer.Style.current()
+
+        func jacketed(_ terms: [SearchHighlightTerm], line: UInt = #line) -> [String] {
+            var style = base
+            style.highlightTerms = terms
+            let text = ChapterTextRenderer.text(for: verse, style: style)
+            XCTAssertEqual(String(text.characters), rendered,
+                           "highlighting \(terms) changed the text", line: line)
+            var out: [String] = []
+            for run in text.runs where run.backgroundColor != nil {
+                out.append(String(text[run.range].characters))
+            }
+            return out
+        }
+
+        XCTAssertEqual(jacketed(["the"]), ["the"])
+        XCTAssertEqual(jacketed(["he"]), ["he"])
+        XCTAssertEqual(jacketed(["fat"]), [])
+        // A marker's digits are no word of the verse, whole or not.
+        XCTAssertEqual(jacketed(["0430"]), [])
+        // Fuzzy: the words that begin with the term, whole. Not "father".
+        XCTAssertEqual(
+            jacketed([SearchHighlightTerm("the", matchesPrefix: true)]),
+            ["the", "there", "thee"]
+        )
+        XCTAssertEqual(
+            jacketed([SearchHighlightTerm("fat", matchesPrefix: true)]),
+            ["father"]
+        )
+        // A phrase across the verse's own punctuation and across markers: its
+        // words and what is printed between them, and no marker.
+        XCTAssertEqual(jacketed(["am God the God of"]),
+                       ["am God", ", the God", " of"])
+
+        // "LORD" is two runs in the reader, a capital and three small ones
+        // (MEASURED: a word spans a run boundary in 5,825 KJV verses — LORD,
+        // GOD, JEHOVAH, JAH). The words are matched joined, so it is one word:
+        // found whole, and no "ORD" to be found on its own.
+        let genesis2v4 = ChapterVerse(
+            number: 4,
+            runs: [
+                InlineRun(text: "in the day that the L"),
+                InlineRun(text: "ORD", style: .smaller),
+                InlineRun(text: "<03068>", isMarker: true),
+                InlineRun(text: " God"),
+                InlineRun(text: "<0430>", isMarker: true),
+                InlineRun(text: " made the earth"),
+            ]
+        )
+        func jacketedInGenesis2v4(_ terms: [SearchHighlightTerm]) -> [String] {
+            var style = base
+            style.highlightTerms = terms
+            let text = ChapterTextRenderer.text(for: genesis2v4, style: style)
+            var out: [String] = []
+            for run in text.runs where run.backgroundColor != nil {
+                out.append(String(text[run.range].characters))
+            }
+            return out
+        }
+        XCTAssertEqual(jacketedInGenesis2v4(["lord"]), ["L", "ORD"])
+        XCTAssertEqual(jacketedInGenesis2v4(["the LORD God"]), ["the L", "ORD", " God"])
+        XCTAssertEqual(
+            jacketedInGenesis2v4([SearchHighlightTerm("lor", matchesPrefix: true)]),
+            ["L", "ORD"]
+        )
+        XCTAssertEqual(jacketedInGenesis2v4(["ord"]), [])
+    }
+
+    /// The reader's words are the words the search matched, verse for verse.
+    ///
+    /// A search matches the words of the store's plain text for a verse: what
+    /// the index holds, and what the result row shows. The reader marks a
+    /// different derivation of the same verse — its runs with the markers left
+    /// out (`ChapterTextRenderer.applyHighlights`). Marking whole words
+    /// depends on the two breaking into the same words. A word glued to the
+    /// next where a marker was taken out, or held apart from itself, would be a
+    /// verse the search found and the chapter opened without a mark; while a
+    /// term was looked for anywhere in the text, no such difference could show.
+    ///
+    /// MEASURED 2026-11-11 (iOS 27.2): all 31,102 verses break into the same
+    /// words at all 32 combinations of the five display options, and no marker
+    /// sits inside a word. A word does span a RUN boundary in 5,825 verses
+    /// ("L" + "ORD"), which is why the words are matched joined.
+    ///
+    /// The reader's side is the highlighter's own join
+    /// (`ChapterTextRenderer.searchableWords`), and both sides are cut by its
+    /// own tokenizer. So this fails if the join changes — a space put between
+    /// runs, a marker let in — if the document builder moves a word across a
+    /// run, or if the baked text does. The default tier walks the sample
+    /// chapters at both option endpoints; `PSDOC_EXHAUSTIVE=1` walks every
+    /// chapter (about 8 s in all).
+    ///
+    /// The Bible only. MHCC has no markers to take out, and six of its
+    /// passages cannot pass: the store's plain text for them has words the
+    /// chapter body lacks, 145 in all, each stretch from an `&c` to the next
+    /// semicolon or the passage's end (Genesis 3:1 and 43:1, Numbers 35:9,
+    /// Deuteronomy 18:9, II Samuel 5:17, Matthew 1:1). That is the baked data.
+    /// A search can find a passage on those words; the reader has nothing to
+    /// mark there, and never had.
+    func testTheReadersWordsAreTheWordsTheSearchMatched() throws {
+        let store = try store()
+        let resolver = try resolver()
+
+        // The chapters to walk, as the cursor names them. Nil is all of them.
+        var wanted: Set<String>?
+        if !Self.isExhaustive {
+            wanted = Set(try Self.sampleRefs.map { ref in
+                let (book, chapter) = try XCTUnwrap(resolver.resolve(ref: ref), ref)
+                return "\(book.osisName)|\(chapter)"
+            })
+        }
+
+        // The search's side: each verse's index text, cut into words.
+        var index: [String: [Int: [String]]] = [:]
+        let cursor = store.verseCursor(module: "KJV")
+        while let row = cursor.next() {
+            let ref = row.osisRef
+            guard let colon = ref.lastIndex(of: ":"),
+                  let space = ref[..<colon].lastIndex(of: " "),
+                  let chapter = Int(ref[ref.index(after: space)..<colon]),
+                  let verse = Int(ref[ref.index(after: colon)...]) else {
+                return XCTFail("cannot read the reference of an index row: \(ref)")
+            }
+            let key = "\(row.bookOsis)|\(chapter)"
+            if let wanted, !wanted.contains(key) { continue }
+            let plain = PSSearchQuery.cleanDisplayText(row.textPlain)
+            if plain.isEmpty { continue }
+            index[key, default: [:]][verse] = SearchHighlightTerm(plain).tokens
+        }
+        XCTAssertFalse(cursor.failed, "the store's verse cursor stopped early")
+
+        var compared = 0
+        for book in resolver.books {
+            for chapter in 1...book.chapterCount {
+                guard let verses = index["\(book.osisName)|\(chapter)"] else {
+                    XCTAssertNotNil(wanted, "the index has no verse of \(book.name) \(chapter)")
+                    continue
+                }
+                for options in [PSChapterExpander.Options.allOn, .allOff] {
+                    let label = "\(book.name) \(chapter), \(options.strongs ? "all-on" : "all-off")"
+                    let document = try XCTUnwrap(
+                        PSContentReader.shared.chapterDocument(
+                            module: "KJV", ref: "\(book.name) \(chapter)", kind: .bible,
+                            options: options, applyBookmarkHighlights: false),
+                        label)
+                    var found = 0
+                    for verse in document.verses {
+                        // A heading-only intro row is no verse of the index.
+                        guard let matched = verses[verse.number] else { continue }
+                        found += 1
+                        // The words as the highlighter itself joins them.
+                        let words = ChapterTextRenderer.searchableWords(of: verse.runs).words
+                        let shown = SearchHighlightTerm(words).tokens
+                        guard shown == matched else {
+                            return XCTFail("""
+                                \(label), verse \(verse.number): the reader's words are not \
+                                the words the search matched.
+                                  search: \(matched)
+                                  reader: \(shown)
+                                """)
+                        }
+                        compared += 1
+                    }
+                    XCTAssertEqual(found, verses.count,
+                                   "\(label): the index holds verses the reader does not show")
+                }
+            }
+        }
+        // 329 verses in the sample chapters, 31,102 in the Bible; twice each.
+        XCTAssertEqual(compared, Self.isExhaustive ? 62_204 : 658)
     }
 
     // MARK: - The flowed paragraph's join

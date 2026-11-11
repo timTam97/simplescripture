@@ -192,8 +192,6 @@ private struct SearchWorkspaceContent: View {
                     results: search.results,
                     resultsWereTruncated: search.resultsWereTruncated,
                     highlightTerms: search.highlightTerms,
-                    fuzzy: search.fuzzySearch,
-                    strongs: search.strongsSearch,
                     isSearching: search.isSearching,
                     isSearchPending: search.isSearchPending,
                     module: search.module,
@@ -285,9 +283,7 @@ private struct SearchReadyContent: View {
     /// The search matched more than `results` lists. For the list's header
     /// only.
     let resultsWereTruncated: Bool
-    let highlightTerms: [String]
-    let fuzzy: Bool
-    let strongs: Bool
+    let highlightTerms: [SearchHighlightTerm]
     let isSearching: Bool
     /// The debounce is running. For the empty arm only — the result list is
     /// not given it, so typing over rows leaves them and their corner alone.
@@ -314,8 +310,6 @@ private struct SearchReadyContent: View {
                 results: results,
                 resultsWereTruncated: resultsWereTruncated,
                 highlightTerms: highlightTerms,
-                fuzzy: fuzzy,
-                strongs: strongs,
                 isSearching: isSearching,
                 module: module,
                 openResult: openResult
@@ -327,9 +321,12 @@ private struct SearchReadyContent: View {
 private struct SearchResultList: View {
     let results: [SearchResultRow]
     let resultsWereTruncated: Bool
-    let highlightTerms: [String]
-    let fuzzy: Bool
-    let strongs: Bool
+    /// The terms of the query last run, as it matched them
+    /// (`SearchModel.highlightTerms`). Not the options as they stand now: the
+    /// rows were told about Fuzzy and Strong's by the live toggles, and
+    /// re-marked the search on screen the moment one was flipped, before any
+    /// query had run with the new setting.
+    let highlightTerms: [SearchHighlightTerm]
     let isSearching: Bool
     let module: String?
     let openResult: (_ reference: String, _ module: String) -> Void
@@ -345,10 +342,11 @@ private struct SearchResultList: View {
                         SearchResultRowView(
                             reference: result.reference,
                             text: result.text ?? "",
-                            highlightTerms: strongs
-                                ? result.strongsHighlightWords
-                                : highlightTerms,
-                            fuzzy: strongs ? false : fuzzy
+                            // Its own Strong's words, or the query's terms:
+                            // the row's to say.
+                            highlightTerms: result.highlightTerms(
+                                orQuery: highlightTerms
+                            )
                         )
                         .contentShape(Rectangle())
                     }
@@ -404,8 +402,7 @@ private struct SearchResultList: View {
 private struct SearchResultRowView: View {
     let reference: String
     let text: String
-    let highlightTerms: [String]
-    let fuzzy: Bool
+    let highlightTerms: [SearchHighlightTerm]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -415,8 +412,7 @@ private struct SearchResultRowView: View {
             Text(
                 SearchHighlightedText.make(
                     text.replacingOccurrences(of: "\n", with: " "),
-                    terms: highlightTerms,
-                    fuzzy: fuzzy
+                    terms: highlightTerms
                 )
             )
             .font(.body)
@@ -450,11 +446,16 @@ enum SearchResultClipboardText {
     }
 }
 
-private enum SearchHighlightedText {
+/// A result row's verse text with the search terms marked.
+///
+/// Where a term is marked is `PSSearchQuery.highlightRanges(of:in:)`'s to say —
+/// whole words, as the query matched them — and the reader asks the same
+/// function for the chapter a row opens (`ChapterTextRenderer`), so a row and
+/// its verse mark the same words. Not `private`: the tests read the marks.
+enum SearchHighlightedText {
     static func make(
         _ text: String,
-        terms: [String],
-        fuzzy: Bool
+        terms: [SearchHighlightTerm]
     ) -> AttributedString {
         let baseFont = UIFont.preferredFont(forTextStyle: .body)
         let output = NSMutableAttributedString(
@@ -474,38 +475,8 @@ private enum SearchHighlightedText {
             .foregroundColor: UIColor.black,
             .font: highlightFont,
         ]
-        let source = text as NSString
-        let comparison: NSString.CompareOptions = [
-            .caseInsensitive,
-            .diacriticInsensitive,
-        ]
-        let wordCharacters = NSCharacterSet.alphanumerics as NSCharacterSet
-
-        for term in terms where !term.isEmpty {
-            var searchRange = NSRange(location: 0, length: source.length)
-            while searchRange.location < source.length {
-                let match = source.range(
-                    of: term,
-                    options: comparison,
-                    range: searchRange
-                )
-                guard match.location != NSNotFound else { break }
-
-                var highlightRange = match
-                if fuzzy {
-                    var end = NSMaxRange(match)
-                    while end < source.length,
-                          wordCharacters.characterIsMember(
-                            source.character(at: end)
-                          ) {
-                        end += 1
-                    }
-                    highlightRange.length = end - highlightRange.location
-                }
-                output.addAttributes(attributes, range: highlightRange)
-                searchRange.location = NSMaxRange(highlightRange)
-                searchRange.length = source.length - searchRange.location
-            }
+        for range in PSSearchQuery.highlightRanges(of: terms, in: text) {
+            output.addAttributes(attributes, range: NSRange(range, in: text))
         }
         return AttributedString(output)
     }
