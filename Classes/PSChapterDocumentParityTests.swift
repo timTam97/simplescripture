@@ -1271,8 +1271,9 @@ final class PSChapterDocumentParityTests: XCTestCase {
     /// on, `said unto him,  Verily` had two spaces at 611 openings and 153
     /// closings across the Gospels and Acts.
     ///
-    /// The construct's space is still the ONLY separator at about a thousand
-    /// openings and at every verse-final close, so it cannot simply go. The parity
+    /// The construct's space is still the ONLY separator at 14 of the 2,038
+    /// openings (mid-record, straight after a morph marker), and 1,865 of the
+    /// 2,038 closes end their record with it, so it cannot simply go. The parity
     /// tests are the guard in that direction — John 3 is in their sample.
     func testRedLetterSpacesFoldIntoAdjacentWhitespace() throws {
         func text(_ record: String,
@@ -1533,8 +1534,13 @@ final class PSChapterDocumentParityTests: XCTestCase {
     /// This pins the join as text: a space after every verse but the last, none
     /// doubled after a verse that already ends in one (red-letter), none for an
     /// intro that is only its heading, the space outside the verse's bookmark
-    /// colour, and a no-break gap after each number. Where the lines then break can
-    /// only be seen on a device.
+    /// colour — the one added here and a verse's own alike — and a no-break gap
+    /// after each number. Where the lines then break can only be seen on a device.
+    ///
+    /// A verse's own trailing space was painted. A verse that ends in Christ's
+    /// words ends in the red-letter span's space, which is then the gap before the
+    /// next number, so a bookmark's colour ran up to that number where every other
+    /// verse's stopped at its last word.
     @MainActor
     func testFlowedVersesAreSpacedAndNumbersStayWithTheirVerse() throws {
         let style = ChapterTextRenderer.Style(
@@ -1589,22 +1595,67 @@ final class PSChapterDocumentParityTests: XCTestCase {
                        ["A Song. ", "1\u{202F}Blessed."])
 
         // The space is no part of the verse's highlight: the bookmark colour stops
-        // where the verse's text does.
+        // at the verse's last word, whether the space is the one added here
+        // (verse 1) or the verse's own (verses 2 and 3).
+        func painted(_ text: AttributedString) -> String {
+            var out = ""
+            for run in text.runs where run.backgroundColor != nil {
+                out += String(text[run.range].characters)
+            }
+            return out
+        }
+        let colour = "rgba(255,204,0,0.8)"
+        // A verse that ends in Christ's words, as the builder emits it: the
+        // red-letter span's own space is its last run. 1,865 of the KJV's 2,038
+        // spans close at the end of their record.
+        let christsWords = try XCTUnwrap(PSChapterDocumentBuilder.runs(
+            from: "He said, \u{0011}Verily.\u{0012}", options: .allOn))
+        XCTAssertEqual(christsWords.map(\.text), ["He said, ", "Verily.", " "])
         let marked = ChapterTextRenderer.flowedPieces(
             for: ChapterParagraph(verses: [
                 ChapterVerse(number: 1, runs: [InlineRun(text: "In the beginning.")],
-                             highlightColour: "rgba(255,204,0,0.8)"),
-                ChapterVerse(number: 2, runs: [InlineRun(text: "And the earth.")]),
+                             highlightColour: colour),
+                ChapterVerse(number: 2, runs: christsWords, highlightColour: colour),
+                // The last verse of a chapter: its record ends in a space, in all
+                // 1,189 chapters.
+                ChapterVerse(number: 3, runs: [InlineRun(text: "And the earth. ")],
+                             highlightColour: colour),
             ]),
             style: style, tappable: true
         )
-        let first = try XCTUnwrap(marked.first).text
-        var painted = ""
-        for run in first.runs where run.backgroundColor != nil {
-            painted += String(first[run.range].characters)
-        }
-        XCTAssertEqual(String(first.characters), "1\u{202F}In the beginning. ")
-        XCTAssertEqual(painted, "In the beginning.")
+        XCTAssertEqual(
+            marked.map { String($0.text.characters) },
+            [
+                "1\u{202F}In the beginning. ",
+                "2\u{202F}He said, Verily. ",
+                "3\u{202F}And the earth. ",
+            ]
+        )
+        XCTAssertEqual(
+            marked.map { painted($0.text) },
+            ["In the beginning.", "He said, Verily.", "And the earth."],
+            "the bookmark colour runs past a verse's last word"
+        )
+
+        // The same verse on its own row, in the Verse Per Line layout.
+        let alone = ChapterTextRenderer.text(
+            for: ChapterVerse(number: 2, runs: christsWords, highlightColour: colour),
+            style: style
+        )
+        XCTAssertEqual(String(alone.characters), "He said, Verily. ")
+        XCTAssertEqual(painted(alone), "He said, Verily.")
+
+        // ── The store's own records ──
+        // John 3:3 ends in Christ's words.
+        let johnBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "John 3", options: .allOn, kind: .bible))
+        var verse = try XCTUnwrap(johnBoth.document.verses.first { $0.number == 3 })
+        verse.highlightColour = colour
+        let real = ChapterTextRenderer.text(for: verse, style: style)
+        let whole = String(real.characters)
+        XCTAssertEqual(whole.last, " ", "John 3:3 no longer ends in the span's space")
+        XCTAssertEqual(painted(real), whole.trimmingCharacters(in: .whitespaces),
+                       "John 3:3's bookmark colour runs past its last word")
     }
 
     /// The transliteration in a Hebrew Strong's popup header keeps its vocal shewa

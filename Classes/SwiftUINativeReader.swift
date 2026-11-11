@@ -151,11 +151,21 @@ enum ChapterTextRenderer {
     static func text(for verse: ChapterVerse, style: Style) -> AttributedString {
         var out = attributed(runs: verse.runs, style: style)
         if let colour = verse.highlightColour,
-           let background = Color(bookmarkRGBAString: colour) {
-            // One background over the whole range — the same visible result as the
-            // HTML's span per block element.
-            out.backgroundColor = background
-            out.foregroundColor = .black
+           let background = Color(bookmarkRGBAString: colour),
+           let last = out.characters.lastIndex(where: { !$0.isWhitespace }) {
+            // One background from the verse's first character to its last visible
+            // one, where the HTML had a span per block element.
+            //
+            // NOT over a trailing space. A verse that ends in Christ's words ends
+            // in the red-letter span's own space (1,865 of the KJV's 2,038 spans
+            // close at the end of their record), and the last verse of every
+            // chapter ends in one of the record's. In flowing prose that space is
+            // the gap before the next verse number — `flowedPieces` adds none
+            // after it — so, painted, it carried the bookmark's colour up to the
+            // number where every other verse's stops at its last word.
+            let painted = out.startIndex..<out.characters.index(after: last)
+            out[painted].backgroundColor = background
+            out[painted].foregroundColor = .black
         }
         let terms = style.highlightTerms.filter { !$0.isEmpty }
         if !terms.isEmpty {
@@ -174,9 +184,12 @@ enum ChapterTextRenderer {
     ///
     /// The space is appended to the verse it follows, where the engine had it, and
     /// only after `text(for:style:)` has returned, so no bookmark colour and no
-    /// search jacket covers it. The gap after the number does not break (see
-    /// `verseLabel`), which leaves this space as the one place a line can break at a
-    /// verse boundary: a number goes to the next line with its verse.
+    /// search jacket covers it. A verse that already ends in a space keeps its own
+    /// instead (the guard below), and `text(for:style:)` leaves a trailing space
+    /// out of the bookmark colour for the same reason. The gap after the number
+    /// does not break (see `verseLabel`), which leaves this space as the one place
+    /// a line can break at a verse boundary: a number goes to the next line with
+    /// its verse.
     ///
     /// Here rather than in `ParagraphRow` so the join can be read without a view
     /// host. Pinned by `testFlowedVersesAreSpacedAndNumbersStayWithTheirVerse`.
@@ -199,7 +212,7 @@ enum ChapterTextRenderer {
         for index in pieces.indices.dropLast() {
             // None after a piece with nothing in it (an intro that is only its
             // heading), and no second one after a piece that already ends in a space
-            // (a red-letter verse ends with the span's own).
+            // (a verse that ends in Christ's words ends with the span's own).
             guard let last = pieces[index].text.characters.last,
                   !last.isWhitespace else { continue }
             pieces[index].text += gap

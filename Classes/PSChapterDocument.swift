@@ -688,8 +688,15 @@ enum PSChapterDocumentBuilder {
                 // at 611 openings and 153 closings (`said unto him,  Verily`).
                 //
                 // Each is kept only where the record has no whitespace of its own
-                // there — where it is the sole separator: about a thousand openings,
-                // and every verse-final close. Dropping them outright fails parity.
+                // there. MEASURED over the KJV's 2,038 spans. An opening leads its
+                // record 1,413 times (emitted, then blanked by the strip in `build`),
+                // follows a space 611 times (dropped), and 14 times sits mid-record
+                // straight after a morph marker — the only openings where it is the
+                // sole separator. A close ends its record 1,865 times (kept: the
+                // verse then ends in this space, which `ChapterTextRenderer` keeps a
+                // bookmark's colour off), is followed by a space 153 times (dropped)
+                // and by an untranslated word's Strong's marker 20 times (kept).
+                // Dropping them outright fails parity.
                 let precededBySpace = out.last(where: { !$0.text.isEmpty })?
                     .text.last?.isWhitespace ?? false
                 if !precededBySpace {
