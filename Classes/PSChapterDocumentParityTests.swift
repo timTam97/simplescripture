@@ -1241,4 +1241,80 @@ final class PSChapterDocumentParityTests: XCTestCase {
                            "KJV \(ref): the chapter opens with a row above verse 1")
         }
     }
+
+    // MARK: - Red-letter spacing
+
+    /// The red-letter construct's spaces fold into whitespace that is already
+    /// there.
+    ///
+    /// The HTML carried a space just inside each end of the span
+    /// (`<span class="WordOfChrist"> ` … `</span> `), and a browser folded each
+    /// into any whitespace on the other side of the tag. The builder emitted both
+    /// as text whatever was beside them, and `Text` folds nothing: with Red Letter
+    /// on, `said unto him,  Verily` had two spaces at 611 openings and 153
+    /// closings across the Gospels and Acts.
+    ///
+    /// The construct's space is still the ONLY separator at about a thousand
+    /// openings and at every verse-final close, so it cannot simply go. The parity
+    /// tests are the guard in that direction — John 3 is in their sample.
+    func testRedLetterSpacesFoldIntoAdjacentWhitespace() throws {
+        func text(_ record: String,
+                  _ options: PSChapterExpander.Options = .allOn) throws -> String {
+            let runs = try XCTUnwrap(
+                PSChapterDocumentBuilder.runs(from: record, options: options))
+            return runs.map(\.text).joined()
+        }
+
+        // The record's own whitespace is beside the token: one space, not two.
+        XCTAssertEqual(try text("him, \u{0011}Suffer it\u{0012} Then he"),
+                       "him, Suffer it Then he")
+        XCTAssertEqual(try text("him,\n\u{0011}Suffer it\u{0012}\nThen he"),
+                       "him,\nSuffer it\nThen he")
+        // Two spans back to back share one.
+        XCTAssertEqual(try text("\u{0011}Verily\u{0012}\u{0011}I say\u{0012}"),
+                       " Verily I say ")
+
+        // The construct's spaces are the only separators: kept.
+        XCTAssertEqual(try text("him,\u{0011}Suffer it\u{0012}Then he"),
+                       "him, Suffer it Then he")
+        // Verse-leading and verse-final: as they were. The leading one is the
+        // leading-whitespace strip's to remove.
+        XCTAssertEqual(try text("\u{0011}Verily\u{0012}"), " Verily ")
+        // A token sentinel after the span is whitespace to Swift (U+000B opens a
+        // title) but puts no space in the text, so the construct's space stays.
+        XCTAssertEqual(try text("\u{0011}Verily\u{0012}\u{000B}Title\u{000C}"),
+                       " Verily Title")
+
+        // Red Letter off emits neither space; the record's own are the separators.
+        var off = PSChapterExpander.Options.allOn
+        off.redLetter = false
+        XCTAssertEqual(try text("him, \u{0011}Suffer it\u{0012} Then he", off),
+                       "him, Suffer it Then he")
+
+        // The payload is still red, and so is a space the construct supplies.
+        let folded = try XCTUnwrap(PSChapterDocumentBuilder.runs(
+            from: "him, \u{0011}Suffer\u{0012} Then", options: .allOn))
+        XCTAssertEqual(folded.map(\.text), ["him, ", "Suffer", " Then"])
+        XCTAssertEqual(folded.map { $0.style.contains(.wordOfChrist) },
+                       [false, true, false])
+        let kept = try XCTUnwrap(PSChapterDocumentBuilder.runs(
+            from: "him,\u{0011}Suffer\u{0012}Then", options: .allOn))
+        XCTAssertEqual(kept.map(\.text), ["him,", " ", "Suffer", " ", "Then"])
+        XCTAssertEqual(kept.map { $0.style.contains(.wordOfChrist) },
+                       [false, true, true, true, false])
+
+        // ── The store's own records ──
+        // John 3:3, 3:5 and 3:10 each open a span after `, `.
+        let johnBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "John 3", options: .allOn, kind: .bible))
+        var doubled: [Int] = []
+        for verse in johnBoth.document.verses where !verse.isIntro {
+            let joined = verse.runs.map(\.text).joined()
+            if joined.range(of: "\\S\\s{2,}\\S", options: .regularExpression) != nil {
+                doubled.append(verse.number)
+            }
+        }
+        XCTAssertEqual(doubled, [],
+                       "KJV John 3: verses with a doubled space inside their text")
+    }
 }

@@ -681,16 +681,34 @@ enum PSChapterDocumentBuilder {
             case redLetterOpen:
                 guard let inner = runs(from: payload, options: options,
                                         reportFailures: reportFailures) else { return nil }
-                // The HTML carried a literal leading/trailing space inside the
-                // span (`<span class="WordOfChrist"> ` / `</span> `); those are
-                // part of the construct, so they are preserved as text.
-                out.append(InlineRun(text: " ", style: .wordOfChrist))
+                // The HTML carried a literal space after each of the span's tags
+                // (`<span class="WordOfChrist"> ` / `</span> `), and a browser folded
+                // each into any whitespace on the other side of its tag. `Text` folds
+                // nothing, so emitting both wherever the token sits doubled the space
+                // at 611 openings and 153 closings (`said unto him,  Verily`).
+                //
+                // Each is kept only where the record has no whitespace of its own
+                // there — where it is the sole separator: about a thousand openings,
+                // and every verse-final close. Dropping them outright fails parity.
+                let precededBySpace = out.last(where: { !$0.text.isEmpty })?
+                    .text.last?.isWhitespace ?? false
+                if !precededBySpace {
+                    // Also the verse-leading case (`out` is empty), where the strip
+                    // in `build` blanks it, as it always has.
+                    out.append(InlineRun(text: " ", style: .wordOfChrist))
+                }
                 out += inner.map {
                     var run = $0
                     run.style.insert(.wordOfChrist)
                     return run
                 }
-                out.append(InlineRun(text: " ", style: .wordOfChrist))
+                // A literal space or newline, NOT `isWhitespace`: what follows may be
+                // another token's sentinel, and U+000B / U+000C (the title pair) are
+                // whitespace to Swift without putting any in the text.
+                let next: Character? = end + 1 < chars.count ? chars[end + 1] : nil
+                if !(next == " " || next == "\n") {
+                    out.append(InlineRun(text: " ", style: .wordOfChrist))
+                }
             default:
                 PSContentStore.fail("unhandled token", report: reportFailures)
                 return nil
