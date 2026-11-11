@@ -750,11 +750,18 @@ final class HistoryStore {
             history = NSMutableArray()
             // Seeding the persistent domain makes the key exist before the first
             // `set`. Kept: `setPersistentDomain` also flushes, and removing it
-            // changes when the file first appears.
-            let bundleId = Bundle.main.bundleIdentifier ?? ""
-            var preferences = defaults.persistentDomain(forName: bundleId) ?? [:]
-            preferences[AppConstants.historyName] = history
-            defaults.setPersistentDomain(preferences, forName: bundleId)
+            // changes when the file first appears. ONLY for the app's own
+            // store: these two calls address the domain by NAME whichever
+            // instance they are made on, so through an injected store they
+            // replaced the app's real `bibleHistory` with an empty array — a
+            // run of the unit tests emptied the history of the install hosting
+            // them. An injected store still gets its key from the `set` below.
+            if defaults === UserDefaults.standard {
+                let bundleId = Bundle.main.bundleIdentifier ?? ""
+                var preferences = defaults.persistentDomain(forName: bundleId) ?? [:]
+                preferences[AppConstants.historyName] = history
+                defaults.setPersistentDomain(preferences, forName: bundleId)
+            }
         } else if let history {
             for index in 0..<history.count {
                 guard let existing = history[index] as? [Any],

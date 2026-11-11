@@ -1251,6 +1251,57 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(cloud.synchronizeCount, 1)
     }
 
+    /// `addEntry` seeds the app's persistent domain before a first entry, and
+    /// those two calls address the domain by NAME whichever `UserDefaults` they
+    /// are made on. Through an injected store they replaced the host app's own
+    /// `bibleHistory` with an empty array, so a run of these tests emptied the
+    /// reading history of the install that hosted them.
+    func testAddEntryThroughAnInjectedStoreLeavesTheAppsOwnHistoryAlone() {
+        let standard = UserDefaults.standard
+        let saved = standard.array(forKey: AppConstants.historyName)
+        defer {
+            if let saved {
+                standard.set(saved, forKey: AppConstants.historyName)
+            } else {
+                standard.removeObject(forKey: AppConstants.historyName)
+            }
+        }
+        standard.set(
+            [["Psalms 23:1", "0", "KJV", Date(timeIntervalSince1970: 1)]],
+            forKey: AppConstants.historyName
+        )
+
+        defaults.set("Genesis 5", forKey: Defaults.lastRef)
+        defaults.set("9", forKey: Defaults.bibleVersePosition)
+        defaults.removeObject(forKey: AppConstants.historyName)
+        XCTAssertNil(
+            defaults.array(forKey: AppConstants.historyName),
+            "The seeding is the first-entry path: the injected store must "
+                + "start with no history, and must not see the app's."
+        )
+
+        let store = HistoryStore(
+            defaults: defaults,
+            cloudStore: HistoryCloudStoreStub(),
+            notificationCenter: NotificationCenter(),
+            moduleNameProvider: { _ in BundledModules.bible }
+        )
+        store.addEntry(mode: .bible)
+
+        let appHistory = standard.array(forKey: AppConstants.historyName)
+        XCTAssertEqual(appHistory?.count, 1)
+        XCTAssertEqual(
+            (appHistory?.first as? [Any])?.first as? String,
+            "Psalms 23:1"
+        )
+        let injectedHistory = defaults.array(forKey: AppConstants.historyName)
+        XCTAssertEqual(injectedHistory?.count, 1)
+        XCTAssertEqual(
+            (injectedHistory?.first as? [Any])?.first as? String,
+            "Genesis 5:9"
+        )
+    }
+
     func testLaunchCoordinatorRunsOneShotMigrationsOffUIKit() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
