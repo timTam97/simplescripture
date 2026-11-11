@@ -124,6 +124,16 @@ final class LaunchCoordinator {
         defaults.removeObject(forKey: Self.localesVersion)
         defaults.synchronize()
 
+        // The per-module keys ("<pref>_<module>"), which is where every row of the
+        // reader's display menu lives.
+        //
+        // `vplPreference` is the one entry the legacy list did not have. Verse Per
+        // Line has been per-module since 2010, but the reset went on removing only
+        // the unsuffixed key above, which nothing reads — so a reset put the other
+        // five KJV rows back to default and left this one as it was, although an
+        // absent key reads as ON (`UserDefaults.psDefaultOnPrefs`). Pinned by
+        // `testResetClearsEveryDisplayToggleTheReaderOffers`, which takes its keys
+        // from `ReaderDisplayToggle.toggles`: a new row has to be added here too.
         let modulePreferences = [
             Defaults.redLetterPreference,
             Defaults.strongsPreference,
@@ -135,6 +145,7 @@ final class LaunchCoordinator {
             Defaults.footnotesPreference,
             Defaults.headingsPreference,
             Defaults.glossesPreference,
+            Defaults.vplPreference,
             Defaults.fontSizePreference,
             Defaults.fontNamePreference,
         ]

@@ -1306,6 +1306,64 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(redisplayNotifications, 1)
     }
 
+    /// A reset returns EVERY row of the reader's display menu to its default.
+    ///
+    /// Verse Per Line was left behind. The reset removed the unsuffixed
+    /// `vplPreference`, a key nothing has read since the toggle became per-module,
+    /// and its per-module sweep did not list it. So Strong's, Morph, Headings,
+    /// Footnotes and Red Letter went back to their defaults while a reader who had
+    /// switched Verse Per Line off stayed in prose — although an absent key reads
+    /// as ON, and `psDefaultOnPrefs` says so with the reset in mind.
+    ///
+    /// The keys come from `ReaderDisplayToggle.toggles`, not from a list written
+    /// here, so a seventh row cannot be left out of the reset unnoticed.
+    func testResetClearsEveryDisplayToggleTheReaderOffers() throws {
+        let store = try XCTUnwrap(
+            PSContentStore.shared,
+            "PSContentStore.shared is required for the baked feature set."
+        )
+        let toggles = ReaderDisplayToggle.toggles(
+            forModule: BundledModules.bible,
+            store: store
+        )
+        XCTAssertFalse(toggles.isEmpty)
+        for toggle in toggles {
+            defaults.psSet(
+                false,
+                forPref: toggle.preference,
+                module: BundledModules.bible
+            )
+        }
+        let coordinator = LaunchCoordinator(
+            defaults: defaults,
+            notificationCenter: NotificationCenter(),
+            moduleControllerAvailable: { true },
+            resetModuleSelections: {}
+        )
+
+        XCTAssertTrue(coordinator.resetPreferences())
+
+        for toggle in toggles {
+            XCTAssertNil(
+                defaults.object(
+                    forKey: defaults.psModuleKey(
+                        toggle.preference,
+                        BundledModules.bible
+                    )
+                ),
+                "\(toggle.id) survived the reset"
+            )
+        }
+        // The wire key spelled out, and what the reader then renders with.
+        XCTAssertNil(defaults.object(forKey: "vplPreference_KJV"))
+        XCTAssertTrue(
+            defaults.psBool(
+                Defaults.vplPreference,
+                forModule: BundledModules.bible
+            )
+        )
+    }
+
     /// The primaries resolved at launch are a Bible and a commentary, not merely
     /// two modules that ship.
     ///
