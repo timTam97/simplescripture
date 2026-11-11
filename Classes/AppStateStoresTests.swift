@@ -681,6 +681,76 @@ final class AppStateStoresTests: XCTestCase {
         )
     }
 
+    /// A Library dictionary entry is the entry as stored, not a page built around
+    /// it.
+    ///
+    /// `PSEntryDocumentBuilder` drops an entry's own key anchor only when the
+    /// anchor is the first thing in its input. Wrapped the way the WebView page was
+    /// (`<div><b>KEY</b><br /><p>…</p>` plus three `&nbsp;` paragraphs), every
+    /// Strong's entry showed its number twice under a navigation title that is
+    /// already the key, and ended in three hard spaces.
+    func testDictionaryEntryIsTheStoredEntryNotAWebViewShell() throws {
+        // The two stored shapes: Hebrew breaks straight after the key anchor, Greek
+        // carries its lemma line first.
+        let hebrew = "<a name=\"03899\"><b>3899</b></a><br /> &#1500;&#1495;&#1501;<br />"
+            + " [lechem] \\<i>lekh'-em</i>\\<br /> From"
+            + " <a href=\"sword://StrongsRealHebrew/03898\">3898</a>; <i>food</i>"
+        let greek = "<a name=\"03588\">3588</a> <b>&#8001;</b> [O(] {ho} \\<i>ho</i>\\<br/>"
+            + "including the feminine"
+        let stored = [
+            "\(BundledModules.strongsHebrew)/03899": hebrew,
+            "\(BundledModules.strongsGreek)/03588": greek,
+        ]
+        let store = DictionaryStore(
+            defaults: defaults,
+            moduleProvider: { nil },
+            moduleLoader: { _ in },
+            moduleTypeProvider: { _ in "Lexicons / Dictionaries" },
+            keysProvider: { _ in [] },
+            entryProvider: { module, key in stored["\(module)/\(key)"] }
+        )
+
+        for (module, key, number, raw) in [
+            (BundledModules.strongsHebrew, "03899", "3899", hebrew),
+            (BundledModules.strongsGreek, "03588", "3588", greek),
+        ] {
+            let entry = store.entry(module: module, key: key)
+            XCTAssertEqual(entry.html, raw,
+                           "\(module) \(key) was not passed through as stored")
+
+            let document = PSEntryDocumentBuilder.build(html: entry.html)
+            XCTAssertEqual(document, PSEntryDocumentBuilder.build(html: raw),
+                           "\(module) \(key) renders differently from its stored entry")
+
+            let texts = document.blocks.map { $0.runs.map(\.text).joined() }
+            XCTAssertFalse(texts.contains(key),
+                           "\(module) \(key): the key is a line of the body: \(texts)")
+            XCTAssertFalse(
+                texts.contains {
+                    $0.trimmingCharacters(in: .whitespaces).hasPrefix(number)
+                },
+                "\(module) \(key): the key anchor's number renders: \(texts)"
+            )
+            XCTAssertFalse(
+                document.blocks.flatMap(\.runs).contains { $0.text == "\u{00A0}" },
+                "\(module) \(key): the entry ends in the page's padding"
+            )
+        }
+
+        // And through the production wiring, against the baked store: the Library
+        // hands the renderer what the popup hands it.
+        let key = "03899"
+        let baked = try XCTUnwrap(
+            PSContentReader.entry(module: BundledModules.strongsHebrew, key: key),
+            "StrongsRealHebrew \(key) is missing from the store"
+        )
+        XCTAssertEqual(
+            DictionaryStore(defaults: defaults)
+                .entry(module: BundledModules.strongsHebrew, key: key).html,
+            baked
+        )
+    }
+
     func testHistoryStoreUsesNaturalIDsAndPersistsRemoval() throws {
         let firstDate = Date(timeIntervalSince1970: 200)
         let secondDate = Date(timeIntervalSince1970: 100)

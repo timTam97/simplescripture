@@ -576,9 +576,13 @@ final class DictionaryStore {
             rawDescription = "<span style=\"color:grey;text-align:center;"
                 + "font-style:italic;\">\(module) \(notInstalled)</span>"
         }
-        let body = "<div style=\"-webkit-text-size-adjust: none;\">"
-            + "<b>\(key)</b><br /><p>\(rawDescription)</p>"
-            + "<p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p></div>"
+        // The entry as stored, with nothing around it. `PSEntryDocumentBuilder`
+        // drops an entry's own key anchor only when the anchor is the FIRST thing
+        // in its input, so the WebView page's shell (a bold key line in front,
+        // three `&nbsp;` paragraphs behind) made every Strong's entry show its
+        // number twice and end in three hard spaces. The key needs no line of its
+        // own in the body: it is the navigation title directly above.
+        let body = rawDescription
         return DictionaryEntryDocument(
             module: module,
             key: key,
