@@ -833,6 +833,19 @@ final class PSChapterDocumentParityTests: XCTestCase {
             string.isEmpty,
             "the verse rendered empty"
         )
+
+        // The marker is left alone: its text is a link's label, not a word of the
+        // verse, so a term that occurs only there highlights nothing.
+        style.highlightTerms = ["H0430"]
+        let markerOnly = ChapterTextRenderer.text(for: verse, style: style)
+        XCTAssertEqual(String(markerOnly.characters), string)
+        for run in markerOnly.runs {
+            XCTAssertNil(
+                run.backgroundColor,
+                "a term was highlighted inside a marker: "
+                    + "'\(String(markerOnly[run.range].characters))'"
+            )
+        }
     }
 
     /// An empty term list highlights nothing — the state a Strong's search leaves
@@ -1384,5 +1397,67 @@ final class PSChapterDocumentParityTests: XCTestCase {
             ).runs.first?.font,
             "bold and regular compare equal, so the assertion above proves nothing"
         )
+    }
+
+    // MARK: - Search highlighting across markers
+
+    /// The search terms are matched against the verse's words; the markers between
+    /// them are neither searched nor jacketed.
+    ///
+    /// The highlighter searched the rendered string, markers included. With
+    /// Strong's on nearly every word is followed by one, so an exact phrase —
+    /// `beginning God` over `beginning<07225> God` — was never found and the
+    /// chapter opened from a phrase search with nothing highlighted, though the
+    /// result row that was tapped showed the match. And a term could be jacketed
+    /// inside a marker's own text: `prep` in `(PREP)`.
+    ///
+    /// The words are what the search matched and what the row shows. A match is
+    /// mapped back onto the rendered text stretch by stretch, so a marker inside a
+    /// matched phrase stays as it was.
+    @MainActor
+    func testSearchHighlightReadsTheWordsAndLeavesMarkersAlone() throws {
+        let verse = ChapterVerse(
+            number: 1,
+            runs: [
+                InlineRun(text: "In the beginning"),
+                InlineRun(text: "<07225>", isMarker: true),
+                InlineRun(text: " God"),
+                InlineRun(text: "<0430>", isMarker: true),
+                InlineRun(text: " created"),
+                InlineRun(text: "(8804)", isMarker: true),
+                InlineRun(text: "."),
+            ]
+        )
+        let rendered = "In the beginning<07225> God<0430> created(8804)."
+        let base = ChapterTextRenderer.Style.current()
+
+        /// The jacketed stretches for `terms`, in order. The text itself must come
+        /// through untouched whatever is highlighted.
+        func jacketed(_ terms: [String], line: UInt = #line) -> [String] {
+            var style = base
+            style.highlightTerms = terms
+            let text = ChapterTextRenderer.text(for: verse, style: style)
+            XCTAssertEqual(String(text.characters), rendered,
+                           "highlighting \(terms) changed the text", line: line)
+            var out: [String] = []
+            for run in text.runs where run.backgroundColor != nil {
+                out.append(String(text[run.range].characters))
+            }
+            return out
+        }
+
+        // A phrase whose words have a marker between them: both words, and not
+        // the marker.
+        XCTAssertEqual(jacketed(["beginning God"]), ["beginning", " God"])
+        XCTAssertEqual(jacketed(["created."]), ["created", "."])
+        // Case-insensitively, as before, and starting inside a run.
+        XCTAssertEqual(jacketed(["GOD CREATED"]), ["God", " created"])
+        // A marker's own text is not searched.
+        XCTAssertEqual(jacketed(["0430"]), [])
+        XCTAssertEqual(jacketed(["880"]), [])
+        // Every term still gets its turn.
+        XCTAssertEqual(jacketed(["beginning God", "the"]), ["the", "beginning", " God"])
+        // Control: a term inside one run is jacketed as it always was.
+        XCTAssertEqual(jacketed(["God"]), ["God"])
     }
 }

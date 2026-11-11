@@ -121,23 +121,88 @@ enum ChapterTextRenderer {
             out.backgroundColor = background
             out.foregroundColor = .black
         }
-        for term in style.highlightTerms where !term.isEmpty {
-            applyHighlight(term, to: &out)
+        let terms = style.highlightTerms.filter { !$0.isEmpty }
+        if !terms.isEmpty {
+            applyHighlights(terms, over: verse.runs, to: &out)
         }
         return out
     }
 
-    /// Jacket every case-insensitive occurrence of `term` in yellow (black text).
-    private static func applyHighlight(_ term: String, to text: inout AttributedString) {
+    /// Jacket every case-insensitive occurrence of each term in yellow (black text).
+    ///
+    /// **The terms are matched against the verse's WORDS — its runs with the
+    /// Strong's, morph and footnote markers left out — not against the rendered
+    /// string.** The words are what the search matched and what its result row
+    /// highlights. In the rendered string a marker follows nearly every word once
+    /// Strong's is on (`beginning<07225> God`), so an exact phrase was never found
+    /// there and the chapter opened with nothing highlighted; and a term could be
+    /// found inside a marker's own text (`prep` in `(PREP)`).
+    ///
+    /// Each match is mapped back onto `text` one stretch of words at a time, so a
+    /// marker inside a matched phrase is left as it was.
+    ///
+    /// `text` must be `attributed(runs:)` of the same runs, and the walk below
+    /// MIRRORS it: one stretch of `run.text` per non-empty run, in order. Positions
+    /// are counted in unicode scalars, because joining two runs can merge the
+    /// Characters either side of the join but never the scalars. They become
+    /// indices only at the point of use, so none is carried across a jacket: each
+    /// jacket mutates the string, and an `AttributedString.Index` taken before a
+    /// mutation is not promised to be valid after it.
+    private static func applyHighlights(_ terms: [String], over runs: [InlineRun],
+                                        to text: inout AttributedString) {
+        var words = ""
+        // Each stretch of words: its span in `words`, and where it starts in `text`.
+        var stretches: [(inWords: Range<Int>, inText: Int)] = []
+        var wordsCount = 0
+        var textCount = 0
+        for run in runs where !run.text.isEmpty {
+            let count = run.text.unicodeScalars.count
+            if !run.isMarker {
+                words += run.text
+                stretches.append((inWords: wordsCount..<(wordsCount + count),
+                                  inText: textCount))
+                wordsCount += count
+            }
+            textCount += count
+        }
+        // Out of step with `attributed(runs:)`, a jacket would land on the wrong
+        // letters or run off the end. No highlight is the better failure.
+        guard textCount == text.unicodeScalars.count else {
+            assertionFailure("applyHighlights is out of step with attributed(runs:)")
+            return
+        }
+
         let jacket = AttributeContainer()
             .backgroundColor(.yellow)
             .foregroundColor(.black)
-        var searchRange = text.startIndex..<text.endIndex
-        while let found = text[searchRange].range(of: term,
-                                                  options: .caseInsensitive) {
-            text[found].mergeAttributes(jacket)
-            guard found.upperBound < text.endIndex else { break }
-            searchRange = found.upperBound..<text.endIndex
+        let scalars = words.unicodeScalars
+        for term in terms {
+            var from = words.startIndex
+            while from < words.endIndex,
+                  let found = words.range(of: term, options: .caseInsensitive,
+                                          range: from..<words.endIndex),
+                  !found.isEmpty {
+                let lower = scalars.distance(from: scalars.startIndex,
+                                             to: found.lowerBound)
+                let upper = scalars.distance(from: scalars.startIndex,
+                                             to: found.upperBound)
+                for stretch in stretches
+                where stretch.inWords.lowerBound < upper
+                    && stretch.inWords.upperBound > lower {
+                    // The part of the match inside this stretch, moved from its
+                    // place in the words to its place in the text.
+                    let first = max(lower, stretch.inWords.lowerBound)
+                    let last = min(upper, stretch.inWords.upperBound)
+                    let start = text.index(
+                        text.startIndex,
+                        offsetByUnicodeScalars:
+                            stretch.inText + first - stretch.inWords.lowerBound
+                    )
+                    let end = text.index(start, offsetByUnicodeScalars: last - first)
+                    text[start..<end].mergeAttributes(jacket)
+                }
+                from = found.upperBound
+            }
         }
     }
 
