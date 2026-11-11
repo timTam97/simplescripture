@@ -165,12 +165,25 @@ final class SimpleScriptureUITests: XCTestCase {
         capture("SimpleScripture Ezra")
     }
 
+    /// Choosing book, chapter and verse in the reference picker closes it and
+    /// moves the reader to that verse.
+    ///
+    /// The reader starts in another chapter, so the choice has to move it, and
+    /// the verse is one that does not open its chapter in either layout: flowing,
+    /// the reader rests on the paragraph a chosen verse is in, and Genesis 1:10
+    /// is in the third (verses 9-13).
+    ///
+    /// Judged by where that text is: the row, or the paragraph, holding verse 10
+    /// starts at the top of the reading area. Not by the verse's number being
+    /// there, which it is wherever the reader rests. MEASURED (iOS 27.2, flowing,
+    /// 18 pt): at the top of Genesis 1 it is in the hierarchy and on screen, 769 pt
+    /// down an 874 pt one.
     @MainActor
     func testReferencePickerSelectsVerse() throws {
-        selectWorkspace("Read")
+        // setUp leaves the app in the Read workspace, in the Bible.
+        selectGenesisChapter(3)
 
         let referenceButton = app.buttons["reading.reference-picker"]
-        XCTAssertTrue(referenceButton.waitForExistence(timeout: 5))
         referenceButton.tap()
 
         XCTAssertTrue(
@@ -185,15 +198,39 @@ final class SimpleScriptureUITests: XCTestCase {
         XCTAssertTrue(chapter.waitForExistence(timeout: 5))
         chapter.tap()
 
-        XCTAssertTrue(
-            app.navigationBars["Genesis 1"].waitForExistence(timeout: 5)
-        )
-        let verse = app.buttons["reference.verse.1"]
+        let versePage = app.navigationBars["Genesis 1"]
+        XCTAssertTrue(versePage.waitForExistence(timeout: 5))
+        let verse = app.buttons["reference.verse.10"]
         XCTAssertTrue(verse.waitForExistence(timeout: 5))
         verse.tap()
 
+        // The verse page's own bar. "Select Book" went two pushes ago.
         XCTAssertTrue(
-            app.navigationBars["Select Book"].waitForNonExistence(timeout: 5)
+            versePage.waitForNonExistence(timeout: 5),
+            "Choosing a verse did not close the reference picker."
+        )
+        // The label is the chapter the reader is in. The value is the title,
+        // which carries the verse, and is not asserted on.
+        let chosenText = app.staticTexts.containing(
+            .link, identifier: "pslink://versemenu/10"
+        ).firstMatch
+        let readingAreaTop = app.navigationBars.firstMatch.frame.maxY
+        let landed = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                referenceButton.label == "Genesis 1"
+                    && chosenText.exists
+                    && abs(chosenText.frame.minY - readingAreaTop) <= 10
+            },
+            object: nil
+        )
+        let outcome = XCTWaiter().wait(for: [landed], timeout: 5)
+        let rest = chosenText.exists
+            ? "starts at y \(chosenText.frame.minY)" : "is not in the hierarchy"
+        XCTAssertEqual(
+            outcome, .completed,
+            "After Genesis 1:10 was chosen the reader is in \(referenceButton.label) "
+                + "and the text holding verse 10 \(rest); the reading area starts "
+                + "at y \(readingAreaTop)."
         )
     }
 
@@ -456,7 +493,13 @@ final class SimpleScriptureUITests: XCTestCase {
         let verse = app.buttons["reference.verse.\(verseNumber)"]
         XCTAssertTrue(verse.waitForExistence(timeout: 5))
         verse.tap()
-        XCTAssertTrue(app.navigationBars["Select Book"].waitForNonExistence(timeout: 5))
+        // The bar of the verse page itself. The picker is one navigation stack
+        // whose bar takes the page's title, so by now "Select Book" is two pushes
+        // gone and waiting for it to go waits for nothing.
+        XCTAssertTrue(
+            app.navigationBars["Genesis \(chapter)"].waitForNonExistence(timeout: 5),
+            "Choosing a verse did not close the reference picker."
+        )
     }
 
     /// Tapping a search result while the keyboard is still up opens the reader ON
