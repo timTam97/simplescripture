@@ -970,6 +970,44 @@ final class SimpleScriptureUITests: XCTestCase {
         )
     }
 
+    /// The header over the results counts the verses found, or says the list was
+    /// cut.
+    ///
+    /// A search lists at most 1,000 verses, and the header used to print that cap
+    /// as the count. The model's unit test proves a list longer than the cap is
+    /// cut and flagged. That the default query asks the engine for one row past
+    /// the cap, which is the only way the model can know there were more, and
+    /// what the header then says, are only here. Asked for exactly the cap, the
+    /// model is never handed more than it lists and the header goes back to
+    /// "1,000 Results" with every unit test passing (by the code; this has only
+    /// been run with the query as it is).
+    ///
+    /// "Melchizedek" is in two verses of the KJV (the New Testament spells it
+    /// "Melchisedec"), and "the" in far more than a thousand.
+    @MainActor
+    func testSearchHeaderSaysWhenTheListWasCut() throws {
+        func header() -> String {
+            app.staticTexts.matching(
+                NSPredicate(format: "label ENDSWITH %@", "Results")
+            ).allElementsBoundByIndex.map(\.label).joined(separator: " | ")
+        }
+
+        let field = search(for: "Melchizedek")
+        XCTAssertTrue(
+            app.staticTexts["2 Results"].waitForExistence(timeout: 15),
+            "The header over the results for 'Melchizedek' reads \"\(header())\"."
+        )
+
+        field.typeText(String(
+            repeating: XCUIKeyboardKey.delete.rawValue, count: "Melchizedek".count
+        ))
+        field.typeText("the")
+        XCTAssertTrue(
+            app.staticTexts["First 1,000 Results"].waitForExistence(timeout: 15),
+            "The header over the results for 'the' reads \"\(header())\"."
+        )
+    }
+
     @MainActor
     func testLibrarySectionsSwitch() throws {
         selectWorkspace("Library")
