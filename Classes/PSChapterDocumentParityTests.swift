@@ -1549,4 +1549,82 @@ final class PSChapterDocumentParityTests: XCTestCase {
         XCTAssertEqual(String(first.characters), "1\u{202F}In the beginning. ")
         XCTAssertEqual(painted, "In the beginning.")
     }
+
+    /// The transliteration in a Hebrew Strong's popup header keeps its vocal shewa
+    /// inside the word.
+    ///
+    /// StrongsRealHebrew writes the shewa as `<sup><font size="-1"><i>e</i></font></sup>`
+    /// inside the bracketed transliteration: 1,414 of its 8,674 entries, H3068
+    /// (LORD), H1285 (covenant) and H3063 (Judah) among them. A tag strip that
+    /// leaves a space for every tag turned `[y<sup>…e…</sup>hôvâh]` into
+    /// "y e hôvâh" in the header, above a body that renders the word whole.
+    func testHebrewTransliterationKeepsItsSuperscriptVowelInsideTheWord() throws {
+        let store = try store()
+        let html = try XCTUnwrap(
+            store.dictEntry(module: BundledModules.strongsHebrew, key: "03068"),
+            "StrongsRealHebrew 03068 is missing from the store"
+        )
+        XCTAssertTrue(
+            html.contains("[y<sup><font size=\"-1\"><i>e</i></font></sup>h&#244;v&#226;h]"),
+            "the entry's shape changed; this test targets the superscript shewa"
+        )
+
+        let lexeme = PSInfoPopupContent.parseStrongsLexeme(fromRenderedEntry: html)
+        XCTAssertEqual(lexeme.transliteration, "yeh\u{00F4}v\u{00E2}h")
+        XCTAssertEqual(lexeme.lemma, "\u{05D9}\u{05D4}\u{05D5}\u{05D4}")
+
+        // Through the entry point the popup itself uses.
+        let covenant = try XCTUnwrap(
+            PSInfoPopupContent.lexiconEntry(
+                module: BundledModules.strongsHebrew,
+                key: "01285",
+                allowsSearch: false
+            ),
+            "StrongsRealHebrew 01285 did not resolve"
+        )
+        XCTAssertEqual(covenant.transliteration, "ber\u{00EE}yth")
+
+        // The other superscript, which must not move: 114 lemmas end in a
+        // superscript `o`, and the lemma is script only.
+        let trailing = try XCTUnwrap(
+            store.dictEntry(module: BundledModules.strongsHebrew, key: "00726"),
+            "StrongsRealHebrew 00726 is missing from the store"
+        )
+        XCTAssertTrue(
+            trailing.contains("&#1497;<sup><font size=\"-1\"><i>o</i></font></sup><br />"),
+            "the entry's shape changed; this test targets the lemma's trailing superscript"
+        )
+        let edomite = PSInfoPopupContent.parseStrongsLexeme(fromRenderedEntry: trailing)
+        XCTAssertEqual(edomite.lemma, "\u{05D0}\u{05E8}\u{05D5}\u{05DE}\u{05D9}")
+        XCTAssertEqual(edomite.transliteration, "'\u{0103}r\u{00F4}m\u{00EE}y")
+
+        // Corpus-wide: every transliteration that carries a superscript comes out
+        // with no letter standing alone. Collected rather than asserted per entry,
+        // so a regression reports once instead of 1,414 times.
+        var superscripted = 0
+        var broken: [String] = []
+        for key in store.dictKeys(module: BundledModules.strongsHebrew) {
+            guard let entry = store.dictEntry(module: BundledModules.strongsHebrew, key: key),
+                  let open = entry.firstIndex(of: "["),
+                  let close = entry[open...].firstIndex(of: "]"),
+                  entry[open...close].contains("<sup>") else { continue }
+            superscripted += 1
+            let parsed = PSInfoPopupContent.parseStrongsLexeme(fromRenderedEntry: entry)
+            guard let transliteration = parsed.transliteration else {
+                broken.append("\(key): none")
+                continue
+            }
+            if transliteration.range(of: "(^| )[a-z]( |$)",
+                                     options: .regularExpression) != nil {
+                broken.append("\(key): \(transliteration)")
+            }
+        }
+        XCTAssertEqual(superscripted, 1_414,
+                       "the number of transliterations carrying a superscript changed")
+        XCTAssertTrue(
+            broken.isEmpty,
+            "\(broken.count) transliterations were split around their superscript: "
+                + "\(broken.prefix(5))"
+        )
+    }
 }
