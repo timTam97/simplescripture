@@ -52,6 +52,10 @@ private final class HistoryCloudStoreStub: HistoryCloudStoring {
     func removeObject(forKey defaultName: String) {
         values.removeValue(forKey: defaultName)
     }
+
+    func synchronize() -> Bool {
+        true
+    }
 }
 
 final class AppStateStoresTests: XCTestCase {
@@ -1147,6 +1151,104 @@ final class AppStateStoresTests: XCTestCase {
             (cloud.values[AppConstants.historyName] as? [Any])?.count,
             2
         )
+    }
+
+    /// A cloud store that counts what `HistoryStore` asks of it, and lets a test
+    /// stand in for the system's answer to `synchronize()`.
+    private final class LaunchSyncCloudStore: HistoryCloudStoring {
+        private(set) var values: [String: Any] = [:]
+        private(set) var writeCount = 0
+        private(set) var synchronizeCount = 0
+        var onSynchronize: (() -> Void)?
+
+        func array(forKey defaultName: String) -> [Any]? {
+            values[defaultName] as? [Any]
+        }
+
+        func set(_ value: Any?, forKey defaultName: String) {
+            values[defaultName] = value
+            writeCount += 1
+        }
+
+        func removeObject(forKey defaultName: String) {
+            values.removeValue(forKey: defaultName)
+        }
+
+        func synchronize() -> Bool {
+            synchronizeCount += 1
+            onSynchronize?()
+            return true
+        }
+    }
+
+    /// iCloud reports what changed while the app was not running only when it is
+    /// asked: `synchronize()`, called once the observer is registered, with the
+    /// answer arriving as the change notification. Without the call a launch
+    /// keeps its stale local list, and the next `addEntry` writes that list over
+    /// the entries the other device made.
+    func testStartingCloudSyncAsksForChangesMadeWhileTheAppWasNotRunning() {
+        let sharedRow: [Any] = [
+            "Genesis 1:1", "0", "KJV", Date(timeIntervalSince1970: 100),
+        ]
+        defaults.set([sharedRow], forKey: AppConstants.historyName)
+        let cloud = LaunchSyncCloudStore()
+        // The other device read John 3:16 while this one was not running. The
+        // two lists share a tail, so the pinned merge loses nothing here.
+        let otherDeviceRow: [Any] = [
+            "John 3:16", "0", "KJV", Date(timeIntervalSince1970: 200),
+        ]
+        cloud.set(
+            [otherDeviceRow, sharedRow],
+            forKey: AppConstants.historyName
+        )
+        let center = NotificationCenter()
+        let store = HistoryStore(
+            defaults: defaults,
+            cloudStore: cloud,
+            notificationCenter: center
+        )
+        // The system answering `synchronize()` with the changes since the last
+        // launch.
+        cloud.onSynchronize = { [unowned cloud] in
+            center.post(
+                name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                object: cloud,
+                userInfo: [
+                    NSUbiquitousKeyValueStoreChangeReasonKey:
+                        NSNumber(value: NSUbiquitousKeyValueStoreServerChange),
+                    NSUbiquitousKeyValueStoreChangedKeysKey:
+                        [AppConstants.historyName],
+                ]
+            )
+        }
+        let writesBeforeLaunch = cloud.writeCount
+
+        store.startCloudSync()
+        defer { store.stopCloudSync() }
+
+        XCTAssertEqual(cloud.synchronizeCount, 1)
+        let merged = defaults.array(forKey: AppConstants.historyName)
+        XCTAssertEqual(
+            merged?.count,
+            2,
+            "The answer arrives while synchronize() is running, so it is "
+                + "heard only if the observer was registered first."
+        )
+        XCTAssertEqual((merged?.first as? [Any])?.first as? String, "John 3:16")
+        XCTAssertEqual((merged?.last as? [Any])?.first as? String, "Genesis 1:1")
+        XCTAssertEqual(
+            cloud.writeCount,
+            writesBeforeLaunch,
+            "The merged list is the cloud's own, so nothing is written back."
+        )
+        XCTAssertEqual(
+            (cloud.values[AppConstants.historyName] as? [Any])?.count,
+            2
+        )
+
+        // The observer is already registered, so a second start asks nothing.
+        store.startCloudSync()
+        XCTAssertEqual(cloud.synchronizeCount, 1)
     }
 
     func testLaunchCoordinatorRunsOneShotMigrationsOffUIKit() throws {

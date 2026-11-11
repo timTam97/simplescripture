@@ -654,6 +654,7 @@ protocol HistoryCloudStoring: AnyObject {
     func array(forKey defaultName: String) -> [Any]?
     func set(_ value: Any?, forKey defaultName: String)
     func removeObject(forKey defaultName: String)
+    @discardableResult func synchronize() -> Bool
 }
 
 extension NSUbiquitousKeyValueStore: HistoryCloudStoring {}
@@ -821,6 +822,13 @@ final class HistoryStore {
         ) { [weak self] notification in
             self?.handleExternalCloudChange(notification)
         }
+        // AFTER the observer is in place: this asks for the changes that arrived
+        // while the app was not running, and the system reports them through
+        // the notification above. Without it a launch keeps its stale local
+        // list, and the next `addEntry` writes that list over the entries the
+        // other device made. Returns false with no iCloud entitlement
+        // (Debug/Release), where it does nothing.
+        cloudStore.synchronize()
     }
 
     func stopCloudSync() {
