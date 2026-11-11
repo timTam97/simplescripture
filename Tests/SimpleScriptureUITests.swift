@@ -124,14 +124,48 @@ final class SimpleScriptureUITests: XCTestCase {
             app.navigationBars["Preferences"].waitForExistence(timeout: 5)
         )
 
-        app.buttons["settings.font"].tap()
-        XCTAssertTrue(app.navigationBars["Font"].waitForExistence(timeout: 5))
+        let font = app.buttons["settings.font"]
+        let fontSheet = app.navigationBars["Font"]
+        font.tap()
+        XCTAssertTrue(fontSheet.waitForExistence(timeout: 5))
         let arial = app.buttons["Arial"]
         XCTAssertTrue(arial.waitForExistence(timeout: 5))
         arial.tap()
-        XCTAssertTrue(
-            app.navigationBars["Preferences"].waitForExistence(timeout: 5)
-        )
+        // The sheet's own bar going is the return, and the row naming the font
+        // is what shows the pick was taken. "Preferences" is no sign of either:
+        // its bar is under the sheet the whole time the sheet is up.
+        XCTAssertTrue(fontSheet.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(font.label.hasSuffix("Arial"),
+                      "Settings names \"\(font.label)\" after Arial was picked.")
+
+        // The font is saved. Put the default back, or the app goes on reading in
+        // Arial after this run. Georgia is some way down a lazy list, so its row
+        // is not there until the list is scrolled to it. Slowly, so that one
+        // swipe moves the list less than a screen and cannot carry the row past
+        // (MEASURED, iOS 27.2: 528 pt of a list 742 pt tall), and only until the
+        // row is clear of the sheet's bar and the foot of the screen.
+        // `isHittable` is not that test: it was true of the row while it sat
+        // under the bar.
+        font.tap()
+        XCTAssertTrue(fontSheet.waitForExistence(timeout: 5))
+        let georgia = app.buttons["Georgia"]
+        let screenBottom = app.windows.firstMatch.frame.maxY
+        func georgiaIsInTheClear() -> Bool {
+            georgia.exists
+                && georgia.frame.minY >= fontSheet.frame.maxY
+                && georgia.frame.maxY <= screenBottom
+        }
+        var inTheClear = georgiaIsInTheClear()
+        for _ in 0..<4 where !inTheClear {
+            app.swipeUp(velocity: .slow)
+            inTheClear = georgiaIsInTheClear()
+        }
+        XCTAssertTrue(inTheClear,
+                      "Scrolling the font list did not bring Georgia up.")
+        georgia.tap()
+        XCTAssertTrue(fontSheet.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(font.label.hasSuffix("Georgia"),
+                      "The font was left on \"\(font.label)\".")
 
         app.buttons["workspace.settings.about"].tap()
         XCTAssertTrue(app.navigationBars["About"].waitForExistence(timeout: 5))
@@ -355,6 +389,10 @@ final class SimpleScriptureUITests: XCTestCase {
             setVersePerLine(false)
             currentVersePerLine = false
             assertChapter(3)
+            // The toggle is saved, and this is the only test that leaves it off.
+            // End on the default, or the app stays in flowing prose after this
+            // run and every later test starts there.
+            setVersePerLine(true)
         }
     }
 
@@ -806,6 +844,17 @@ final class SimpleScriptureUITests: XCTestCase {
         XCTAssertTrue(
             app.searchFields["Search Dictionary"].waitForExistence(timeout: 5)
         )
+
+        // The choice is saved. Put the default back, or the app goes on opening
+        // its Library on the dictionary after this run: the launch argument
+        // decides what this run reads, not what it writes.
+        selectWorkspace("Settings")
+        picker.tap()
+        let bookmarks = app.buttons["Bookmarks"].firstMatch
+        XCTAssertTrue(bookmarks.waitForExistence(timeout: 5))
+        bookmarks.tap()
+        XCTAssertTrue(picker.label.hasSuffix("Bookmarks"),
+                      "The Library section was left on \"\(picker.label)\".")
     }
 
     /// The chapter is EDGE-TO-EDGE: a full-height scroll view whose content is
