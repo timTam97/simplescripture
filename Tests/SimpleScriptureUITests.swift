@@ -519,6 +519,101 @@ final class SimpleScriptureUITests: XCTestCase {
         XCTAssertFalse(opening(3).exists)
     }
 
+    /// With Headings off, a chapter starts at verse 1: no row above it, and
+    /// nothing in front of its number.
+    ///
+    /// All but five of the KJV's chapters open with a title, and with Headings
+    /// off — a fresh install — what is left of the title's slot is one space.
+    /// Given a row, that space was a blank line above verse 1 with a row per
+    /// verse, and a space in front of verse 1's number in flowing prose. The
+    /// unit test proves the document has no such row; what the reader draws at
+    /// the top of a chapter is only here.
+    ///
+    /// The first text under the identifier both panes carry is the first thing
+    /// the chapter draws: the pane that is not showing is hidden from
+    /// accessibility and has none.
+    @MainActor
+    func testChapterOpensOnVerseOneWithHeadingsOff() throws {
+        let arguments = app.launchArguments
+        for versePerLine in [true, false] {
+            let layout = versePerLine ? "a row per verse" : "flowing prose"
+            openGenesis1ByPaging(
+                arguments, versePerLine: versePerLine, headings: false
+            )
+
+            let readingAreaTop = app.navigationBars.firstMatch.frame.maxY
+            let firstText = app.scrollViews
+                .matching(identifier: "reading.chapter-content")
+                .staticTexts.firstMatch
+            XCTAssertTrue(firstText.waitForExistence(timeout: 5))
+            let verse1 = firstText.links["pslink://versemenu/1"]
+            XCTAssertTrue(
+                verse1.exists,
+                "With \(layout), Genesis 1 opens with \"\(firstText.label.prefix(30))\" "
+                    + "(\(firstText.frame)), which is not verse 1."
+            )
+            XCTAssertEqual(
+                verse1.frame.minY, readingAreaTop, accuracy: 1,
+                "With \(layout), verse 1 is not at the top of the reading area."
+            )
+            XCTAssertEqual(
+                verse1.frame.minX, firstText.frame.minX, accuracy: 1,
+                "With \(layout), something is drawn in front of verse 1's number."
+            )
+        }
+    }
+
+    /// Relaunches with the KJV's markers off, in the given layout, and comes to
+    /// Genesis 1 by paging back from Genesis 2.
+    ///
+    /// By a page turn because it is the arrival that rests at the very top of
+    /// the chapter. Picking verse 1 scrolls to verse 1's own row, and so does a
+    /// launch and a display toggle: with Headings on and a row per verse, the
+    /// title is then above the reading area. MEASURED (iOS 27.2, 20 pt): after
+    /// the picker, "CHAPTER 1." at y 87 with the bar's bottom edge at 116; after
+    /// a page turn, at y 130.
+    ///
+    /// The layout and the toggles are launch arguments: nothing here changes
+    /// them, and an argument writes nothing.
+    @MainActor
+    private func openGenesis1ByPaging(
+        _ arguments: [String], versePerLine: Bool, headings: Bool
+    ) {
+        app.terminate()
+        app.launchArguments = arguments + [
+            "-strongsPreference_KJV", "NO",
+            "-morphPreference_KJV", "NO",
+            "-footnotesPreference_KJV", "NO",
+            "-headingsPreference_KJV", headings ? "YES" : "NO",
+            "-vplPreference_KJV", versePerLine ? "YES" : "NO",
+            "-fontSizePreference", "18",
+        ]
+        app.launch()
+        // A launch always starts in the Read workspace, in the Bible.
+        XCTAssertTrue(
+            app.buttons["reading.reference-picker"].waitForExistence(timeout: 20),
+            "SimpleScripture did not finish initialization."
+        )
+        selectGenesisChapter(2)
+        let genesis2 = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "Thus the heavens and the earth")
+        ).firstMatch
+        XCTAssertTrue(genesis2.waitForExistence(timeout: 5))
+        app.buttons["reading.previous-chapter"].tap()
+        let genesis1 = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@", "In the beginning God created")
+        ).firstMatch
+        XCTAssertTrue(
+            genesis1.waitForExistence(timeout: 5),
+            "Paging back from Genesis 2 did not show Genesis 1."
+        )
+        // The chapter being left stays up until its slide has finished.
+        XCTAssertTrue(
+            genesis2.waitForNonExistence(timeout: 5),
+            "Genesis 2 is still showing after paging back to Genesis 1."
+        )
+    }
+
     @MainActor
     private func setVersePerLine(_ enabled: Bool) {
         // Genesis 1 and 3 put verses 1 and 2 in the same prose paragraph.
