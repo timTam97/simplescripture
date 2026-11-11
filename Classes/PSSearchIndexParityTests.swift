@@ -380,8 +380,9 @@ final class PSSearchIndexParityTests: XCTestCase {
         XCTAssertEqual(expression("sons'"), "text_norm:sons*")
         XCTAssertEqual(expression("Baal-"), "text_norm:baal*")
         XCTAssertEqual(expression("-sheba"), "text_norm:sheba*")
-        // No letter or digit to make a prefix of: the quoted fallback, as before.
-        XCTAssertEqual(expression("--"), "text_norm:\"--\"")
+        // No letter or digit at all: no term, and so no search
+        // (`testAnAllSearchLeavesOutAWordWithNoLetterOrDigit`).
+        XCTAssertNil(expression("--"))
 
         // What FTS5 finds with them, in verses as the KJV prints them: the name
         // with an en dash, the possessive with a typographic apostrophe. The
@@ -494,6 +495,68 @@ final class PSSearchIndexParityTests: XCTestCase {
         XCTAssertEqual(ligature.rows, 1, "FTS5: \(ligature.error)")
         // Still every word: the verse without "render" is not a match.
         let other = matchAgainstOneRow(allWords, verse: matthew22v17)
+        XCTAssertEqual(other.rows, 0, "FTS5: \(other.error)")
+    }
+
+    /// An All search leaves out a word with no letter or digit in it, and still
+    /// finds the rest.
+    ///
+    /// Every typed token became a term. One with no letter or digit — a stray
+    /// `&` or `-` between two words — has no word in the index, so FTS5 made a
+    /// phrase with nothing in it, which matches no verse; ANDed with the rest,
+    /// it emptied the search. MEASURED on the KJV index: `faith & works` found
+    /// nothing where `faith works` finds 15 verses.
+    func testAnAllSearchLeavesOutAWordWithNoLetterOrDigit() {
+        func expression(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch,
+            fuzzy: Bool = false
+        ) -> String? {
+            PSSearchQuery.fts5Expression(fromUserInput: query, matchType: matchType,
+                                         fuzzy: fuzzy, strongs: false)
+        }
+        let faithWorks = "text_norm:\"faith\" AND text_norm:\"works\""
+
+        XCTAssertEqual(expression("faith & works"), faithWorks)
+        XCTAssertEqual(expression("faith - works"), faithWorks)
+        XCTAssertEqual(expression("faith \u{2014} works"), faithWorks)
+        XCTAssertEqual(expression("-- faith works !"), faithWorks)
+        // Quoted, it is still nothing to look for.
+        XCTAssertEqual(expression("faith \"&\" works"), faithWorks)
+        XCTAssertEqual(expression("faith & works", fuzzy: true),
+                       "text_norm:faith* AND text_norm:works*")
+        // An Any search always found the rest; it now says so in fewer words.
+        XCTAssertEqual(expression("faith & works", .OrSearch),
+                       "text_norm:\"faith\" OR text_norm:\"works\"")
+        // Nothing but such tokens is no search at all.
+        XCTAssertNil(expression("&"))
+        XCTAssertNil(expression("& - --", .OrSearch))
+        XCTAssertNil(expression("\"...\"", fuzzy: true))
+        // Punctuation against a word, or inside one, is not a token of its own
+        // and changes nothing.
+        XCTAssertEqual(expression("faith, works!"),
+                       "text_norm:\"faith,\" AND text_norm:\"works!\"")
+        XCTAssertEqual(expression("Beer-sheba"), "text_norm:\"beer-sheba\"")
+        // An Exact search is one phrase and keeps what was typed: inside a
+        // phrase the tokenizer steps over the `&` for itself.
+        XCTAssertEqual(expression("faith & works", .ExactSearch),
+                       "text_norm:\"faith & works\"")
+
+        // What FTS5 makes of them, in James 2:22 as the KJV prints it.
+        let james2v22 = "Seest thou how faith wrought with his works, and by works was"
+            + " faith made perfect?"
+        let before = matchAgainstOneRow(
+            "text_norm:\"faith\" AND text_norm:\"&\" AND text_norm:\"works\"",
+            verse: james2v22)
+        XCTAssertEqual(before.rows, 0, "FTS5: \(before.error)")
+        for query in ["faith & works", "faith - works", "faith \"&\" works"] {
+            let match = matchAgainstOneRow(expression(query), verse: james2v22)
+            XCTAssertEqual(match.rows, 1, "\(query), FTS5: \(match.error)")
+        }
+        // Still every word: a verse without "works" is not found.
+        let hebrews11v1 = "Now faith is the substance of things hoped for, the evidence of"
+            + " things not seen."
+        let other = matchAgainstOneRow(expression("faith & works"), verse: hebrews11v1)
         XCTAssertEqual(other.rows, 0, "FTS5: \(other.error)")
     }
 
@@ -624,12 +687,19 @@ final class PSSearchIndexParityTests: XCTestCase {
                 let expression = PSSearchQuery.fts5Expression(
                     fromUserInput: query, matchType: matchType, fuzzy: fuzzy, strongs: false)
                 for verse in verses {
+                    let marks = marked(query, matchType, fuzzy: fuzzy, in: verse)
+                    guard expression != nil else {
+                        // No search is run (`--` in All words), so no verse is
+                        // found and none may be marked.
+                        XCTAssertEqual(marks, [], "\(query): no expression, but marks")
+                        compared += 1
+                        continue
+                    }
                     let match = matchAgainstOneRow(expression, verse: verse)
                     guard let rows = match.rows else {
                         XCTFail("\(query): FTS5 rejected \(expression ?? "nil"): \(match.error)")
                         continue
                     }
-                    let marks = marked(query, matchType, fuzzy: fuzzy, in: verse)
                     XCTAssertEqual(
                         !marks.isEmpty, rows == 1,
                         "\(query) (\(matchType == .ExactSearch ? "Exact" : "All"),"

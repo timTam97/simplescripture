@@ -294,7 +294,8 @@ final class PSSearchQuery: NSObject {
     // MARK: - Expression builder
 
     /// Build an FTS5 MATCH expression for the given user input. Returns nil for
-    /// trivial input (empty / pure whitespace / just quotes).
+    /// trivial input (empty / pure whitespace / just quotes), and for an All or
+    /// Any search with no letter or digit in it.
     @objc(fts5ExpressionFromUserInput:matchType:fuzzy:strongs:)
     class func fts5Expression(fromUserInput raw: String,
                               matchType: PSSearchType,
@@ -407,6 +408,16 @@ final class PSSearchQuery: NSObject {
         for tk in tokens {
             let folded = foldForIndex(tk.text)
             if folded.isEmpty { continue }
+            // A token with no letter or digit in it is no term: a stray `&` or
+            // `-` between two words, `--`, a quoted `"..."`. The index has no
+            // word for it, so FTS5 makes a phrase with nothing in it, which
+            // matches no verse — and ANDed in, that emptied the whole search.
+            // MEASURED on the KJV index, All words: `faith & works` found
+            // nothing where `faith works` finds 15 verses, `God - man` nothing
+            // where `God man` finds 369. An Any search was unharmed (nothing
+            // ORed in adds nothing), and an Exact search is one phrase, in
+            // which the tokenizer steps over the `&` itself.
+            if highlightTokens(in: folded).isEmpty { continue }
             let spellings = ligatureSpellings(folded)
             if !tk.isPhrase && fuzzy {
                 // Prefix match: word*, for a token that is one word — a single
@@ -422,9 +433,6 @@ final class PSSearchQuery: NSObject {
                 // possessive. Not FTS5's phrase-prefix form (`"lord’s" *`)
                 // either: its prefix lands on the `s`, and that matched 921
                 // verses where the phrase matches 131.
-                //
-                // The quoted phrase is also what a token with no letter or
-                // digit in it (`--`) gets.
                 terms.append(spellings.map { spelling in
                     if let bare = barewordForPrefix(spelling) {
                         return Spelling(text: bare, isPrefix: true)
