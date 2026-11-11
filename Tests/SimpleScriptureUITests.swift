@@ -1487,6 +1487,90 @@ final class SimpleScriptureUITests: XCTestCase {
         )
     }
 
+    /// A position restored at launch keeps its side gutter when the app is left
+    /// and come back to, launch after launch.
+    ///
+    /// The restore hands SwiftUI a scroll offset. Left in the scroll position
+    /// after the scroll view had gone to it, the offset was applied again
+    /// whenever the content size changed, and as a RAW content offset: the
+    /// chapter one top inset further on and flush against the left screen edge.
+    /// The reader saved that as its position, so the next launch started from it
+    /// and moved on again. The lazy rows are re-measured when the app goes to
+    /// the background, and on the first accessibility read of the reader — which
+    /// any query here is. So nothing is asked of the app between a launch and
+    /// leaving it, and the look that follows is the first. MEASURED (iOS 27.2,
+    /// iPhone 18 Pro) without the fix: verse 16's number at x 0 after the first
+    /// relaunch and verse 17's after the second, where the gutter puts a verse
+    /// number at x 16.
+    ///
+    /// Judged by the gutter. The raw offset moves the text sideways and down
+    /// together, so a verse number standing at the gutter is a reader that was
+    /// not moved by it. WHICH verse the restore lands on is not asserted, beyond
+    /// its being one deep in the chapter: under XCUITest about one launch in
+    /// seven issues the restore before the scroll view's first layout and lands
+    /// some two verses further on (MEASURED: 2 of 14 launches, one with the fix
+    /// and one without). That is another defect, and it would fail this test
+    /// for the wrong reason.
+    @MainActor
+    func testARestoredPositionKeepsItsGutterWhenTheAppIsLeft() throws {
+        relaunchWithMarkersOff(
+            app.launchArguments, versePerLine: true, headings: false
+        )
+        selectGenesisChapter(1, verse: 14)
+        XCTAssertTrue(app.links["pslink://versemenu/14"].waitForExistence(timeout: 5))
+        let picked = try XCTUnwrap(
+            try verseAtTheTopOfTheReader(),
+            "The reader shows no verse number after picking Genesis 1:14."
+        )
+        XCTAssertEqual(
+            picked.verse, 14,
+            "Picking Genesis 1:14 did not put it at the top of the reader, so "
+                + "there is no position deep in the chapter to restore."
+        )
+        XCTAssertGreaterThan(
+            picked.origin.x, 8,
+            "Verse numbers stand at the screen edge before anything is "
+                + "restored, so there is no gutter to lose."
+        )
+
+        // Twice: the moved position was saved, and the second launch began there.
+        for launch in 1...2 {
+            app.terminate()
+            app.launch()
+            XCTAssertTrue(
+                app.wait(for: .runningForeground, timeout: 20),
+                "SimpleScripture did not reach the foreground."
+            )
+            // Time for the restore to land, with nothing asked of the app.
+            Thread.sleep(forTimeInterval: 3)
+            XCUIDevice.shared.press(.home)
+            Thread.sleep(forTimeInterval: 3)
+            app.activate()
+            XCTAssertTrue(
+                app.wait(for: .runningForeground, timeout: 20),
+                "SimpleScripture did not come back to the foreground."
+            )
+
+            let restored = try XCTUnwrap(
+                try verseAtTheTopOfTheReader(),
+                "The reader shows no verse number after relaunch \(launch)."
+            )
+            XCTAssertGreaterThan(
+                restored.verse, 5,
+                "Relaunch \(launch) opened at the top of the chapter, so no "
+                    + "position was restored and nothing here was tested."
+            )
+            XCTAssertEqual(
+                restored.origin.x, picked.origin.x, accuracy: 1,
+                "After relaunch \(launch) and a trip to the Home Screen, verse "
+                    + "\(restored.verse)'s number is at x \(restored.origin.x) "
+                    + "where the gutter put verse 14's at \(picked.origin.x): "
+                    + "the restored offset was applied again as a raw content "
+                    + "offset."
+            )
+        }
+    }
+
     /// A Strong's number in the chapter text opens its lexicon entry. The reader's
     /// links are real accessibility elements carrying their `pslink://` target,
     /// so the whole tap path is driven from the test.
