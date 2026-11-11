@@ -563,6 +563,53 @@ final class SimpleScriptureUITests: XCTestCase {
         }
     }
 
+    /// With Headings on, the chapter's title is a heading of its own above
+    /// verse 1.
+    ///
+    /// Every KJV title is in the slot before verse 1. Left in that slot's text,
+    /// it ran into verse 1 in flowing prose: "CHAPTER 1.", the number 1 and "In
+    /// the beginning" on one line of one paragraph. It is lifted into a heading
+    /// now, which leaves the slot with no text of its own, and an empty `Text`
+    /// still takes a line, so neither layout lays one out under the heading. The
+    /// unit test proves where the document puts the title. Whether a row is
+    /// drawn for text that is not there is only here.
+    @MainActor
+    func testChapterTitleIsAHeadingOfItsOwnWithHeadingsOn() throws {
+        let arguments = app.launchArguments
+        for versePerLine in [true, false] {
+            let layout = versePerLine ? "a row per verse" : "flowing prose"
+            openGenesis1ByPaging(
+                arguments, versePerLine: versePerLine, headings: true
+            )
+
+            let readingAreaTop = app.navigationBars.firstMatch.frame.maxY
+            let title = app.staticTexts["CHAPTER 1."]
+            XCTAssertTrue(
+                title.waitForExistence(timeout: 5),
+                "With \(layout), Genesis 1 has no title of its own."
+            )
+            XCTAssertGreaterThanOrEqual(
+                title.frame.minY, readingAreaTop - 1,
+                "With \(layout), the title is behind the navigation bar."
+            )
+            let verseText = app.staticTexts.containing(
+                .link, identifier: "pslink://versemenu/1"
+            ).firstMatch
+            XCTAssertTrue(verseText.exists)
+            XCTAssertFalse(
+                verseText.label.contains("CHAPTER"),
+                "With \(layout), the title is still part of verse 1's text."
+            )
+            // The heading's own padding and no more. A row for the slot's missing
+            // text would be a blank line here.
+            let gap = verseText.frame.minY - title.frame.maxY
+            XCTAssertTrue(
+                (0..<15).contains(gap),
+                "With \(layout), verse 1 starts \(gap) pt below the title."
+            )
+        }
+    }
+
     /// Relaunches with the KJV's markers off, in the given layout, and comes to
     /// Genesis 1 by paging back from Genesis 2.
     ///
