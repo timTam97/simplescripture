@@ -266,6 +266,22 @@ final class ReaderPaneModel {
     /// persist a position from before the restore lands) and `restoreAfterSizeChange`
     /// (do not re-anchor on a verse while an offset restore is still in flight).
     @ObservationIgnored private var outstandingOffsetRestore: CGFloat?
+    /// The verse the position keys pair with an offset restore, used for what
+    /// `scrollOffsetChanged` persists until the view reports the topmost verse
+    /// itself.
+    ///
+    /// An offset names no verse, and `currentShownVerse` is whatever the pane
+    /// last knew — 1 on a pane that has shown nothing, which is every launch. The
+    /// first scroll persisted after the restore landed (the rows settling a few
+    /// points is enough) wrote that 1 over the saved verse and retitled to `…:1`
+    /// with the reader correctly mid-chapter, until a DIFFERENT row reached the
+    /// top. A display toggle or a font change in that window jumped to verse 1.
+    ///
+    /// **Kept apart from `currentShownVerse`, not written into it.** The row at
+    /// the top BEFORE the scroll lands reports verse 1, and `topmostVerseChanged`
+    /// drops it only because that is what the pane already believes. Seeded with
+    /// the saved verse, it would take that report for a move and persist verse 1.
+    @ObservationIgnored private var offsetRestoreVerse: Int?
 
     @ObservationIgnored weak var workspace: ReadingWorkspaceModel?
 
@@ -368,6 +384,9 @@ final class ReaderPaneModel {
     /// kept against new row heights (e.g. flipping Verse Per Line at Gen 1:1 landed
     /// on verse 6). Affects font changes and every display toggle.
     private func apply(_ restore: PaneRestore) {
+        // It belongs to the offset restore that set it. Any newer instruction
+        // ends it, another offset included, which sets its own below.
+        offsetRestoreVerse = nil
         switch restore {
         case .verse(let verse):
             guard verse > 0 else { return }
@@ -407,6 +426,10 @@ final class ReaderPaneModel {
             // Recorded BEFORE the hop: the scroll view publishes geometry (and
             // `scrollOffsetChanged` would persist it) before the hop runs.
             outstandingOffsetRestore = offset
+            // The verse this offset was saved with — see `offsetRestoreVerse`. The
+            // clamp is `persistPosition`'s.
+            offsetRestoreVerse = UserDefaults.standard.string(forKey: versePositionKey)
+                .map { max(1, ($0 as NSString).integerValue) }
             Task { @MainActor [weak self] in
                 self?.scrollPosition.scrollTo(y: offset)
             }
@@ -613,7 +636,12 @@ final class ReaderPaneModel {
         // counts as a scroll and rewrites the persisted position on every layout pass.
         guard abs(lastScrollOffset - normalized) > Self.scrollThreshold else { return }
         lastScrollOffset = normalized
-        persistPosition(verse: currentShownVerse, scrollOffset: normalized)
+        // After an offset restore the pane does not know its verse until the view
+        // says — see `offsetRestoreVerse` — and the saved one is the better answer.
+        persistPosition(
+            verse: offsetRestoreVerse ?? currentShownVerse,
+            scrollOffset: normalized
+        )
     }
 
     /// The two-point dead zone. The restore gate above uses it too, so a restore
@@ -661,6 +689,9 @@ final class ReaderPaneModel {
         // 0 would silently do nothing.
         let verse = max(1, verse)
         currentShownVerse = verse
+        // Any persist settles it: the pane now holds a verse of its own, whether
+        // the view reported it or the saved one was just written back.
+        offsetRestoreVerse = nil
         let verseString = String(format: "%d", Int32(verse))
         let defaults = UserDefaults.standard
         defaults.set(
@@ -748,8 +779,9 @@ final class ReaderPaneModel {
         // (402, 675) as the nav bar and tab bar come in), so this hook fires during
         // launch, after an `.offset` restore is requested but before it lands.
         // Re-anchoring on `currentShownVerse` (still 1 — an offset restore names no
-        // verse) would drag the reader back to the top. `.verse` restores are
-        // unaffected because they set `currentShownVerse` first.
+        // verse, and the one its keys pair with it is held apart, in
+        // `offsetRestoreVerse`) would drag the reader back to the top. `.verse`
+        // restores are unaffected because they set `currentShownVerse` first.
         //
         // A positive offset is preserved exactly. Zero is different: `scrollTo(y: 0)`
         // bypasses the top content margin and paints verse 1 under the navigation bar,

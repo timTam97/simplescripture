@@ -2382,6 +2382,55 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// An offset restore names no verse, so a scroll persisted after it lands
+    /// keeps the verse the keys already pair with that offset.
+    ///
+    /// A pane that has shown nothing believes it is at verse 1, and the launch
+    /// restore is always an offset. The first offset saved once it had landed —
+    /// the rows settling a few points is enough — wrote that 1 over the saved
+    /// verse and retitled to `…:1`, with the reader correctly mid-chapter, until
+    /// a different row reached the top. A display toggle or a font change in
+    /// that window (a `.verse` restore) jumped to verse 1.
+    ///
+    /// The first assertion is why the saved verse is carried BESIDE what the
+    /// pane believes and not written into it: the row at the top before the
+    /// scroll lands reports verse 1, and is dropped only because the pane
+    /// already believes that.
+    @MainActor
+    func testAnOffsetRestoreKeepsTheSavedVerseUntilTheViewReportsOne() {
+        withPreservedPanePositionKeys { standard, scrollKey in
+            let sample = { (y: CGFloat) in
+                ReaderScrollSample(offset: y, contentHeight: 5000, containerHeight: 675)
+            }
+            standard.set("1500", forKey: scrollKey)
+            standard.set("16", forKey: Defaults.bibleVersePosition)
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.pendingRestore = .offset(1500)
+            pane.applyPendingWork()
+            let surface = pane.scrollSurface
+
+            pane.topmostVerseChanged(1, from: surface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "16",
+                           "The row at the top before the restore landed was "
+                               + "persisted as the reader's verse.")
+
+            // Landed, and then the rows settle four points.
+            pane.scrollOffsetChanged(sample(1500), from: surface)
+            pane.scrollOffsetChanged(sample(1504), from: surface)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "1504")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "16",
+                           "A scroll after the restore landed overwrote the saved "
+                               + "verse with the one a new pane starts on.")
+
+            // The view's own report takes over from there.
+            pane.topmostVerseChanged(17, from: surface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "17")
+            pane.scrollOffsetChanged(sample(1600), from: surface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "17",
+                           "The saved verse came back after the view had reported one.")
+        }
+    }
+
     // MARK: Paging
 
     /// Paging replaces the scroll view and persists the top of the new chapter.
