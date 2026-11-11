@@ -1,5 +1,6 @@
 import XCTest
 import Observation
+import SwiftUI
 import UIKit
 import os
 @testable import SimpleScripture
@@ -50,6 +51,10 @@ private final class HistoryCloudStoreStub: HistoryCloudStoring {
 
     func removeObject(forKey defaultName: String) {
         values.removeValue(forKey: defaultName)
+    }
+
+    func synchronize() -> Bool {
+        true
     }
 }
 
@@ -160,6 +165,163 @@ final class AppStateStoresTests: XCTestCase {
             defaults.integer(forKey: Defaults.rotationLockPosition),
             RotationLock.unlocked.rawValue
         )
+    }
+
+    /// Every font the picker offers is one the system can supply.
+    ///
+    /// The list was carried over from the old app. A name with no font behind it
+    /// still takes the checkmark and is named in Settings, while `Font.custom`
+    /// draws a substitute face that is neither that font nor the app default.
+    ///
+    /// The lookup is spelled out here rather than borrowed from `StudyFonts`, so
+    /// the picker's list is checked against the system and not against itself.
+    func testFontPickerOffersOnlyFontsTheSystemCanSupply() {
+        func systemHas(_ name: String) -> Bool {
+            UIFont(name: name, size: 17) != nil
+                || !UIFont.fontNames(forFamilyName: name).isEmpty
+        }
+
+        XCTAssertEqual(
+            StudyFonts.all.filter { !systemHas($0) }, [],
+            "the picker offers fonts this system does not have"
+        )
+
+        // Against an over-eager filter. The two bundled faces resolve because the
+        // app registers them (`UIAppFonts`); "HelveticaNeue-Light" is one face's
+        // PostScript name, and Menlo, Optima and Bodoni 72 are families with no
+        // face of that name.
+        for name in [
+            AppConstants.defaultFontName, "Gentium Plus", "Ezra SIL",
+            "Times New Roman", "Arial", "Helvetica Neue", "HelveticaNeue-Light",
+            "Menlo", "Optima", "Bodoni 72",
+        ] {
+            XCTAssertTrue(StudyFonts.all.contains(name), "\(name) is no longer offered")
+        }
+
+        // A missing font file is not the test. These four have none on iOS 27.2,
+        // but the system answers for them with their successors (PingFang SC / TC,
+        // Kohinoor Bangla / Telugu). Where it does, they still work and stay.
+        for name in ["Heiti SC", "Heiti TC", "Bangla Sangam MN", "Telugu Sangam MN"]
+        where systemHas(name) {
+            XCTAssertTrue(StudyFonts.all.contains(name), "\(name) is no longer offered")
+        }
+    }
+
+    /// A saved font the system cannot supply renders as an absent key renders: in
+    /// the app default, not in whatever face `Font.custom` substitutes.
+    ///
+    /// The stored preference is left alone. Saved font preferences are not
+    /// migrated, so the font comes back if the system ever supplies it again.
+    func testASavedFontTheSystemLacksRendersAsTheDefault() {
+        withPreservedFontKeys { standard in
+            // Code2000 is no longer bundled, so no system has it.
+            XCTAssertNil(UIFont(name: "Code2000", size: 17))
+            standard.set("Code2000", forKey: Defaults.fontNamePreference)
+            XCTAssertEqual(
+                ChapterTextRenderer.Style.current().fontName,
+                AppConstants.defaultFontName
+            )
+            XCTAssertEqual(
+                standard.string(forKey: Defaults.fontNamePreference),
+                "Code2000",
+                "resolving the font rewrote the saved preference"
+            )
+
+            standard.set("Gentium Plus", forKey: Defaults.fontNamePreference)
+            XCTAssertEqual(
+                ChapterTextRenderer.Style.current().fontName,
+                "Gentium Plus"
+            )
+
+            standard.removeObject(forKey: Defaults.fontNamePreference)
+            XCTAssertEqual(
+                ChapterTextRenderer.Style.current().fontName,
+                AppConstants.defaultFontName
+            )
+        }
+    }
+
+    /// Settings names the font in effect, so its row, its preview line and the
+    /// picker's checkmark agree with what the reader draws — and showing it does
+    /// not write it back over the saved preference.
+    @MainActor
+    func testSettingsSnapshotShowsTheFontInEffect() {
+        defaults.set("Code2000", forKey: Defaults.fontNamePreference)
+        let store = SettingsStore(defaults: defaults)
+
+        XCTAssertEqual(store.snapshot().fontName, AppConstants.defaultFontName)
+
+        let model = SettingsModel(store: store)
+        model.reload()
+
+        XCTAssertEqual(model.fontName, AppConstants.defaultFontName)
+        XCTAssertEqual(
+            defaults.string(forKey: Defaults.fontNamePreference),
+            "Code2000",
+            "showing the font in effect rewrote the saved preference"
+        )
+    }
+
+    /// The two global font keys, which `ChapterTextRenderer.Style.current()` reads
+    /// from the standard defaults only.
+    private func withPreservedFontKeys(_ body: (UserDefaults) -> Void) {
+        let standard = UserDefaults.standard
+        let keys = [Defaults.fontNamePreference, Defaults.fontSizePreference]
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        body(standard)
+    }
+
+    /// What ties an open dictionary entry to the font settings.
+    ///
+    /// `Style.current()` reads `UserDefaults`, which SwiftUI does not track, so a
+    /// view body that resolves its style that way does not depend on the font: an
+    /// entry left open in the Library follows a Settings change only if something
+    /// else rebuilds it. `current(observing:)` reads the two observable
+    /// properties, and those reads are the subscription. Drop either and the
+    /// entry no longer depends on that setting, with nothing else to say so.
+    @MainActor
+    func testEntryStyleReadSubscribesToTheFontSettings() {
+        let settings = SettingsModel(store: SettingsStore(defaults: defaults))
+        let changes: [(String, () -> Void)] = [
+            ("size", { settings.fontSize = 31 }),
+            ("name", { settings.fontName = "Gentium Plus" }),
+        ]
+        for (what, change) in changes {
+            let changed = OSAllocatedUnfairLock(initialState: false)
+            withObservationTracking {
+                _ = ChapterTextRenderer.Style.current(observing: settings)
+            } onChange: {
+                changed.withLock { $0 = true }
+            }
+
+            change()
+
+            XCTAssertTrue(
+                changed.withLock { $0 },
+                "a font \(what) change does not invalidate a body that read the style"
+            )
+        }
+
+        // And the style a re-run body resolves is the new one: the model's setter
+        // has saved the value before SwiftUI gets to re-evaluate anything.
+        withPreservedFontKeys { _ in
+            let live = SettingsModel(store: SettingsStore())
+            live.fontSize = 31
+            live.fontName = "Gentium Plus"
+
+            let style = ChapterTextRenderer.Style.current(observing: live)
+            XCTAssertEqual(style.fontSize, 31)
+            XCTAssertEqual(style.fontName, "Gentium Plus")
+        }
     }
 
     func testRotationLockUsesInterfaceOrientationRatherThanWindowShape() {
@@ -580,6 +742,159 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// A folder needs a name the reader can see.
+    ///
+    /// A blank one is a folder icon with no label; a second one beside it is refused
+    /// as a "duplicate" of nothing visible; and at the top level its picker path is
+    /// "", which the bookmark editor reads as the root, so nothing can be filed in
+    /// it. Both Save buttons stay enabled — a `TextField` binding lags the last
+    /// keystroke, so a `.disabled` bound to it would refuse a name typed quickly —
+    /// which leaves the store as the place a blank name is turned away: with the
+    /// error the separator already gets, and having changed NOTHING.
+    ///
+    /// The name is stored as typed (no trimming), and a BOOKMARK renamed to "" still
+    /// falls back to its reference — that is a different rule, and it stays.
+    func testBookmarkStoreRejectsBlankFolderNames() throws {
+        let bookmark = PSBookmark(
+            name: "Hope",
+            dateAdded: nil,
+            dateLastAccessed: nil,
+            bibleReference: "Romans 5:5"
+        )
+        // The folder that is renamed sits one level below where the new one is
+        // added, so neither call can be refused as a duplicate of a blank name the
+        // other let through: each has to be refused for being blank.
+        let notes = PSBookmarkFolder(
+            name: "Notes",
+            dateAdded: nil,
+            dateLastAccessed: nil,
+            rgbHexString: "#12ABEF",
+            children: nil
+        )
+        let study = PSBookmarkFolder(
+            name: "Study",
+            dateAdded: nil,
+            dateLastAccessed: nil,
+            rgbHexString: nil,
+            children: [notes]
+        )
+        let root = PSBookmarkFolder(
+            name: "Bookmarks",
+            dateAdded: nil,
+            dateLastAccessed: nil,
+            rgbHexString: nil,
+            children: [study, bookmark]
+        )
+        var saveCount = 0
+        let store = BookmarkStore(
+            rootProvider: { root },
+            save: {
+                saveCount += 1
+                return true
+            },
+            notificationCenter: NotificationCenter()
+        )
+
+        for blank in ["", " ", "\n\t "] {
+            XCTAssertThrowsError(
+                try store.addFolder(name: blank, color: nil, to: nil),
+                "addFolder accepted \(blank.debugDescription)"
+            ) {
+                XCTAssertEqual($0 as? BookmarkMutationError, .invalidFolderName)
+            }
+            XCTAssertThrowsError(
+                try store.rename(id: notes.id, to: blank),
+                "rename accepted \(blank.debugDescription)"
+            ) {
+                XCTAssertEqual($0 as? BookmarkMutationError, .invalidFolderName)
+            }
+            XCTAssertThrowsError(
+                try store.updateFolder(id: notes.id, name: blank, color: nil),
+                "updateFolder accepted \(blank.debugDescription)"
+            ) {
+                XCTAssertEqual($0 as? BookmarkMutationError, .invalidFolderName)
+            }
+        }
+
+        XCTAssertEqual(root.children?.count, 2)
+        XCTAssertEqual(notes.name, "Notes")
+        XCTAssertEqual(notes.rgbHexString, "#12ABEF")
+        XCTAssertEqual(saveCount, 0, "nothing may be committed on the throwing path")
+
+        // Only an all-blank name is refused; one with whitespace around it is kept
+        // exactly as typed.
+        try store.rename(id: notes.id, to: " Study notes ")
+        XCTAssertEqual(notes.name, " Study notes ")
+
+        try store.rename(id: bookmark.id, to: "")
+        XCTAssertEqual(bookmark.name, "Romans 5:5")
+    }
+
+    /// The bookmark editor's folder picker hands `PSBookmarks.addBookmark` a NAME
+    /// path, and that path has to resolve to the folder it names.
+    ///
+    /// The walk used to match ANY child by name. Folders are appended, so a bookmark
+    /// described "Prayer" always sits before a folder "Prayer" created later: the
+    /// bookmark matched, the walk stopped without descending, and every bookmark
+    /// filed under "Prayer" — or under anything inside it — landed in the root, with
+    /// no error and without the folder's highlight colour. A top-level folder called
+    /// "Bookmarks" went the same way: its path is the root's own title, which was
+    /// read as the root.
+    ///
+    /// `getBookmarkFolder` resolves against the singleton, so its children are
+    /// swapped for the test and put back. Nothing here saves or posts.
+    func testBookmarkFolderPathResolvesToTheFolderItNames() {
+        func bookmark(_ name: String) -> PSBookmark {
+            PSBookmark(
+                name: name,
+                dateAdded: nil,
+                dateLastAccessed: nil,
+                bibleReference: "Romans 5:5"
+            )
+        }
+        func folder(_ name: String, _ children: [Any]? = nil) -> PSBookmarkFolder {
+            PSBookmarkFolder(
+                name: name,
+                dateAdded: nil,
+                dateLastAccessed: nil,
+                rgbHexString: nil,
+                children: children
+            )
+        }
+        func resolve(_ path: String?) -> PSBookmarkFolder {
+            PSBookmarks.getBookmarkFolder(forFolderString: path)
+        }
+        let bookmarks = PSBookmarks.default()
+        let saved = bookmarks.children
+        defer { bookmarks.children = saved }
+
+        // A bookmark and a folder of the same name, in the order the app leaves them.
+        let inner = folder("Inner")
+        let prayer = folder("Prayer", [inner])
+        bookmarks.children = [bookmark("Prayer"), prayer]
+        let innerPath = "Prayer\(AppConstants.folderSeparatorString)Inner"
+
+        XCTAssertEqual(
+            BookmarkFolderPath.all(root: bookmarks).map(\.path),
+            ["Prayer", innerPath],
+            "the paths the picker offers"
+        )
+        XCTAssertIdentical(resolve("Prayer"), prayer)
+        XCTAssertIdentical(resolve(innerPath), inner)
+
+        // A top-level folder that shares the root's title.
+        let title = NSLocalizedString("BookmarksTitle", comment: "")
+        let titled = folder(title)
+        bookmarks.children = [titled]
+
+        XCTAssertIdentical(resolve(title), titled)
+
+        // No path, and a path naming no folder, still mean the root.
+        XCTAssertIdentical(resolve(nil), bookmarks)
+        XCTAssertIdentical(resolve(""), bookmarks)
+        XCTAssertIdentical(resolve("Nope"), bookmarks)
+    }
+
     @MainActor
     func testLibraryBookmarkChildrenParticipateInObservation() throws {
         let root = PSBookmarkFolder(
@@ -680,6 +995,76 @@ final class AppStateStoresTests: XCTestCase {
         )
     }
 
+    /// A Library dictionary entry is the entry as stored, not a page built around
+    /// it.
+    ///
+    /// `PSEntryDocumentBuilder` drops an entry's own key anchor only when the
+    /// anchor is the first thing in its input. Wrapped the way the WebView page was
+    /// (`<div><b>KEY</b><br /><p>…</p>` plus three `&nbsp;` paragraphs), every
+    /// Strong's entry showed its number twice under a navigation title that is
+    /// already the key, and ended in three hard spaces.
+    func testDictionaryEntryIsTheStoredEntryNotAWebViewShell() throws {
+        // The two stored shapes: Hebrew breaks straight after the key anchor, Greek
+        // carries its lemma line first.
+        let hebrew = "<a name=\"03899\"><b>3899</b></a><br /> &#1500;&#1495;&#1501;<br />"
+            + " [lechem] \\<i>lekh'-em</i>\\<br /> From"
+            + " <a href=\"sword://StrongsRealHebrew/03898\">3898</a>; <i>food</i>"
+        let greek = "<a name=\"03588\">3588</a> <b>&#8001;</b> [O(] {ho} \\<i>ho</i>\\<br/>"
+            + "including the feminine"
+        let stored = [
+            "\(BundledModules.strongsHebrew)/03899": hebrew,
+            "\(BundledModules.strongsGreek)/03588": greek,
+        ]
+        let store = DictionaryStore(
+            defaults: defaults,
+            moduleProvider: { nil },
+            moduleLoader: { _ in },
+            moduleTypeProvider: { _ in "Lexicons / Dictionaries" },
+            keysProvider: { _ in [] },
+            entryProvider: { module, key in stored["\(module)/\(key)"] }
+        )
+
+        for (module, key, number, raw) in [
+            (BundledModules.strongsHebrew, "03899", "3899", hebrew),
+            (BundledModules.strongsGreek, "03588", "3588", greek),
+        ] {
+            let entry = store.entry(module: module, key: key)
+            XCTAssertEqual(entry.html, raw,
+                           "\(module) \(key) was not passed through as stored")
+
+            let document = PSEntryDocumentBuilder.build(html: entry.html)
+            XCTAssertEqual(document, PSEntryDocumentBuilder.build(html: raw),
+                           "\(module) \(key) renders differently from its stored entry")
+
+            let texts = document.blocks.map { $0.runs.map(\.text).joined() }
+            XCTAssertFalse(texts.contains(key),
+                           "\(module) \(key): the key is a line of the body: \(texts)")
+            XCTAssertFalse(
+                texts.contains {
+                    $0.trimmingCharacters(in: .whitespaces).hasPrefix(number)
+                },
+                "\(module) \(key): the key anchor's number renders: \(texts)"
+            )
+            XCTAssertFalse(
+                document.blocks.flatMap(\.runs).contains { $0.text == "\u{00A0}" },
+                "\(module) \(key): the entry ends in the page's padding"
+            )
+        }
+
+        // And through the production wiring, against the baked store: the Library
+        // hands the renderer what the popup hands it.
+        let key = "03899"
+        let baked = try XCTUnwrap(
+            PSContentReader.entry(module: BundledModules.strongsHebrew, key: key),
+            "StrongsRealHebrew \(key) is missing from the store"
+        )
+        XCTAssertEqual(
+            DictionaryStore(defaults: defaults)
+                .entry(module: BundledModules.strongsHebrew, key: key).html,
+            baked
+        )
+    }
+
     func testHistoryStoreUsesNaturalIDsAndPersistsRemoval() throws {
         let firstDate = Date(timeIntervalSince1970: 200)
         let secondDate = Date(timeIntervalSince1970: 100)
@@ -765,6 +1150,155 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(
             (cloud.values[AppConstants.historyName] as? [Any])?.count,
             2
+        )
+    }
+
+    /// A cloud store that counts what `HistoryStore` asks of it, and lets a test
+    /// stand in for the system's answer to `synchronize()`.
+    private final class LaunchSyncCloudStore: HistoryCloudStoring {
+        private(set) var values: [String: Any] = [:]
+        private(set) var writeCount = 0
+        private(set) var synchronizeCount = 0
+        var onSynchronize: (() -> Void)?
+
+        func array(forKey defaultName: String) -> [Any]? {
+            values[defaultName] as? [Any]
+        }
+
+        func set(_ value: Any?, forKey defaultName: String) {
+            values[defaultName] = value
+            writeCount += 1
+        }
+
+        func removeObject(forKey defaultName: String) {
+            values.removeValue(forKey: defaultName)
+        }
+
+        func synchronize() -> Bool {
+            synchronizeCount += 1
+            onSynchronize?()
+            return true
+        }
+    }
+
+    /// iCloud reports what changed while the app was not running only when it is
+    /// asked: `synchronize()`, called once the observer is registered, with the
+    /// answer arriving as the change notification. Without the call a launch
+    /// keeps its stale local list, and the next `addEntry` writes that list over
+    /// the entries the other device made.
+    func testStartingCloudSyncAsksForChangesMadeWhileTheAppWasNotRunning() {
+        let sharedRow: [Any] = [
+            "Genesis 1:1", "0", "KJV", Date(timeIntervalSince1970: 100),
+        ]
+        defaults.set([sharedRow], forKey: AppConstants.historyName)
+        let cloud = LaunchSyncCloudStore()
+        // The other device read John 3:16 while this one was not running. The
+        // two lists share a tail, so the pinned merge loses nothing here.
+        let otherDeviceRow: [Any] = [
+            "John 3:16", "0", "KJV", Date(timeIntervalSince1970: 200),
+        ]
+        cloud.set(
+            [otherDeviceRow, sharedRow],
+            forKey: AppConstants.historyName
+        )
+        let center = NotificationCenter()
+        let store = HistoryStore(
+            defaults: defaults,
+            cloudStore: cloud,
+            notificationCenter: center
+        )
+        // The system answering `synchronize()` with the changes since the last
+        // launch.
+        cloud.onSynchronize = { [unowned cloud] in
+            center.post(
+                name: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+                object: cloud,
+                userInfo: [
+                    NSUbiquitousKeyValueStoreChangeReasonKey:
+                        NSNumber(value: NSUbiquitousKeyValueStoreServerChange),
+                    NSUbiquitousKeyValueStoreChangedKeysKey:
+                        [AppConstants.historyName],
+                ]
+            )
+        }
+        let writesBeforeLaunch = cloud.writeCount
+
+        store.startCloudSync()
+        defer { store.stopCloudSync() }
+
+        XCTAssertEqual(cloud.synchronizeCount, 1)
+        let merged = defaults.array(forKey: AppConstants.historyName)
+        XCTAssertEqual(
+            merged?.count,
+            2,
+            "The answer arrives while synchronize() is running, so it is "
+                + "heard only if the observer was registered first."
+        )
+        XCTAssertEqual((merged?.first as? [Any])?.first as? String, "John 3:16")
+        XCTAssertEqual((merged?.last as? [Any])?.first as? String, "Genesis 1:1")
+        XCTAssertEqual(
+            cloud.writeCount,
+            writesBeforeLaunch,
+            "The merged list is the cloud's own, so nothing is written back."
+        )
+        XCTAssertEqual(
+            (cloud.values[AppConstants.historyName] as? [Any])?.count,
+            2
+        )
+
+        // The observer is already registered, so a second start asks nothing.
+        store.startCloudSync()
+        XCTAssertEqual(cloud.synchronizeCount, 1)
+    }
+
+    /// `addEntry` seeds the app's persistent domain before a first entry, and
+    /// those two calls address the domain by NAME whichever `UserDefaults` they
+    /// are made on. Through an injected store they replaced the host app's own
+    /// `bibleHistory` with an empty array, so a run of these tests emptied the
+    /// reading history of the install that hosted them.
+    func testAddEntryThroughAnInjectedStoreLeavesTheAppsOwnHistoryAlone() {
+        let standard = UserDefaults.standard
+        let saved = standard.array(forKey: AppConstants.historyName)
+        defer {
+            if let saved {
+                standard.set(saved, forKey: AppConstants.historyName)
+            } else {
+                standard.removeObject(forKey: AppConstants.historyName)
+            }
+        }
+        standard.set(
+            [["Psalms 23:1", "0", "KJV", Date(timeIntervalSince1970: 1)]],
+            forKey: AppConstants.historyName
+        )
+
+        defaults.set("Genesis 5", forKey: Defaults.lastRef)
+        defaults.set("9", forKey: Defaults.bibleVersePosition)
+        defaults.removeObject(forKey: AppConstants.historyName)
+        XCTAssertNil(
+            defaults.array(forKey: AppConstants.historyName),
+            "The seeding is the first-entry path: the injected store must "
+                + "start with no history, and must not see the app's."
+        )
+
+        let store = HistoryStore(
+            defaults: defaults,
+            cloudStore: HistoryCloudStoreStub(),
+            notificationCenter: NotificationCenter(),
+            moduleNameProvider: { _ in BundledModules.bible }
+        )
+        store.addEntry(mode: .bible)
+
+        let appHistory = standard.array(forKey: AppConstants.historyName)
+        XCTAssertEqual(appHistory?.count, 1)
+        XCTAssertEqual(
+            (appHistory?.first as? [Any])?.first as? String,
+            "Psalms 23:1"
+        )
+        let injectedHistory = defaults.array(forKey: AppConstants.historyName)
+        XCTAssertEqual(injectedHistory?.count, 1)
+        XCTAssertEqual(
+            (injectedHistory?.first as? [Any])?.first as? String,
+            "Genesis 5:9"
         )
     }
 
@@ -869,6 +1403,86 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// The `lastRef` check runs at EVERY launch, not once.
+    ///
+    /// It was gated on `DefaultsLastRefValidated`, on the assumption that
+    /// nothing after it could persist a ref the reader cannot resolve. The
+    /// `sword://` router then did: a book in capitals was tested as "MALACHI 3"
+    /// and stored as "MALACH1 3", on installs whose flag was long set. The
+    /// router is fixed, but nothing repaired what it had stored — a blank reader
+    /// at every launch, and in Debug the store's assertion before a held URL is
+    /// replayed — until some other navigation overwrote the ref.
+    ///
+    /// The real resolver, because the rule is the reader's: the check resets
+    /// exactly the refs the launch render would fail on. A ref it resolves is
+    /// left byte for byte, with its positions — "Gen 3" included, the
+    /// abbreviation the router stores as the link spelled it.
+    func testLaunchCoordinatorRepairsAnUnresolvableReferenceAtEveryLaunch() throws {
+        let resolver = try XCTUnwrap(PSBookOSISResolver.shared)
+        let suite: UserDefaults = defaults
+        // Nothing is created under it; the file sweeps find nothing to remove.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let coordinator = LaunchCoordinator(
+            defaults: suite,
+            notificationCenter: NotificationCenter(),
+            paths: LaunchCoordinator.Paths(
+                moduleRoot: root.appendingPathComponent("Documents").path,
+                appSupportRoot: root.appendingPathComponent("Caches").path,
+                installerRoot: root.appendingPathComponent("InstallMgr").path,
+                temporaryRoot: root.appendingPathComponent("MMM").path
+            ),
+            moduleControllerAvailable: { true },
+            resetModuleSelections: {},
+            currentReference: { suite.string(forKey: Defaults.lastRef) ?? "" },
+            referenceResolves: { resolver.resolve(ref: $0) != nil }
+        )
+        let positionKeys = [
+            Defaults.bibleVersePosition,
+            Defaults.commentaryVersePosition,
+            "bibleScrollPosition",
+            "commentaryScrollPosition",
+        ]
+
+        // An install that has launched before: the one-shot this used to be has
+        // run, and the old router has since stored a ref nothing resolves.
+        suite.set(true, forKey: Defaults.lastRefValidated)
+        suite.set("MALACH1 3", forKey: Defaults.lastRef)
+        suite.set("10", forKey: Defaults.bibleVersePosition)
+        suite.set("10", forKey: Defaults.commentaryVersePosition)
+        suite.set("2400", forKey: "bibleScrollPosition")
+        suite.set("900", forKey: "commentaryScrollPosition")
+
+        XCTAssertNotNil(coordinator.prepare())
+
+        XCTAssertEqual(suite.string(forKey: Defaults.lastRef), "Genesis 1")
+        // All four describe the chapter read before the bad ref, and the launch
+        // restore is by offset.
+        XCTAssertEqual(
+            positionKeys.map { suite.string(forKey: $0) },
+            ["1", "1", "0", "0"]
+        )
+        XCTAssertTrue(suite.bool(forKey: Defaults.lastRefValidated))
+
+        // A ref the reader resolves is not touched, and neither is its position.
+        for reference in ["John 3", "Gen 3", "1 Corinthians 13"] {
+            suite.set(reference, forKey: Defaults.lastRef)
+            suite.set("16", forKey: Defaults.bibleVersePosition)
+            suite.set("4", forKey: Defaults.commentaryVersePosition)
+            suite.set("640", forKey: "bibleScrollPosition")
+            suite.set("320", forKey: "commentaryScrollPosition")
+
+            XCTAssertNotNil(coordinator.prepare())
+
+            XCTAssertEqual(suite.string(forKey: Defaults.lastRef), reference)
+            XCTAssertEqual(
+                positionKeys.map { suite.string(forKey: $0) },
+                ["16", "4", "640", "320"],
+                "'\(reference)' resolves, and its position was reset"
+            )
+        }
+    }
+
     func testLaunchCoordinatorResetPreservesLegacyKeysAndNotifications() {
         defaults.set(true, forKey: "reset_PocketSword")
         defaults.set("John 3", forKey: Defaults.lastRef)
@@ -923,6 +1537,108 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(resetSelections, 1)
         XCTAssertEqual(resetNotifications, 1)
         XCTAssertEqual(redisplayNotifications, 1)
+    }
+
+    /// A reset returns EVERY row of the reader's display menu to its default.
+    ///
+    /// Verse Per Line was left behind. The reset removed the unsuffixed
+    /// `vplPreference`, a key nothing has read since the toggle became per-module,
+    /// and its per-module sweep did not list it. So Strong's, Morph, Headings,
+    /// Footnotes and Red Letter went back to their defaults while a reader who had
+    /// switched Verse Per Line off stayed in prose — although an absent key reads
+    /// as ON, and `psDefaultOnPrefs` says so with the reset in mind.
+    ///
+    /// The keys come from `ReaderDisplayToggle.toggles`, not from a list written
+    /// here, so a seventh row cannot be left out of the reset unnoticed.
+    func testResetClearsEveryDisplayToggleTheReaderOffers() throws {
+        let store = try XCTUnwrap(
+            PSContentStore.shared,
+            "PSContentStore.shared is required for the baked feature set."
+        )
+        let toggles = ReaderDisplayToggle.toggles(
+            forModule: BundledModules.bible,
+            store: store
+        )
+        XCTAssertFalse(toggles.isEmpty)
+        for toggle in toggles {
+            defaults.psSet(
+                false,
+                forPref: toggle.preference,
+                module: BundledModules.bible
+            )
+        }
+        let coordinator = LaunchCoordinator(
+            defaults: defaults,
+            notificationCenter: NotificationCenter(),
+            moduleControllerAvailable: { true },
+            resetModuleSelections: {}
+        )
+
+        XCTAssertTrue(coordinator.resetPreferences())
+
+        for toggle in toggles {
+            XCTAssertNil(
+                defaults.object(
+                    forKey: defaults.psModuleKey(
+                        toggle.preference,
+                        BundledModules.bible
+                    )
+                ),
+                "\(toggle.id) survived the reset"
+            )
+        }
+        // The wire key spelled out, and what the reader then renders with.
+        XCTAssertNil(defaults.object(forKey: "vplPreference_KJV"))
+        XCTAssertTrue(
+            defaults.psBool(
+                Defaults.vplPreference,
+                forModule: BundledModules.bible
+            )
+        )
+    }
+
+    /// The primaries resolved at launch are a Bible and a commentary, not merely
+    /// two modules that ship.
+    ///
+    /// `reloadLast*` used to honour any persisted name the store had a type for, so
+    /// a `lastCommentary` naming a lexicon — which `sword://StrongsRealGreek/John+3:16`
+    /// could write, before the router learned to ignore such a host — came back as
+    /// the commentary at every launch. A lexicon has no chapters and there is no
+    /// module picker, so the commentary pane stayed empty. A name of the wrong kind
+    /// now falls back to the bundled module and is rewritten, exactly like a name
+    /// that is not shipped at all.
+    ///
+    /// `reloadLast*` resolves against `UserDefaults.standard` (the singleton has no
+    /// injectable defaults), so both keys and both primaries are put back.
+    func testAPersistedLexiconIsNotRestoredAsAReadingModule() {
+        let controller: PSModuleController = PSModuleController.default()
+        let standard = UserDefaults.standard
+        let previousBible = controller.primaryBibleName
+        let previousCommentary = controller.primaryCommentaryName
+        let previousLastBible = standard.string(forKey: Defaults.lastBible)
+        let previousLastCommentary = standard.string(forKey: Defaults.lastCommentary)
+        defer {
+            controller.primaryBibleName = previousBible
+            controller.primaryCommentaryName = previousCommentary
+            standard.set(previousLastBible, forKey: Defaults.lastBible)
+            standard.set(previousLastCommentary, forKey: Defaults.lastCommentary)
+        }
+
+        standard.set(BundledModules.strongsGreek, forKey: Defaults.lastCommentary)
+        standard.set(BundledModules.commentary, forKey: Defaults.lastBible)
+        controller.reloadLastCommentary()
+        controller.reloadLastBible()
+
+        XCTAssertEqual(controller.primaryCommentaryName, BundledModules.commentary)
+        XCTAssertEqual(
+            standard.string(forKey: Defaults.lastCommentary),
+            BundledModules.commentary
+        )
+        XCTAssertEqual(controller.primaryBibleName, BundledModules.bible)
+        XCTAssertEqual(
+            standard.string(forKey: Defaults.lastBible),
+            BundledModules.bible
+        )
     }
 
     /// A reset has to TAKE in the live models, not just in the defaults plist.
@@ -1151,6 +1867,8 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(model.results.first?.id, "John 3:16")
         XCTAssertEqual(model.results.first?.text, "For God so loved the world")
         XCTAssertEqual(model.results.first?.strongsHighlightWords, ["loved"])
+        // Made into terms with the row, once: whole words, as the row marks them.
+        XCTAssertEqual(model.results.first?.strongsHighlightTerms, ["loved"])
     }
 
     /// A SECOND "Find all occurrences" must run the new term, not re-show the
@@ -1592,10 +2310,1290 @@ final class AppStateStoresTests: XCTestCase {
             SearchModel.highlightTerms(
                 query: "love \"the world\" a",
                 matchType: .AndSearch,
+                fuzzy: false,
                 strongs: false
             ),
-            ["love", "the world"]
+            ["love", "the world", "a"]
         )
+    }
+
+    /// The Book scope means the book the reader is in NOW, each time Search is
+    /// entered.
+    ///
+    /// `SearchView` configures the model once per launch, so the book it took
+    /// then went stale as soon as the reader moved: open Search at Genesis, read
+    /// on to John, come back, and a Book-scoped "love" listed Genesis's 3 verses
+    /// instead of John's 19 — for the rest of the launch. The reader can only
+    /// move while another workspace is selected, so
+    /// `AppSession.selectedWorkspace`'s setter hands the book over again on the
+    /// way into Search.
+    @MainActor
+    func testEnteringSearchHandsOverTheReadersCurrentBook() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            defaults.set(
+                PSSearchRange.BookRange.rawValue,
+                forKey: Defaults.lastSearchRange
+            )
+            let model = SearchModel(
+                optionsStore: SearchOptionsStore(defaults: defaults),
+                indexCoordinator: SearchIndexCoordinator(
+                    freshnessProvider: { _ in true },
+                    buildOperation: { _, _ in }
+                ),
+                debounceInterval: 0,
+                featureProvider: { _, _ in true },
+                queryOperation: { _, _, _, _, _ in [] }
+            )
+            let session = AppSession(
+                selectedWorkspace: .read,
+                search: model,
+                dismissKeyboard: {}
+            )
+            let workspace = ReadingWorkspaceModel(session: session)
+
+            // The first visit, and what `SearchView`'s one-shot task does on it.
+            session.selectedWorkspace = .search
+            model.configure(
+                modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+                preferredModule: "KJV",
+                currentBookName: workspace.currentSearchBookName,
+                restoring: nil
+            )
+            XCTAssertEqual(model.bookName, "Genesis")
+
+            // The reader moves on, and the user comes back to Search.
+            session.selectedWorkspace = .read
+            standard.set("John 3", forKey: Defaults.lastRef)
+            session.selectedWorkspace = .search
+
+            // Read AFTER the selection moved, which also keeps the workspace
+            // alive across it: the session's edge to it is weak.
+            XCTAssertEqual(workspace.currentSearchBookName, "John")
+            XCTAssertEqual(
+                model.bookName,
+                "John",
+                "The Book scope kept the book open when Search first appeared."
+            )
+        }
+    }
+
+    /// The hand-over itself: it changes what the Book scope means and searches
+    /// nothing.
+    ///
+    /// The results on screen stay until the next search — re-running one on the
+    /// way in would rebuild the list inside the tab bar's selection animation,
+    /// and replace results a tab change is meant to preserve. The next search,
+    /// by a keystroke or an option, is scoped to the book handed over.
+    @MainActor
+    func testBookScopeUsesTheBookHandedOverOnEntry() async {
+        let collector = ExpressionCollector()
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, bookName, _ in
+                collector.record(bookName ?? "-")
+                return []
+            }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        // Handed over under another scope, it is what choosing Book then means.
+        model.readerBookDidChange("John")
+        model.range = .BookRange
+        XCTAssertEqual(model.bookName, "John")
+
+        model.query = "love"
+        await collector.wait(forCount: 1, in: self)
+        XCTAssertEqual(collector.snapshot(), ["John"])
+
+        // Handed over with the scope already on Book, it moves the scope...
+        model.readerBookDidChange("Romans")
+        XCTAssertEqual(model.bookName, "Romans")
+        // ...and runs nothing by itself.
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(
+            collector.snapshot(),
+            ["John"],
+            "Entering Search re-ran the query that was on screen."
+        )
+
+        model.query = "loved"
+        await collector.wait(forCount: 2, in: self)
+        XCTAssertEqual(collector.snapshot(), ["John", "Romans"])
+    }
+
+    /// A `SearchModel` over a ready index that records, for every query it runs,
+    /// `module|expression|scope|book` — everything that decides which verses a
+    /// "Find all occurrences" lists.
+    @MainActor
+    private func strongsLookupModel(
+        recordingInto collector: ExpressionCollector,
+        strongsModules: Set<String> = ["KJV"]
+    ) -> SearchModel {
+        SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { module, feature in
+                strongsModules.contains(module)
+                    && (feature == "Strongs" || feature == "StrongsNumbers")
+            },
+            queryOperation: { module, expression, range, bookName, _ in
+                collector.record(
+                    "\(module)|\(expression)|\(range.rawValue)|\(bookName ?? "-")"
+                )
+                return []
+            }
+        )
+    }
+
+    /// "Find all occurrences" is offered from the Bible, and only a module that
+    /// carries Strong's numbers can answer it.
+    ///
+    /// Search's module is sticky for the launch: it is the commentary if Search
+    /// first appeared while the reader was on the commentary, or if the user
+    /// picked it in the menu. The lookup then switched Strong's mode off and
+    /// searched MHCC for the literal text "H430" — no results for a number the
+    /// KJV has in 2,249 verses — and picking KJV by hand afterwards did not
+    /// help, because nothing switched the mode back on.
+    @MainActor
+    func testStrongsQueryMovesSearchToTheModuleThatCarriesStrongs() async {
+        let collector = ExpressionCollector()
+        let model = strongsLookupModel(recordingInto: collector)
+        model.configure(
+            modules: [
+                SearchModuleChoice(id: "KJV", kind: .bible),
+                SearchModuleChoice(id: "MHCC", kind: .commentary),
+            ],
+            preferredModule: "MHCC",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+        XCTAssertEqual(model.module, "MHCC")
+        XCTAssertFalse(model.strongsAvailable)
+
+        model.startStrongsQuery("H430", currentBookName: "Genesis")
+
+        XCTAssertEqual(model.module, "KJV")
+        // What a tapped result opens in.
+        XCTAssertEqual(model.moduleKind, .bible)
+        XCTAssertTrue(model.strongsSearch)
+        await collector.wait(forCount: 1, in: self)
+        XCTAssertEqual(
+            collector.snapshot(),
+            ["KJV|lemmas:((\"H430\" OR \"H0430\"))|0|-"]
+        )
+    }
+
+    /// "Find ALL occurrences" searches the whole Bible, whatever scope the last
+    /// text search left.
+    ///
+    /// The scope is saved across launches. Under a saved New Testament scope a
+    /// Hebrew number listed nothing, and under Book the list was silently
+    /// confined to the book being read (189 of H430's 2,249 verses in Genesis).
+    ///
+    /// The last assertion pins the other half of the decision: the lookup moves
+    /// the scope on screen and does NOT rewrite the saved one. A text search on
+    /// the next launch gets the scope the user chose, not one a lookup picked.
+    @MainActor
+    func testStrongsQuerySearchesTheWholeBibleWhateverScopeWasSaved() async {
+        for saved in [PSSearchRange.NTRange, .BookRange] {
+            defaults.set(saved.rawValue, forKey: Defaults.lastSearchRange)
+            let collector = ExpressionCollector()
+            let model = strongsLookupModel(recordingInto: collector)
+            model.configure(
+                modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+                preferredModule: "KJV",
+                currentBookName: "Genesis",
+                restoring: nil
+            )
+            XCTAssertEqual(model.range, saved)
+
+            model.startStrongsQuery("H430", currentBookName: "Genesis")
+
+            XCTAssertEqual(
+                model.range,
+                .AllRange,
+                "The lookup kept saved scope \(saved.rawValue)."
+            )
+            XCTAssertNil(model.bookName)
+            await collector.wait(forCount: 1, in: self)
+            XCTAssertEqual(
+                collector.snapshot(),
+                ["KJV|lemmas:((\"H430\" OR \"H0430\"))|0|-"]
+            )
+            XCTAssertEqual(
+                defaults.integer(forKey: Defaults.lastSearchRange),
+                saved.rawValue,
+                "The lookup rewrote the saved scope."
+            )
+        }
+    }
+
+    /// The same lookup made before the Search workspace has ever appeared: the
+    /// scope it set has to survive the `configure(...)` that follows, which is
+    /// what runs the search.
+    @MainActor
+    func testStrongsQuerySeededBeforeSearchAppearsSearchesTheWholeBible() async {
+        defaults.set(
+            PSSearchRange.NTRange.rawValue,
+            forKey: Defaults.lastSearchRange
+        )
+        let collector = ExpressionCollector()
+        let model = strongsLookupModel(recordingInto: collector)
+
+        model.startStrongsQuery("H430", currentBookName: "Genesis")
+        model.configure(
+            modules: [
+                SearchModuleChoice(id: "KJV", kind: .bible),
+                SearchModuleChoice(id: "MHCC", kind: .commentary),
+            ],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        await collector.wait(forCount: 1, in: self)
+        try? await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(
+            collector.snapshot(),
+            ["KJV|lemmas:((\"H430\" OR \"H0430\"))|0|-"]
+        )
+        XCTAssertTrue(model.strongsSearch)
+        XCTAssertEqual(model.range, .AllRange)
+    }
+
+    /// Strong's mode survives a number being typed into it, one character at a
+    /// time.
+    ///
+    /// The mode is sticky and clears itself when the text stops looking like a
+    /// Strong's number. A lone "H" used to count as not looking like one, and it
+    /// is where every typed number starts: on an iPhone the first digit is two
+    /// taps away (123, then the digit), which ordinary typing does not fit
+    /// inside the 0.25 s debounce, so the search for the bare letter ran,
+    /// switched the mode off, and nothing switched it back on. "H430" was then
+    /// searched as literal text: no results, with the toggle silently off.
+    ///
+    /// Asserts on `model.expression`, which `runSearch` sets synchronously here
+    /// (`debounceInterval: 0`); the queries themselves run on a global queue.
+    @MainActor
+    func testStrongsModeSurvivesANumberTypedOneCharacterAtATime() {
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        // The options-menu toggle, on an empty field.
+        model.strongsSearch = true
+
+        model.query = "H"
+        XCTAssertTrue(
+            model.strongsSearch,
+            "The prefix letter alone switched Strong's mode off."
+        )
+        XCTAssertEqual(model.expression, "lemmas:(\"H\")")
+
+        model.query = "H4"
+        model.query = "H430"
+        XCTAssertTrue(model.strongsSearch)
+        XCTAssertEqual(
+            model.expression,
+            "lemmas:((\"H430\" OR \"H0430\"))"
+        )
+
+        // The rule this must not weaken: a plain word still clears the mode, at
+        // its second letter.
+        model.query = "G"
+        XCTAssertTrue(model.strongsSearch)
+        model.query = "Go"
+        XCTAssertFalse(
+            model.strongsSearch,
+            "A plain word kept Strong's mode, which searches the lemmas column."
+        )
+        XCTAssertEqual(model.expression, "text_norm:\"go\"")
+    }
+
+    /// A query that has been typed and not yet searched is pending, not empty.
+    ///
+    /// Typing is debounced (0.25 s in production), and `isSearching` is raised
+    /// only when the query starts. Until the timer fired, nothing told the empty
+    /// state a search was owed, so with no rows on screen it read "No Results
+    /// for …" about text that had not been searched: on every keystroke of a
+    /// search typed into an empty list, and for the debounce after the last one.
+    ///
+    /// The wait has its own flag, and `isSearching` stays down through it on
+    /// purpose. The result list's corner spinner reads `isSearching`; raised at
+    /// arming, it would spin over the previous query's rows on every keystroke.
+    @MainActor
+    func testATypedQueryIsPendingThroughTheDebounce() {
+        // 60 s, so the timer cannot fire during the test: every state read below
+        // is the debounce window's.
+        func makeModel(indexIsBuilt: Bool) -> SearchModel {
+            let model = SearchModel(
+                optionsStore: SearchOptionsStore(defaults: defaults),
+                indexCoordinator: SearchIndexCoordinator(
+                    freshnessProvider: { _ in indexIsBuilt },
+                    buildOperation: { _, _ in }
+                ),
+                debounceInterval: 60,
+                featureProvider: { _, _ in true },
+                queryOperation: { _, _, _, _, _ in [] }
+            )
+            model.configure(
+                modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+                preferredModule: "KJV",
+                currentBookName: "Genesis",
+                restoring: nil
+            )
+            return model
+        }
+
+        let model = makeModel(indexIsBuilt: true)
+        XCTAssertFalse(model.isSearchPending)
+
+        model.query = "beginning"
+        XCTAssertTrue(
+            model.isSearchPending,
+            "Nothing says a search is owed, so the empty state reads No Results."
+        )
+        XCTAssertFalse(
+            model.isSearching,
+            "The debounce raised the flag the result list's spinner reads."
+        )
+        XCTAssertTrue(model.results.isEmpty)
+
+        // Every way out of the wait ends it. Nothing left to search:
+        model.query = ""
+        XCTAssertFalse(model.isSearchPending)
+
+        // The results being cleared, which is also what a module change does:
+        model.query = "x"
+        XCTAssertTrue(model.isSearchPending)
+        model.clearResults()
+        XCTAssertFalse(model.isSearchPending)
+
+        // And the search starting — here by the Search key, through the same
+        // `runSearch` the timer calls. This also leaves no timer behind.
+        model.query = "light"
+        XCTAssertTrue(model.isSearchPending)
+        model.searchNow()
+        XCTAssertFalse(model.isSearchPending)
+        XCTAssertTrue(model.isSearching)
+
+        // An index that is not built owes no search.
+        let unbuilt = makeModel(indexIsBuilt: false)
+        unbuilt.query = "beginning"
+        XCTAssertFalse(unbuilt.isSearchPending)
+        XCTAssertFalse(unbuilt.isSearching)
+    }
+
+    /// An Exact search highlights the phrase the query ran, not the field text.
+    ///
+    /// `PSSearchQuery.fts5Expression` trims the input and strips one pair of
+    /// surrounding quotes before it builds the phrase. The highlight term was
+    /// the field text as typed, and both highlighters — the result row and the
+    /// reader — matched it character for character. So "Jesus wept " (the
+    /// trailing space the keyboard's predictive bar leaves) or a phrase typed
+    /// in quotes found its verses and marked nothing, in the row and in the
+    /// opened chapter alike.
+    ///
+    /// The term is the builder's own now, and terms compare as the words they
+    /// match, so a stray space or quote cannot cost the highlight again. What
+    /// this still holds is that an Exact search is ONE term: the whole phrase.
+    @MainActor
+    func testExactSearchHighlightsThePhraseTheQueryRan() {
+        func terms(_ query: String) -> [SearchHighlightTerm] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: .ExactSearch,
+                fuzzy: false,
+                strongs: false
+            )
+        }
+        func expression(_ query: String) -> String? {
+            PSSearchQuery.fts5Expression(
+                fromUserInput: query,
+                matchType: .ExactSearch,
+                fuzzy: false,
+                strongs: false
+            )
+        }
+
+        XCTAssertEqual(terms("Jesus wept"), ["Jesus wept"])
+        XCTAssertEqual(terms("Jesus wept "), ["Jesus wept"])
+        XCTAssertEqual(terms(" Jesus wept"), ["Jesus wept"])
+        XCTAssertEqual(terms("\"Jesus wept\""), ["Jesus wept"])
+        // A space left inside the quotes: still the one term. (Terms compare
+        // as the words they match, so this no longer tells a kept space from a
+        // trimmed one; the expression below does.)
+        XCTAssertEqual(terms(" \"in the beginning \" "), ["in the beginning"])
+        // Nothing left to mark.
+        XCTAssertEqual(terms("\"\""), [])
+        // One letter is a term like any other. It was dropped as noise when a
+        // term was looked for anywhere in the text — every a in the verse — and
+        // as a whole word it marks the word.
+        XCTAssertEqual(terms(" a "), ["a"])
+
+        // The builder's side of the same rule, so the two cannot drift apart
+        // unnoticed: each of these inputs runs as the one phrase.
+        for query in ["Jesus wept", "Jesus wept ", " Jesus wept", "\"Jesus wept\""] {
+            XCTAssertEqual(
+                expression(query),
+                "text_norm:\"jesus wept\"",
+                "query \(query.debugDescription)"
+            )
+        }
+    }
+
+    /// A quoted phrase in All or Any mode highlights the phrase the query ran,
+    /// without a space left inside its quotes.
+    ///
+    /// The Exact arm's rule (`testExactSearchHighlightsThePhraseTheQueryRan`),
+    /// for the scanner's quoted-phrase branch. The builder trims the input and
+    /// the tokenizer ignores a space at either end of a phrase, so `"Jesus wept `
+    /// — the quote not closed yet, with the trailing space the keyboard's
+    /// predictive bar leaves — finds John 11:35. Both highlighters matched the
+    /// term character for character, and "Jesus wept " is not in "Jesus wept.":
+    /// the verse was listed and marked nowhere, in the row or in the chapter it
+    /// opened. (They match a term's words now, and the terms are the builder's
+    /// own. What this still holds is that a quoted phrase is ONE term.)
+    @MainActor
+    func testAQuotedPhraseHighlightsWithoutTheSpacesInsideItsQuotes() {
+        func terms(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch
+        ) -> [SearchHighlightTerm] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: matchType,
+                fuzzy: false,
+                strongs: false
+            )
+        }
+
+        // Unclosed, with the predictive bar's trailing space: one term, the
+        // phrase. (Terms compare as the words they match, so the space itself
+        // is not what these tell apart; the second fails if a typographic
+        // quote stops opening a phrase.)
+        XCTAssertEqual(terms("\"Jesus wept "), ["Jesus wept"])
+        XCTAssertEqual(terms("\u{201C}Jesus wept "), ["Jesus wept"])
+        // Closed, with a space inside the quotes at either end: one term.
+        XCTAssertEqual(terms("\"Jesus wept \""), ["Jesus wept"])
+        XCTAssertEqual(terms("\" Jesus wept\""), ["Jesus wept"])
+        XCTAssertEqual(terms("\"Jesus wept \"", .OrSearch), ["Jesus wept"])
+        // Among other words, which are untouched.
+        XCTAssertEqual(
+            terms("\" in the beginning \" God"),
+            ["in the beginning", "God"]
+        )
+        // One letter is a term like any other: a whole word, it marks the
+        // word (see `testExactSearchHighlightsThePhraseTheQueryRan`).
+        XCTAssertEqual(terms("\" a \""), ["a"])
+        // Nothing left to mark.
+        XCTAssertEqual(terms("\"  \""), [])
+        // A phrase with no stray space is the term it always was.
+        XCTAssertEqual(terms("love \"the world\" a"), ["love", "the world", "a"])
+
+        // The builder's side of the same rule: the unclosed phrase runs
+        // without the trailing space.
+        XCTAssertEqual(
+            PSSearchQuery.fts5Expression(
+                fromUserInput: "\"Jesus wept ",
+                matchType: .AndSearch,
+                fuzzy: false,
+                strongs: false
+            ),
+            "text_norm:\"jesus wept\""
+        )
+
+        // What the rule is for: the reader marks the phrase in the verse the
+        // query found.
+        var style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        style.highlightTerms = terms("\"Jesus wept ")
+        let verse = ChapterTextRenderer.text(
+            for: ChapterVerse(number: 35, runs: [InlineRun(text: "Jesus wept.")]),
+            style: style
+        )
+        var jacketed = ""
+        for run in verse.runs where run.backgroundColor != nil {
+            jacketed += String(verse[run.range].characters)
+        }
+        XCTAssertEqual(jacketed, "Jesus wept")
+    }
+
+    /// A phrase in typographic quotes is highlighted as a phrase, and the quotes
+    /// stay in the field.
+    ///
+    /// Smart Punctuation turns a typed " into “ or ” wherever it is in effect,
+    /// and pasted text carries them regardless. The highlight scanner knew only
+    /// the straight quote, so the curly ones became part of the first and last
+    /// words — terms that occur nowhere in the text — and an Exact search's
+    /// term kept them at both ends.
+    ///
+    /// The straightening is local to the query and the highlight: what the user
+    /// typed is still what the field shows and what the history saves.
+    @MainActor
+    func testTypographicQuotesHighlightThePhrase() {
+        func terms(_ query: String, _ matchType: PSSearchType) -> [SearchHighlightTerm] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: matchType,
+                fuzzy: false,
+                strongs: false
+            )
+        }
+        let curly = "\u{201C}in the beginning\u{201D}"
+
+        XCTAssertEqual(terms(curly, .AndSearch), ["in the beginning"])
+        XCTAssertEqual(terms(curly, .OrSearch), ["in the beginning"])
+        XCTAssertEqual(terms(curly, .ExactSearch), ["in the beginning"])
+        XCTAssertEqual(
+            terms("God \u{201C}the world\u{201D} loved", .AndSearch),
+            ["God", "the world", "loved"]
+        )
+        // The low and reversed forms other keyboards open a quotation with.
+        XCTAssertEqual(
+            terms("\u{201E}the world\u{201F}", .AndSearch),
+            ["the world"]
+        )
+
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        model.query = curly
+
+        XCTAssertEqual(model.expression, "text_norm:\"in the beginning\"")
+        XCTAssertEqual(model.highlightTerms, ["in the beginning"])
+        XCTAssertEqual(model.query, curly)
+        XCTAssertEqual(model.historyItem()?.searchTermToDisplay, curly)
+    }
+
+    /// A term with "ae" in it also highlights the æ spelling, and the other way
+    /// round.
+    ///
+    /// The KJV prints Cæsar, Judæa and a dozen other names with the ligature,
+    /// and the query finds them from a typed "ae". Both highlighters — the
+    /// result row and the reader — match a term as the index holds it, and the
+    /// index does not take `ae` for `æ`: "Caesar" is no word of "Render
+    /// therefore unto Cæsar". So the list carries both
+    /// spellings, or the verses the search found would be marked nowhere.
+    @MainActor
+    func testAnAeTermAlsoHighlightsItsLigatureSpelling() {
+        func terms(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch
+        ) -> [SearchHighlightTerm] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: matchType,
+                fuzzy: false,
+                strongs: false
+            )
+        }
+
+        XCTAssertEqual(terms("Caesar"), ["Caesar", "C\u{00E6}sar"])
+        XCTAssertEqual(
+            terms("render unto Caesar", .OrSearch),
+            ["render", "unto", "Caesar", "C\u{00E6}sar"]
+        )
+        XCTAssertEqual(
+            terms("\"unto Caesar\" tribute"),
+            ["unto Caesar", "unto C\u{00E6}sar", "tribute"]
+        )
+        XCTAssertEqual(
+            terms("unto Caesar ", .ExactSearch),
+            ["unto Caesar", "unto C\u{00E6}sar"]
+        )
+        // Typed with the ligature, or pasted from a verse.
+        XCTAssertEqual(terms("C\u{00E6}sar"), ["C\u{00E6}sar", "Caesar"])
+        // The ligature on its own is a term too. As a whole word it marks only
+        // a word that is one; it was dropped when it would have marked the æ
+        // inside every word that has one, and with it went the only mark on
+        // the three verses a fuzzy `Ae` finds (Ænon, Æneas).
+        XCTAssertEqual(terms("ae"), ["ae", "\u{00E6}"])
+        // Terms without an "ae" are the list they always were.
+        XCTAssertEqual(terms("God so loved"), ["God", "so", "loved"])
+        XCTAssertEqual(terms("God so loved", .ExactSearch), ["God so loved"])
+
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        model.query = "Caesar"
+
+        // The query and the highlight agree on the spellings.
+        XCTAssertEqual(
+            model.expression,
+            "(text_norm:\"caesar\" OR text_norm:\"c\u{00E6}sar\")"
+        )
+        XCTAssertEqual(model.highlightTerms, ["Caesar", "C\u{00E6}sar"])
+    }
+
+    /// Under Fuzzy a term is a prefix exactly where the query ran one, and the
+    /// terms are the ones the query ran under.
+    ///
+    /// With Fuzzy on, a bare word in All or Any mode runs as `word*`: every
+    /// word that begins with it. The result row was told about the option
+    /// separately — the live toggle, not the search the rows came from — and
+    /// stretched each mark to the end of its word wherever in the word the
+    /// letters had been found, for a quoted phrase and an Exact search too,
+    /// which the query matches as typed. The reader was not told at all, so
+    /// the chapter a fuzzy result opened marked the typed letters only.
+    ///
+    /// The option now travels in the term, and the term is the query
+    /// builder's own: the spelling it rendered as `word*`.
+    @MainActor
+    func testAFuzzyTermIsAPrefixExactlyWhereTheQueryRanOne() {
+        func terms(
+            _ query: String,
+            _ matchType: PSSearchType = .AndSearch,
+            fuzzy: Bool = true
+        ) -> [SearchHighlightTerm] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: matchType,
+                fuzzy: fuzzy,
+                strongs: false
+            )
+        }
+        func prefix(_ text: String) -> SearchHighlightTerm {
+            SearchHighlightTerm(text, matchesPrefix: true)
+        }
+
+        XCTAssertEqual(terms("lov"), [prefix("lov")])
+        XCTAssertEqual(terms("lov", .OrSearch), [prefix("lov")])
+        XCTAssertEqual(terms("lov", fuzzy: false), ["lov"])
+        // Punctuation around a word is not inside it: still one word.
+        XCTAssertEqual(terms("God,"), [prefix("God,")])
+        // A quoted phrase is matched as typed, and its neighbour is a prefix.
+        XCTAssertEqual(terms("\"so loved\" God"), ["so loved", prefix("God")])
+        XCTAssertEqual(terms("\"lov\""), ["lov"])
+        // So is a word with punctuation inside it.
+        XCTAssertEqual(terms("God\u{2019}s word"), ["God\u{2019}s", prefix("word")])
+        XCTAssertEqual(terms("Beer-sheba"), ["Beer-sheba"])
+        // The Exact arm ignores the option.
+        XCTAssertEqual(terms("lov", .ExactSearch), ["lov"])
+        // Each spelling of an ae word is the prefix the query made of it.
+        XCTAssertEqual(terms("Caesar"), [prefix("Caesar"), prefix("C\u{00E6}sar")])
+
+        // The builder's side of the same rule, so the two cannot drift apart
+        // unnoticed: a one-word query's term is a prefix exactly when its
+        // expression is one.
+        for word in ["lov", "God,", "(God)", "sons'", "God's", "God\u{2019}s",
+                     "Beer-sheba", "Baal-", "Caesar", "C\u{00E6}sar\u{2019}s", "x1"] {
+            for matchType in [PSSearchType.AndSearch, .OrSearch, .ExactSearch] {
+                for fuzzy in [false, true] {
+                    let expression = PSSearchQuery.fts5Expression(
+                        fromUserInput: word,
+                        matchType: matchType,
+                        fuzzy: fuzzy,
+                        strongs: false
+                    ) ?? ""
+                    let made = terms(word, matchType, fuzzy: fuzzy)
+                    XCTAssertFalse(made.isEmpty, word)
+                    for term in made {
+                        XCTAssertEqual(
+                            term.matchesPrefix,
+                            expression.contains("*"),
+                            "\(word), fuzzy \(fuzzy): \(expression)"
+                        )
+                    }
+                }
+            }
+        }
+
+        // The terms belong to the search that ran. The option is read when the
+        // query runs, not when a row is drawn.
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+        model.fuzzySearch = false
+        model.query = "lov"
+        XCTAssertEqual(model.expression, "text_norm:\"lov\"")
+        XCTAssertEqual(model.highlightTerms, ["lov"])
+
+        model.fuzzySearch = true
+        XCTAssertEqual(model.expression, "text_norm:lov*")
+        XCTAssertEqual(model.highlightTerms, [prefix("lov")])
+    }
+
+    /// A result row marks a search term as a whole word, and a Strong's row
+    /// its tagged words likewise.
+    ///
+    /// The row looked for the term's letters anywhere in the verse. Genesis
+    /// 46:3 has one "the" and three more words with those letters in them, and
+    /// all four were marked; under Fuzzy the mark ran on to the end of each
+    /// word, "ther" in "father" included. The query matched none of that: FTS5
+    /// matches whole words, and under Fuzzy the words that begin with the term.
+    ///
+    /// The marks are read back from the row's own attributed string, so this
+    /// fails if the row stops asking `PSSearchQuery.highlightRanges`.
+    @MainActor
+    func testAResultRowMarksASearchTermAsAWholeWord() {
+        func marked(_ terms: [SearchHighlightTerm], in verse: String) -> [String] {
+            let text = NSAttributedString(
+                SearchHighlightedText.make(verse, terms: terms)
+            )
+            XCTAssertEqual(text.string, verse, "marking \(terms) changed the text")
+            var out: [String] = []
+            text.enumerateAttribute(
+                .backgroundColor,
+                in: NSRange(location: 0, length: text.length)
+            ) { value, range, _ in
+                if value != nil {
+                    out.append((text.string as NSString).substring(with: range))
+                }
+            }
+            return out
+        }
+        let genesis46v3 = "And he said, I am God, the God of thy father: fear not to go"
+            + " down into Egypt; for I will there make of thee a great nation:"
+
+        XCTAssertEqual(marked(["the"], in: genesis46v3), ["the"])
+        XCTAssertEqual(marked(["he"], in: genesis46v3), ["he"])
+        XCTAssertEqual(marked(["God", "the"], in: genesis46v3), ["God", "the", "God"])
+        XCTAssertEqual(
+            marked([SearchHighlightTerm("the", matchesPrefix: true)], in: genesis46v3),
+            ["the", "there", "thee"]
+        )
+        // A phrase across the comma the verse prints inside it.
+        XCTAssertEqual(marked(["am God the"], in: genesis46v3), ["am God, the"])
+        // Nothing to mark leaves the text unmarked.
+        XCTAssertEqual(marked([], in: genesis46v3), [])
+        XCTAssertEqual(marked(["fat"], in: genesis46v3), [])
+
+        // The KJV text has non-ASCII characters before a match in 86 verses
+        // (the æ words) and in every verse with a possessive: the mark is
+        // placed by UTF-16 offset in the row's string and must not drift.
+        let luke20v25 = "And he said unto them, Render therefore unto C\u{00E6}sar the things"
+            + " which be C\u{00E6}sar\u{2019}s, and unto God the things which be God\u{2019}s."
+        XCTAssertEqual(marked(["the"], in: luke20v25), ["the", "the"])
+        XCTAssertEqual(marked(["God's"], in: luke20v25), ["God\u{2019}s"])
+    }
+
+    /// A Strong's row marks the words of the verse tagged with its number: whole
+    /// words, the divine name among them, and a one-letter word as that word.
+    ///
+    /// A Strong's search matches a lemma, so its row marks the verse's words
+    /// the index holds against that number (`word_map`). Three things were
+    /// wrong with it, on the same substring search the text terms had.
+    ///
+    /// A word was marked inside longer ones. `I` is the word under G1473, and
+    /// John 14:6 had it marked in "saith", "him" and "life" as well.
+    ///
+    /// The divine name was marked nowhere. The index stores it in markup —
+    /// `that the <divineName>Lord</divineName>` — and no verse contains that:
+    /// a search for H3068 listed 5,521 verses and marked a word in one.
+    ///
+    /// And the row chose between its own words and the query's terms by the
+    /// Strong's toggle as it stood, not by what the row held
+    /// (`SearchResultRow.highlightTerms(orQuery:)` now).
+    ///
+    /// The word maps below are the index's own lines for these verses.
+    @MainActor
+    func testAStrongsRowMarksTheWordsTaggedWithItsNumber() {
+        /// What the row of `verse` marks for a search on `numbers`, through
+        /// the row's own attributed string.
+        func marked(_ numbers: Set<String>, wordMap: String, in verse: String) -> [String] {
+            let row = SearchResultRow(
+                reference: "a verse",
+                text: verse,
+                strongsHighlightWords: PSSearchEngine.surfaceWords(
+                    inWordMap: wordMap, taggedWith: numbers)
+            )
+            let text = NSAttributedString(
+                SearchHighlightedText.make(verse, terms: row.strongsHighlightTerms)
+            )
+            var out: [String] = []
+            text.enumerateAttribute(
+                .backgroundColor,
+                in: NSRange(location: 0, length: text.length)
+            ) { value, range, _ in
+                if value != nil {
+                    out.append((text.string as NSString).substring(with: range))
+                }
+            }
+            return out
+        }
+
+        let john14v6 = "Jesus saith unto him, I am the way, the truth, and the life:"
+            + " no man cometh unto the Father, but by me."
+        let john14v6Words = [
+            "Jesus\tG3588 G2424 \u{03BF} \u{03B9}\u{03B7}\u{03C3}\u{03BF}\u{03C5}\u{03C2}",
+            "saith\tG3004 \u{03BB}\u{03B5}\u{03B3}\u{03B5}\u{03B9}",
+            "unto him\tG846 \u{03B1}\u{03C5}\u{03C4}\u{03C9}",
+            "I\tG1473 \u{03B5}\u{03B3}\u{03C9}",
+            "am\tG1510 \u{03B5}\u{03B9}\u{03BC}\u{03B9}",
+            "the way\tG3588 G3598 \u{03B7} \u{03BF}\u{03B4}\u{03BF}\u{03C2}",
+            "the truth\tG3588 G225 \u{03B7} \u{03B1}\u{03BB}\u{03B7}\u{03B8}\u{03B5}\u{03B9}\u{03B1}",
+            "and\tG2532 \u{03BA}\u{03B1}\u{03B9}",
+            "the life\tG3588 G2222 \u{03B7} \u{03B6}\u{03C9}\u{03B7}",
+            "no man\tG3762 \u{03BF}\u{03C5}\u{03B4}\u{03B5}\u{03B9}\u{03C2}",
+            "cometh\tG2064 \u{03B5}\u{03C1}\u{03C7}\u{03B5}\u{03C4}\u{03B1}\u{03B9}",
+            "unto\tG4314 \u{03C0}\u{03C1}\u{03BF}\u{03C2}",
+            "the Father\tG3588 G3962 \u{03C4}\u{03BF}\u{03BD} \u{03C0}\u{03B1}\u{03C4}\u{03B5}\u{03C1}\u{03B1}",
+            "but\tG3361 \u{03BC}\u{03B7}",
+            "by\tG1223 \u{03B4}\u{03B9}",
+            "me\tG1700 \u{03B5}\u{03BC}\u{03BF}\u{03C5}",
+        ].joined(separator: "\n")
+
+        // One letter, and the word only: not the i in "saith", "him", "life".
+        XCTAssertEqual(marked(["G1473"], wordMap: john14v6Words, in: john14v6), ["I"])
+        // A tagged run of words is marked whole.
+        XCTAssertEqual(marked(["G846"], wordMap: john14v6Words, in: john14v6), ["unto him"])
+        // Every run of words under the number, in the verse's order.
+        XCTAssertEqual(
+            marked(["G3588"], wordMap: john14v6Words, in: john14v6),
+            ["Jesus", "the way", "the truth", "the life", "the Father"]
+        )
+        // No word of the verse carries the number: nothing to mark.
+        XCTAssertEqual(marked(["G9999"], wordMap: john14v6Words, in: john14v6), [])
+
+        // The divine name, which the index stores in markup.
+        let genesis2v4 = "These are the generations of the heavens and of the earth when"
+            + " they were created, in the day that the LORD God made the earth and the"
+            + " heavens,"
+        let genesis2v4Words = [
+            "These\tH0428 H428",
+            "the generations\tH08435 H8435",
+            "of the heavens\tH08064 H8064",
+            "and of the earth\tH0776 H776",
+            "when they were created\tH01254 H1254",
+            "in the day\tH03117 H3117",
+            "that the <divineName>Lord</divineName>\tH03068 H3068",
+            "God\tH0430 H430",
+            "made\tH06213 H6213",
+            "the earth\tH0776 H776",
+            "and the heavens\tH08064 H8064",
+        ].joined(separator: "\n")
+        let lord: Set<String> = ["H03068", "H3068"]
+
+        XCTAssertEqual(
+            PSSearchEngine.surfaceWords(inWordMap: genesis2v4Words, taggedWith: lord),
+            ["that the Lord"],
+            "the surface word still carries the index's markup"
+        )
+        XCTAssertEqual(marked(lord, wordMap: genesis2v4Words, in: genesis2v4),
+                       ["that the LORD"])
+        // Two runs of words under one number, each where it is in the verse.
+        XCTAssertEqual(
+            marked(["H0776", "H776"], wordMap: genesis2v4Words, in: genesis2v4),
+            ["and of the earth", "the earth"]
+        )
+
+        // A word of a Psalm's title is in the word map and not in the row's
+        // text. It marks nothing, and the name beside it is still found.
+        let psalms3v1 = "LORD, how are they increased that trouble me! many are they that"
+            + " rise up against me."
+        let psalms3v1Words = [
+            "A Psalm\tH04210 H4210",
+            "of David\tH01732 H1732",
+            "<divineName>Lord</divineName>\tH03068 H3068",
+            "how are they increased\tH07231 H7231",
+        ].joined(separator: "\n")
+        XCTAssertEqual(marked(["H04210", "H4210"], wordMap: psalms3v1Words, in: psalms3v1), [])
+        XCTAssertEqual(marked(lord, wordMap: psalms3v1Words, in: psalms3v1), ["LORD"])
+
+        // Which terms a row marks is the row's to say: its own words when it
+        // has any — a Strong's search has no terms, and whatever the list holds
+        // is some other query's — and the query's terms when it has none, as
+        // every row of a text search does.
+        let query: [SearchHighlightTerm] = ["the", SearchHighlightTerm("lov", matchesPrefix: true)]
+        let strongsRow = SearchResultRow(
+            reference: "Genesis 2:4",
+            text: genesis2v4,
+            strongsHighlightWords: PSSearchEngine.surfaceWords(
+                inWordMap: genesis2v4Words, taggedWith: lord)
+        )
+        XCTAssertEqual(strongsRow.highlightTerms(orQuery: []), ["that the Lord"])
+        XCTAssertEqual(strongsRow.highlightTerms(orQuery: query), ["that the Lord"])
+        let textRow = SearchResultRow(
+            reference: "Genesis 2:4", text: genesis2v4, strongsHighlightWords: [])
+        XCTAssertEqual(textRow.strongsHighlightTerms, [])
+        XCTAssertEqual(textRow.highlightTerms(orQuery: query), query)
+        XCTAssertEqual(textRow.highlightTerms(orQuery: []), [])
+        // A Strong's row whose word map has no word for the number (683 of
+        // G3588's rows) has nothing of its own to mark and nothing to borrow.
+        let bare = SearchResultRow(
+            reference: "John 14:6",
+            text: john14v6,
+            strongsHighlightWords: PSSearchEngine.surfaceWords(
+                inWordMap: john14v6Words, taggedWith: ["G9999"])
+        )
+        XCTAssertEqual(bare.highlightTerms(orQuery: []), [])
+    }
+
+    /// One verse found is "1 Result".
+    ///
+    /// The header's count had the one form, and a search that found a single
+    /// verse read "1 Results" — as an Exact phrase often does (`light and there
+    /// was light` finds Genesis 1:3 and nothing else). Seen on the simulator
+    /// while checking the search highlight.
+    func testASingleResultIsCountedInTheSingular() {
+        func header(_ count: Int, truncated: Bool = false) -> String {
+            String(localized: SearchResultCountText.resource(count: count, truncated: truncated))
+        }
+
+        XCTAssertEqual(header(1), "1 Result")
+        XCTAssertEqual(header(2), "2 Results")
+        XCTAssertEqual(header(471), "471 Results")
+        // The cut list keeps its own words; it is never one row long.
+        XCTAssertEqual(header(1_000, truncated: true),
+                       "First \(1_000.formatted()) Results")
+    }
+
+    /// A search that matches more verses than the list holds is cut at the cap,
+    /// and says it was cut.
+    ///
+    /// The list has always stopped at 1,000 rows, in canonical order, so the cut
+    /// takes the end of the Bible. The header gave the cap as the count: "God"
+    /// is in 3,892 verses, and the list read as 1,000 results ending at
+    /// 1 Kings 15:3, with nothing to say the New Testament was missing or that a
+    /// narrower scope would show it. The query now asks for one row past the
+    /// cap; `setResults` drops that row and records that it was there.
+    @MainActor
+    func testResultsPastTheCapAreCutAndReportedAsTruncated() throws {
+        func rows(_ count: Int) -> [PSSearchResult] {
+            (0..<count).map {
+                PSSearchResult(reference: "Ref \($0)", fullText: "t")
+            }
+        }
+        // No index, so nothing here can start a search: every row arrives
+        // through `setResults`, as it does from a finished query.
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in false },
+                buildOperation: { _, _ in }
+            ),
+            featureProvider: { _, _ in false },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        let kjv = SearchModuleChoice(id: "KJV", kind: .bible)
+        model.configure(
+            modules: [kjv],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        XCTAssertEqual(SearchModel.resultLimit, 1000)
+
+        // The row past the cap is the query's evidence of more. It is dropped,
+        // and the list is marked.
+        model.setResults(rows(1001))
+        XCTAssertEqual(model.results.count, 1000)
+        XCTAssertEqual(model.results.last?.reference, "Ref 999")
+        XCTAssertTrue(model.resultsWereTruncated)
+
+        // Exactly the cap is every match there is.
+        model.setResults(rows(1000))
+        XCTAssertEqual(model.results.count, 1000)
+        XCTAssertEqual(model.results.last?.reference, "Ref 999")
+        XCTAssertFalse(model.resultsWereTruncated)
+
+        // The mark describes the rows on screen, so it goes when they do:
+        // cleared results, ...
+        model.setResults(rows(1001))
+        model.clearResults()
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertFalse(model.resultsWereTruncated)
+
+        // ... an emptied field, ...
+        model.query = "God"
+        model.setResults(rows(1001))
+        model.query = ""
+        XCTAssertTrue(model.results.isEmpty)
+        XCTAssertFalse(model.resultsWereTruncated)
+
+        // ... and a saved search put back, which holds its rows and no record
+        // of whether they were cut.
+        let saved = try XCTUnwrap(
+            PSSearchHistoryItem(
+                searchTermToDisplay: "God",
+                strongs: false,
+                fuzzy: false,
+                type: .AndSearch,
+                range: .AllRange,
+                book: nil
+            )
+        )
+        saved.results = [
+            PSVerseTextEntry(key: "Genesis 1:1", text: "In the beginning God"),
+        ]
+        model.setResults(rows(1001))
+        model.configure(
+            modules: [kjv],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: saved
+        )
+        XCTAssertEqual(model.results.map(\.reference), ["Genesis 1:1"])
+        XCTAssertFalse(model.resultsWereTruncated)
+    }
+
+    /// The Settings-bundle reset is handled on activation only once launch
+    /// preparation has finished.
+    ///
+    /// `reset_PocketSword` is flipped in the Settings app, so it can be waiting
+    /// at a cold launch as well as on a return from the background. At a cold
+    /// launch `LaunchCoordinator.prepare()` handles it, off the main actor. The
+    /// activation handler read the same flag with no readiness check, so an
+    /// activation arriving during preparation would run the reset a second
+    /// time, on the main thread, alongside the first — the one main-thread path
+    /// that could first-touch `PSModuleController` before `prepare()` had
+    /// returned. From the `.ready` transition (`replayPendingURL()`) on, the
+    /// handler is the only reader of the flag, as it always was on a warm
+    /// return.
+    @MainActor
+    func testActivationResetWaitsForLaunchPreparation() {
+        defaults.set(true, forKey: "reset_PocketSword")
+        let session = AppSession(
+            settings: SettingsModel(store: SettingsStore(defaults: defaults)),
+            library: LibraryModel(
+                bookmarkStore: BookmarkStore(
+                    rootProvider: { PSBookmarkFolder() },
+                    save: { true },
+                    notificationCenter: NotificationCenter()
+                ),
+                historyStore: HistoryStore(
+                    defaults: defaults,
+                    cloudStore: HistoryCloudStoreStub(),
+                    notificationCenter: NotificationCenter()
+                ),
+                dictionaryStore: DictionaryStore(
+                    defaults: defaults,
+                    moduleProvider: { nil },
+                    moduleLoader: { _ in },
+                    moduleTypeProvider: { _ in nil },
+                    keysProvider: { _ in [] },
+                    entryProvider: { _, _ in nil }
+                ),
+                notificationCenter: NotificationCenter()
+            ),
+            readingStore: ReadingStateStore(defaults: defaults)
+        )
+        var resets = 0
+
+        // Launch preparation is still running: the flag is `prepare()`'s.
+        session.resetOnActivationIfRequested(defaults: defaults) { resets += 1 }
+        XCTAssertEqual(
+            resets,
+            0,
+            "An activation during launch preparation ran the reset itself."
+        )
+
+        // The `.ready` transition. The stand-in reset leaves the flag set, as a
+        // flag flipped while the app was suspended would be.
+        session.replayPendingURL()
+        session.resetOnActivationIfRequested(defaults: defaults) { resets += 1 }
+        XCTAssertEqual(resets, 1)
+
+        // The real reset clears the flag, and without it an activation resets
+        // nothing.
+        defaults.removeObject(forKey: "reset_PocketSword")
+        session.resetOnActivationIfRequested(defaults: defaults) { resets += 1 }
+        XCTAssertEqual(resets, 1)
+    }
+
+    /// Search re-checks its index when the app becomes active.
+    ///
+    /// A foreground build that dies with the app is finished later by a
+    /// background task (`SearchIndexBackgroundManager`), which can run inside
+    /// this process while it is suspended and reports to no one. A Search
+    /// workspace left on "No Search Index Installed" kept saying so over the
+    /// finished index — nothing looked again short of a module switch or a
+    /// relaunch — and its Build button dropped that index and spent tens of
+    /// seconds rebuilding it. `indexMayHaveChanged()` is the activation hook:
+    /// it adopts the index and runs the query left waiting in the field.
+    ///
+    /// Two things it must NOT do are pinned with it. Before `configure(...)`
+    /// there is no module and nothing is asked: the first activation can
+    /// arrive during launch preparation, when the engine is off limits. And a
+    /// build still running is not asked either: coming back to the app is when
+    /// the system expires a background build, and the engine would be queried
+    /// on the main thread about a connection that build is about to close.
+    @MainActor
+    func testSearchAdoptsAnIndexBuiltOutsideTheWorkspace() async {
+        // What the engine would answer, and how often it was asked.
+        var fresh = false
+        var freshnessChecks = 0
+        let buildGate = SearchIndexBuildGate()
+        let collector = ExpressionCollector()
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in
+                    freshnessChecks += 1
+                    return fresh
+                },
+                buildGate: buildGate,
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, expression, _, _, _ in
+                collector.record(expression)
+                return []
+            }
+        )
+
+        // An activation before `configure(...)`: no module, nothing asked.
+        model.indexMayHaveChanged()
+        XCTAssertEqual(freshnessChecks, 0)
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+
+        // Search opens on the build prompt, and a query typed there waits.
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+        XCTAssertEqual(freshnessChecks, 1)
+        model.query = "love"
+        XCTAssertTrue(collector.snapshot().isEmpty)
+
+        // The background recovery build, through the gate it shares with the
+        // coordinator, held open mid-build.
+        defaults.set("KJV", forKey: Defaults.pendingSearchIndexModule)
+        let backgroundStarted = expectation(description: "Background build started")
+        let backgroundFinished = expectation(description: "Background build finished")
+        let releaseBackground = DispatchSemaphore(value: 0)
+        let manager = SearchIndexBackgroundManager(
+            defaults: defaults,
+            taskIdentifier: "test.search-index",
+            scheduler: SearchIndexBackgroundManager.Scheduler(
+                register: { _, _ in true },
+                submit: { _, completion in completion(nil) },
+                cancel: { _ in }
+            ),
+            buildGate: buildGate,
+            buildOperation: { _, _ in
+                backgroundStarted.fulfill()
+                releaseBackground.wait()
+            }
+        )
+        manager.performPendingBuild(cancellationRequested: { false }) { _, _ in
+            backgroundFinished.fulfill()
+        }
+        await fulfillment(of: [backgroundStarted], timeout: 2)
+
+        // An activation while it is still running leaves the engine alone.
+        model.indexMayHaveChanged()
+        XCTAssertEqual(
+            freshnessChecks,
+            1,
+            "The engine was asked about an index a build was still writing."
+        )
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+
+        // The build finishes after that activation: the index is fresh, nothing
+        // has told Search, and the look that was skipped is not repeated. The
+        // build prompt stays up over it — the gap `indexMayHaveChanged`
+        // documents and leaves.
+        releaseBackground.signal()
+        await fulfillment(of: [backgroundFinished], timeout: 2)
+        fresh = true
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
+        XCTAssertTrue(collector.snapshot().isEmpty)
+
+        // The next activation, whenever it comes, adopts it and runs the waiting
+        // query.
+        model.indexMayHaveChanged()
+        XCTAssertEqual(
+            model.indexCoordinator.state,
+            .ready,
+            "Search kept the build prompt over an index built in the background."
+        )
+        await collector.wait(forCount: 1, in: self)
+        XCTAssertEqual(collector.snapshot().count, 1)
+        XCTAssertTrue(collector.snapshot().first?.contains("love") ?? false)
+
+        // A later activation finds nothing new and runs nothing.
+        model.indexMayHaveChanged()
+        XCTAssertEqual(model.indexCoordinator.state, .ready)
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(
+            collector.snapshot().count,
+            1,
+            "An activation with nothing changed re-ran the query on screen."
+        )
+
+        // An index that has gone missing becomes the build prompt again, rather
+        // than a ready state that answers every query with nothing.
+        fresh = false
+        model.indexMayHaveChanged()
+        XCTAssertEqual(model.indexCoordinator.state, .unavailable)
     }
 
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
@@ -1870,9 +3868,10 @@ final class AppStateStoresTests: XCTestCase {
     /// An EXPIRED background build is not billed as a failure.
     ///
     /// `PSSearchEngine.build` throws `.cancelled` on expiry, so an expired run arrives
-    /// with both an error and the cancellation flag set. Testing the error first would
+    /// with both an error and the cancellation flag set. Billing the error first would
     /// spend retry budget on work that was merely interrupted — which is why the expiry
-    /// arm comes first and reports `shouldRetry: true` with the record intact.
+    /// arm comes before the failure arm and reports `shouldRetry: true` with the record
+    /// intact.
     func testExpiredBackgroundIndexBuildKeepsItsRecordWithoutSpendingBudget() {
         defaults.set("KJV", forKey: Defaults.pendingSearchIndexModule)
         let manager = SearchIndexBackgroundManager(
@@ -1902,6 +3901,204 @@ final class AppStateStoresTests: XCTestCase {
             defaults.integer(forKey: Defaults.pendingSearchIndexAttempts), 0,
             "an expiration must not spend retry budget"
         )
+    }
+
+    /// A background build that RETURNED has built the index, even if its task
+    /// expired on the way out.
+    ///
+    /// `PSSearchEngine.build` can only see a cancel at its 500-row progress
+    /// poll. After the last one (row 31,000 of the KJV's 31,102) the remaining
+    /// inserts, the COMMIT and the meta stamp cannot be stopped, so an expiry
+    /// that lands there leaves a complete, stamped index and a build that
+    /// returns normally with the flag set. Classified by the flag first, that
+    /// was reported as an interrupted run: the recovery record stayed, the
+    /// request was resubmitted, and the next background slot opened with
+    /// `dropIndex()` on the finished index.
+    ///
+    /// So the order is success, then expiry, then failure. The flag is raised
+    /// inside the operation, as it is on a device, rather than passed as
+    /// `{ true }`: a build that was never allowed to start is not what this
+    /// pins.
+    func testBackgroundBuildThatFinishesAfterExpiryCountsAsBuilt() {
+        defaults.set("KJV", forKey: Defaults.pendingSearchIndexModule)
+        let flagLock = NSLock()
+        var expired = false
+        let manager = SearchIndexBackgroundManager(
+            defaults: defaults,
+            taskIdentifier: "test.search-index",
+            scheduler: SearchIndexBackgroundManager.Scheduler(
+                register: { _, _ in true },
+                submit: { _, completion in completion(nil) },
+                cancel: { _ in }
+            ),
+            buildGate: SearchIndexBuildGate(),
+            buildOperation: { _, progress in
+                // The engine's last poll finds nothing to stop for ...
+                var cancel = false
+                progress?(0.99, &cancel)
+                XCTAssertFalse(cancel)
+                // ... and the task expires after it, in the tail.
+                flagLock.withLock { expired = true }
+            }
+        )
+
+        let done = expectation(description: "late expiry")
+        manager.performPendingBuild(
+            cancellationRequested: { flagLock.withLock { expired } }
+        ) { success, shouldRetry in
+            XCTAssertTrue(
+                success,
+                "a build that returned has committed its index"
+            )
+            XCTAssertFalse(
+                shouldRetry,
+                "a retry would open with dropIndex() on the finished index"
+            )
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+
+        XCTAssertNil(
+            defaults.string(forKey: Defaults.pendingSearchIndexModule),
+            "nothing is left to recover"
+        )
+        XCTAssertEqual(
+            defaults.integer(forKey: Defaults.pendingSearchIndexAttempts), 0
+        )
+    }
+
+    /// A background build that finishes just as the user starts their own build
+    /// of the same module leaves the recovery record alone.
+    ///
+    /// `beginForegroundBuild` writes the record for the build the user asked
+    /// for and tells the background one to stop. Landing in the background
+    /// build's tail, that stops nothing: the build returns, and counts as
+    /// built. But the record is no longer its to clear. The foreground build is
+    /// waiting at the gate, opens with `dropIndex()`, and needs the record if
+    /// the app is killed before it finishes. Without the `foregroundModule`
+    /// check the success arm clears it.
+    func testALateBackgroundBuildLeavesTheRecordOfAForegroundBuild() {
+        defaults.set("KJV", forKey: Defaults.pendingSearchIndexModule)
+        let flagLock = NSLock()
+        var cancelled = false
+        // The operation needs the manager it belongs to; cleared at the end so
+        // the two do not keep each other alive.
+        var foreground: SearchIndexBackgroundManager?
+        let manager = SearchIndexBackgroundManager(
+            defaults: defaults,
+            taskIdentifier: "test.search-index",
+            scheduler: SearchIndexBackgroundManager.Scheduler(
+                register: { _, _ in true },
+                submit: { _, completion in completion(nil) },
+                cancel: { _ in }
+            ),
+            buildGate: SearchIndexBuildGate(),
+            buildOperation: { module, _ in
+                // Build is tapped in the tail: the record is rewritten for the
+                // foreground build and this one is told to stop, too late.
+                foreground?.beginForegroundBuild(module: module)
+                flagLock.withLock { cancelled = true }
+            }
+        )
+        foreground = manager
+        defer { foreground = nil }
+
+        let done = expectation(description: "late background build")
+        manager.performPendingBuild(
+            cancellationRequested: { flagLock.withLock { cancelled } }
+        ) { success, shouldRetry in
+            XCTAssertTrue(success)
+            XCTAssertFalse(shouldRetry)
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+
+        XCTAssertEqual(
+            defaults.string(forKey: Defaults.pendingSearchIndexModule), "KJV",
+            "the record belongs to the foreground build now"
+        )
+
+        // ... which clears it when it finishes.
+        manager.finishForegroundBuild(module: "KJV")
+        XCTAssertNil(
+            defaults.string(forKey: Defaults.pendingSearchIndexModule)
+        )
+    }
+
+    /// A foreground build that RETURNED is ready, even if Cancel was tapped on
+    /// its way out.
+    ///
+    /// The Cancel button is up for the whole build and the engine stops only at
+    /// a progress poll, so a tap in the tail cancels nothing: the index is
+    /// committed and stamped. Classified by the flag first, the coordinator
+    /// said `.cancelled` — no search ran, and the screen offered only "Build
+    /// Index", which drops the finished index and spends another ~30 s
+    /// rebuilding it. Nothing re-reads freshness until a relaunch or a module
+    /// switch.
+    @MainActor
+    func testAnIndexBuildThatFinishesAfterALateCancelIsReady() async {
+        let outcome = await outcomeOfAnIndexBuildCancelledMidFlight(
+            endingWith: nil
+        )
+
+        XCTAssertEqual(outcome.state, .ready)
+        XCTAssertEqual(outcome.success, true)
+        XCTAssertEqual(outcome.cancelled, false)
+    }
+
+    /// The companion: a cancel the build DID see still ends cancelled.
+    ///
+    /// `PSSearchEngine.build` rolls back, drops the partial index and throws
+    /// `.cancelled`, which arrives with the flag set. That throw, not the flag,
+    /// is what makes a build cancelled.
+    @MainActor
+    func testAnIndexBuildThatStopsForACancelIsCancelled() async {
+        let outcome = await outcomeOfAnIndexBuildCancelledMidFlight(
+            endingWith: PSSearchEngineError.cancelled
+        )
+
+        XCTAssertEqual(outcome.state, .cancelled)
+        XCTAssertEqual(outcome.success, false)
+        XCTAssertEqual(outcome.cancelled, true)
+    }
+
+    /// Starts a foreground build, cancels it while the operation is running,
+    /// then lets the operation end: by returning, or by throwing `error`.
+    @MainActor
+    private func outcomeOfAnIndexBuildCancelledMidFlight(
+        endingWith error: Error?
+    ) async -> (state: SearchIndexState, success: Bool?, cancelled: Bool?) {
+        let started = expectation(description: "Index build started")
+        let completed = expectation(description: "Index build completed")
+        let release = DispatchSemaphore(value: 0)
+        let coordinator = SearchIndexCoordinator(
+            freshnessProvider: { _ in false },
+            buildGate: SearchIndexBuildGate(),
+            buildOperation: { _, _ in
+                started.fulfill()
+                release.wait()
+                if let error {
+                    throw error
+                }
+            }
+        )
+        var success: Bool?
+        var cancelled: Bool?
+        coordinator.onCompletion = {
+            success = $0
+            cancelled = $1
+            completed.fulfill()
+        }
+
+        coordinator.build(module: "KJV")
+        await fulfillment(of: [started], timeout: 2)
+        coordinator.cancel()
+        XCTAssertEqual(coordinator.state, .cancelling)
+
+        release.signal()
+        await fulfillment(of: [completed], timeout: 2)
+
+        return (coordinator.state, success, cancelled)
     }
 
     /// Every chapter link survives the round trip to the URL the text carries.
@@ -2211,6 +4408,92 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(store.verse(at: 100, fallback: 1), 3)
     }
 
+    /// Renders ten one-line verses through the reader's own text renderer and asks
+    /// the store for the verse at the middle of each line.
+    ///
+    /// The test above hands the store text-view coordinates directly; this pins
+    /// that the RENDERER records them in that space. With a line's origin added to
+    /// bounds that already include it, every fragment sat at about twice its real y
+    /// and this read `[1, 1, 2, 2, 3, 3, 4, 4, 5, 5]`: the toolbar title and
+    /// `bibleVersePosition` moved through a flowing paragraph at half speed and
+    /// never reached its second half.
+    @MainActor
+    func testVerseTrackingRendererRecordsFragmentsInTextViewCoordinates() throws {
+        var text = Text("")
+        for verse in 1...10 {
+            let piece = Text(verbatim: verse == 10 ? "Verse \(verse)" : "Verse \(verse)\n")
+                .customAttribute(VerseTextAttribute(verse: verse))
+            text = Text("\(text)\(piece)")
+        }
+        let store = VerseLayoutStore()
+        let renderer = ImageRenderer(
+            content: text
+                .font(.system(size: 20))
+                .textRenderer(VerseTrackingTextRenderer(layoutStore: store))
+                .frame(width: 300, alignment: .leading)
+        )
+        renderer.scale = 1
+        let height = try XCTUnwrap(renderer.uiImage).size.height
+
+        XCTAssertEqual(
+            (0..<10).map {
+                store.verse(at: height * (CGFloat($0) + 0.5) / 10, fallback: 0)
+            },
+            Array(1...10)
+        )
+    }
+
+    /// Scrolls a flowing paragraph past the top half a point at a time and collects
+    /// every change of verse the tracker reports: 1 to 12, each once, in order.
+    ///
+    /// The text is built the way `ParagraphRow` builds it — superscript label, body,
+    /// verse attribute, the reader's line spacing — because the label is what made
+    /// the tracker step backwards. A label's own bounds start about 2 pt above the
+    /// body text's, so with each fragment at its run's height the gap above a line
+    /// holding the tail of verse N-1 and the start of verse N read N, and the line
+    /// itself read N-1 again: one backward step of the title, and two defaults
+    /// writes, per verse. Correcting the fragments' position alone doubles those
+    /// steps, which is why this is pinned beside the test above.
+    @MainActor
+    func testFlowingVerseTrackerNeverStepsBackwards() throws {
+        let style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        var text = Text("")
+        for verse in 1...12 {
+            var attributed = ChapterTextRenderer.verseLabel(verse, style: style)
+            attributed += ChapterTextRenderer.attributed(
+                runs: [
+                    InlineRun(
+                        text: "In the beginning God created the heaven and the earth "
+                            + "and so on and so forth for a while. "
+                    ),
+                ],
+                style: style
+            )
+            let piece = Text(attributed)
+                .customAttribute(VerseTextAttribute(verse: verse))
+            text = Text("\(text)\(piece)")
+        }
+        let store = VerseLayoutStore()
+        let renderer = ImageRenderer(
+            content: text
+                .lineSpacing(style.fontSize * (style.lineSpacingMultiple - 1))
+                .textRenderer(VerseTrackingTextRenderer(layoutStore: store))
+                .frame(width: 360, alignment: .leading)
+        )
+        renderer.scale = 1
+        let height = try XCTUnwrap(renderer.uiImage).size.height
+
+        // Each element is one retitle on the way down the paragraph.
+        var reported: [Int] = []
+        for offset in stride(from: CGFloat(0), to: height, by: 0.5) {
+            let verse = store.verse(at: offset, fallback: 0)
+            if verse != reported.last { reported.append(verse) }
+        }
+        XCTAssertEqual(reported, Array(1...12))
+    }
+
     // MARK: Launch scroll restore
 
     /// Saves and restores the two `UserDefaults.standard` keys the reader pane
@@ -2333,6 +4616,896 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// The offset an offset scroll hands to `ScrollPosition` comes out again once
+    /// the scroll view is there, and is not handed to one that already is.
+    ///
+    /// SwiftUI applies an offset it still holds again whenever the content size
+    /// changes, and as a raw content offset where `scrollTo(y:)` landed
+    /// inset-relative. MEASURED (iOS 27.2): a launch restore of 1099 rests at
+    /// content offset (-16, 983); left in the position, it became (0, 1099) when
+    /// the app went to the background — one top inset further on and flush
+    /// against the left screen edge — and that was saved, so every launch that
+    /// was left walked the reader on by the inset. 3 launches in 3.
+    ///
+    /// What is pinned, in the order a launch meets them:
+    ///
+    ///  * the offset is in the position while the scroll is on its way, and out
+    ///    of it as the landing is reported;
+    ///  * the size hook's replay does not put it back. The bars settle after the
+    ///    landing as well as before it, and a scroll view asked to go where it
+    ///    is reports nothing, so nothing would take it out again;
+    ///  * a size change the scroll view DID move through is still answered, and
+    ///    an arrival reported during one — when the pane is not taking reports
+    ///    for scrolls — still counts;
+    ///  * an offset past the end of the chapter comes out where the pane gives
+    ///    up on it;
+    ///  * everything else is as it was: a finger releases the gate and leaves
+    ///    the position to SwiftUI, a verse scroll's row is not disturbed by a
+    ///    late report, and a page turn's new scroll view has reported nothing.
+    @MainActor
+    func testAnOffsetIsTakenOutOfTheScrollPositionOnceTheScrollViewIsThere() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previousScroll = standard.string(forKey: scrollKey)
+        let previousVerse = standard.string(forKey: verseKey)
+        defer {
+            if let previousScroll {
+                standard.set(previousScroll, forKey: scrollKey)
+            } else {
+                standard.removeObject(forKey: scrollKey)
+            }
+            if let previousVerse {
+                standard.set(previousVerse, forKey: verseKey)
+            } else {
+                standard.removeObject(forKey: verseKey)
+            }
+        }
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 2999, containerHeight: 675)
+        }
+        // The hop a pane defers its scroll to.
+        let hop = { for _ in 0..<10 { await Task.yield() } }
+
+        // A launch: the scroll view is laid out at the top, then the restore.
+        standard.set("1099", forKey: scrollKey)
+        standard.set("14", forKey: verseKey)
+        let pane = ReaderPaneModel(mode: .bible)
+        let surface = pane.scrollSurface
+        pane.pendingRestore = .offset(1099)
+        pane.applyPendingWork()
+        pane.scrollOffsetChanged(sample(0), from: surface)
+        // Read on the turn the report was made on, and not carried over the hop.
+        // This bundle is app-hosted: the host app's own reader is alive in the
+        // same process, on the same position keys, and saves its place on
+        // main-actor turns of its own. A hop yields to them, so a key read
+        // across one may hold the HOST's position.
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1099",
+                       "The top, where the scroll view was before the restore "
+                           + "reached it, was saved over the offset being restored.")
+        await hop()
+        XCTAssertEqual(pane.scrollPosition.y, 1099,
+                       "The restore was not handed to the scroll view.")
+        // Written again for that reason, so that what is read once the restore
+        // has landed is what the two reports after the hop did to it.
+        standard.set("1099", forKey: scrollKey)
+        pane.scrollOffsetChanged(sample(400), from: surface)
+        XCTAssertEqual(pane.scrollPosition.y, 1099,
+                       "The offset was taken out before the scroll view got there.")
+
+        pane.scrollOffsetChanged(sample(1099), from: surface)
+        XCTAssertNil(pane.scrollPosition.y,
+                     "The restore has landed and its offset is still in the scroll "
+                         + "position, where the next content-size change applies it "
+                         + "again as a raw content offset.")
+        XCTAssertTrue(pane.scrollPosition.isPositionedByUser)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1099")
+
+        // The bars settle: height only, and the scroll view has not moved.
+        await sizeChange(pane, widthChanged: false)
+        XCTAssertNil(pane.scrollPosition.y,
+                     "The size hook put the offset back into a scroll view that "
+                         + "was already there, which reports nothing to end it.")
+
+        // A size change that moves the scroll view. What it publishes on the way
+        // is not a scroll, but it is where the scroll view is.
+        //
+        // The key is written first and read before the hop, with no await from
+        // the one to the other. The size change above yielded to the host app's
+        // reader, which shares the key and saves its place on turns of its own,
+        // and the hop below does again.
+        standard.set("1099", forKey: scrollKey)
+        pane.prepareForSizeChange()
+        pane.scrollOffsetChanged(sample(700), from: surface)
+        pane.restoreAfterSizeChange(widthChanged: false)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1099",
+                       "An offset published during a size change was saved.")
+        await hop()
+        XCTAssertEqual(pane.scrollPosition.y, 1099,
+                       "The scroll view moved during a size change and was not "
+                           + "sent back.")
+        // The next step of the size change begins before that lands, so the
+        // landing arrives while reports are not being taken for scrolls.
+        pane.prepareForSizeChange()
+        pane.scrollOffsetChanged(sample(1099), from: surface)
+        XCTAssertNil(pane.scrollPosition.y,
+                     "An arrival reported during a size change did not count.")
+        pane.restoreAfterSizeChange(widthChanged: false)
+        await hop()
+        XCTAssertNil(pane.scrollPosition.y)
+
+        // A saved offset past the end of the chapter: the scroll view pins at
+        // its end, the pane gives up on the target, and so does the position.
+        // No report before the hop this time, which is the other order a launch
+        // runs in.
+        standard.set("100000", forKey: scrollKey)
+        let short = ReaderPaneModel(mode: .bible)
+        short.pendingRestore = .offset(100_000)
+        short.applyPendingWork()
+        await hop()
+        XCTAssertEqual(short.scrollPosition.y, 100_000)
+        short.scrollOffsetChanged(sample(2324), from: short.scrollSurface)
+        XCTAssertNil(short.scrollPosition.y,
+                     "The scroll view is as near as it can get, and the offset "
+                         + "it cannot reach is still in the scroll position.")
+        XCTAssertEqual(standard.string(forKey: scrollKey), "2324")
+        await sizeChange(short, widthChanged: false)
+        XCTAssertNil(short.scrollPosition.y)
+
+        // A finger on the reader before the restore lands. The gate opens, as it
+        // did; the position is SwiftUI's to change, which it does as the user
+        // scrolls.
+        standard.set("1099", forKey: scrollKey)
+        let touched = ReaderPaneModel(mode: .bible)
+        touched.pendingRestore = .offset(1099)
+        touched.applyPendingWork()
+        touched.scrollOffsetChanged(sample(0), from: touched.scrollSurface)
+        await hop()
+        touched.userBeganScrolling()
+        XCTAssertEqual(touched.scrollPosition.y, 1099)
+        touched.scrollOffsetChanged(sample(300), from: touched.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "300")
+
+        // A verse scroll after an offset one replaces it, and a report that
+        // matches the old offset leaves the row alone.
+        let rows = ReaderPaneModel(mode: .bible)
+        rows.versePerLine = true
+        rows.document = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+        rows.pendingRestore = .offset(1099)
+        rows.applyPendingWork()
+        rows.scrollOffsetChanged(sample(0), from: rows.scrollSurface)
+        await hop()
+        rows.scrollToVerse(5)
+        await hop()
+        XCTAssertNil(rows.scrollPosition.y)
+        XCTAssertEqual(targetRow(of: rows), 5)
+        rows.scrollOffsetChanged(sample(1099), from: rows.scrollSurface)
+        XCTAssertEqual(targetRow(of: rows), 5,
+                       "A report at the old offset took the verse scroll's row "
+                           + "out of the scroll position.")
+        XCTAssertFalse(rows.scrollPosition.isPositionedByUser)
+
+        // A page turn starts a new scroll view, and what the old one last
+        // reported says nothing about it: an offset the old one was at is still
+        // handed over.
+        let paged = ReaderPaneModel(mode: .bible)
+        paged.scrollOffsetChanged(sample(1099), from: paged.scrollSurface)
+        paged.pendingRestore = .chapterStart
+        paged.applyPendingWork()
+        XCTAssertEqual(paged.scrollPosition, ScrollPosition(idType: Int.self))
+        paged.pendingRestore = .offset(1099)
+        paged.applyPendingWork()
+        await hop()
+        XCTAssertEqual(paged.scrollPosition.y, 1099,
+                       "A new scroll view was taken to be where the one it "
+                           + "replaced had been.")
+    }
+
+    /// A bookmark change redraws the chapter where it stands, and asks nothing
+    /// of a scroll view that is already there.
+    ///
+    /// The redraw is an offset restore to the pane's own saved offset. It was
+    /// handed to the scroll view all the same, and an offset the scroll view is
+    /// already at is never reported as reached, so it stayed in the scroll
+    /// position. MEASURED (iOS 27.2): add a bookmark at Genesis 1:16 and leave
+    /// the app — the reader came back 116 pt further on, at verse 18, with the
+    /// text flush against the left screen edge. With nothing asked, the redraw
+    /// holds its place (verse 16 at the same 130.5 pt before the bookmark, after
+    /// it, and after leaving the app).
+    ///
+    /// The last step is why the pane notes which chapter it rendered. An offset
+    /// for ANOTHER chapter is not where the scroll view is, whatever it last
+    /// reported: that report was about the chapter it had.
+    @MainActor
+    func testABookmarkRedisplayAsksNothingOfAScrollViewAlreadyThere() async {
+        let standard = UserDefaults.standard
+        let vplKey = standard.psModuleKey(Defaults.vplPreference, BundledModules.bible)
+        let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
+                    Defaults.commentaryVersePosition,
+                    "bibleScrollPosition", "commentaryScrollPosition", vplKey]
+        // By hand: `withPreservedReadingKeys` takes a synchronous closure.
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        standard.set(true, forKey: vplKey)
+        standard.set("Genesis 1", forKey: Defaults.lastRef)
+        standard.set("1", forKey: Defaults.bibleVersePosition)
+        standard.set("1", forKey: Defaults.commentaryVersePosition)
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+
+        // Reading Genesis 1 at verse 20, having scrolled there.
+        let workspace = ReadingWorkspaceModel()
+        workspace.displayChapter("Genesis 1", polling: .bible, restore: .verse)
+        let bible = workspace.bible
+        for _ in 0..<10 { await Task.yield() }
+        bible.scrollOffsetChanged(sample(2700.6), from: bible.scrollSurface)
+        bible.topmostVerseChanged(20, from: bible.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
+
+        // Add Bookmark, Save. The key is read on the turn of the redisplay, ahead
+        // of its hop. This bundle is app-hosted: the host app's own reader is
+        // alive in the same process, on the same position keys, and saves its
+        // place on main-actor turns of its own, which the hop yields to.
+        workspace.redisplayAfterBookmarksChange()
+        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertNil(bible.scrollPosition.y,
+                     "A bookmark change handed the scroll view the offset it was "
+                         + "already at, where nothing takes it out again.")
+
+        // The same offset in the next chapter is somewhere the scroll view has
+        // not been.
+        //
+        // The offset is written here, and not left as the pane saved it before
+        // the hop, because the load below reads it from the key, and the host's
+        // reader may have saved its own place there since.
+        standard.set("Genesis 2", forKey: Defaults.lastRef)
+        standard.set("2700", forKey: "bibleScrollPosition")
+        workspace.displayChapter("Genesis 2", polling: .bible, restore: .scroll)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(bible.scrollPosition.y, 2700,
+                       "An offset restore into another chapter was dropped on the "
+                           + "strength of a report about the chapter before it.")
+    }
+
+    /// Picking the top of the chapter already open persists it.
+    ///
+    /// A verse scroll resets what the pane believes — offset 0, that verse — and
+    /// leaves the saving to the view's report of where it landed. The chapter's
+    /// first row lands on exactly those values, so neither report reads as a
+    /// change, and the keys kept the position the reader had just LEFT: a display
+    /// toggle, a bookmark or a relaunch went back there.
+    ///
+    /// Jude, because verse 1 is its first row whatever the host's Headings
+    /// setting. With Headings off (the default) that is true of every chapter: a
+    /// Bible intro with nothing to show gets no row. With Headings on, 1,184 of
+    /// the KJV's 1,189 chapters open with an intro row that is only its heading
+    /// (`CHAPTER n.`) above verse 1; the five without one are the one-chapter
+    /// books. That title is then the first row and where verse 1 lands, saved
+    /// the same way (`testALandingOnVerseOneLandsOnTheTitleRowAboveIt`). With
+    /// Verse Per Line off the first PARAGRAPH is the first row in every chapter.
+    @MainActor
+    func testPickingTheTopOfTheOpenChapterPersistsIt() {
+        withPreservedReadingKeys { standard in
+            standard.set("Jude 1", forKey: Defaults.lastRef)
+            standard.set("1", forKey: Defaults.bibleVersePosition)
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter("Jude 1", polling: .bible, restore: .verse)
+            let pane = workspace.bible
+            XCTAssertEqual(pane.document.verses.first?.number, 1,
+                           "Jude no longer opens on verse 1; this needs another chapter.")
+
+            // Reading at verse 20...
+            let surface = pane.scrollSurface
+            pane.scrollOffsetChanged(
+                ReaderScrollSample(offset: 1500, contentHeight: 3000, containerHeight: 675),
+                from: surface
+            )
+            pane.topmostVerseChanged(20, from: surface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "20")
+            XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "1500")
+
+            // ...the reader picks Jude 1:1, and the view reports the landing.
+            workspace.selectReference(bookName: "Jude", chapter: 1, verse: 1)
+            pane.scrollOffsetChanged(
+                ReaderScrollSample(offset: 0, contentHeight: 3000, containerHeight: 675),
+                from: surface
+            )
+            pane.topmostVerseChanged(1, from: surface)
+
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1",
+                           "A display toggle would jump back to the verse being left.")
+            XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "0",
+                           "A bookmark or a relaunch would restore the offset being left.")
+        }
+    }
+
+    /// A landing on verse 1 lands on the chapter's title when the title is the
+    /// row above it.
+    ///
+    /// With Headings on, a KJV chapter opens with a row that is only its title
+    /// (`CHAPTER 1.`, row 0) and verse 1 is the row under it. A scroll to verse 1
+    /// went to verse 1's own row and left the title above the reading area,
+    /// behind the navigation bar: after the reference picker, after a display
+    /// toggle (Headings itself, turned on at the top of a chapter, changed
+    /// nothing on screen), after a link or a search result opened at verse 1,
+    /// and at every launch at the top of a chapter, where the size hook
+    /// re-issues the row of the verse the pane believes. Only a page turn showed
+    /// it. In flowing prose the title heads verse 1's paragraph and was shown —
+    /// except in the 117 psalms whose own title starts a new paragraph at verse
+    /// 1, which leaves `PSALM n.` a row by itself.
+    ///
+    /// The row is the title OF the verse under it, so that is where verse 1
+    /// starts. Landing there is landing at offset 0, which the view reports as
+    /// no change, so it is saved on the spot like any landing on the first row.
+    ///
+    /// Only a row with no text of its own. A commentary's row 0 is the chapter
+    /// summary, a record in its own right, and verse 1 has a record of its own
+    /// under it: "Show in Commentary" on verse 1 opens on that one. And only
+    /// verse 1: every other verse lands where it did.
+    @MainActor
+    func testALandingOnVerseOneLandsOnTheTitleRowAboveIt() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        let headingsKey = standard.psModuleKey(
+            Defaults.headingsPreference, BundledModules.bible
+        )
+        let vplKey = standard.psModuleKey(Defaults.vplPreference, BundledModules.bible)
+        let keys = [Defaults.lastRef, verseKey, Defaults.commentaryVersePosition,
+                    scrollKey, "commentaryScrollPosition", headingsKey, vplKey]
+        // By hand: `withPreservedReadingKeys` takes a synchronous closure.
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+
+        let text = [InlineRun(text: "In the beginning")]
+        var verses = (1...31).map { ChapterVerse(number: $0, runs: text) }
+        verses[5].startsParagraph = true
+        let title = ChapterVerse(number: 0, headings: [
+            ChapterHeading(runs: [InlineRun(text: "CHAPTER 1.")], isCanonical: false),
+        ])
+        // Headings off: no row above verse 1.
+        let untitled = ChapterDocument(verses: verses)
+        // Headings on: the title's row, then verse 1. Flowing, the title heads
+        // the paragraph verse 1 is in (verses 1-5, then 6-31).
+        let titled = ChapterDocument(verses: [title] + verses)
+        // A psalm with a title of its own on verse 1, which starts a paragraph
+        // there: flowing, `PSALM n.` is a row by itself.
+        var psalmVerses = verses
+        psalmVerses[0].headings = [
+            ChapterHeading(runs: [InlineRun(text: "A Psalm of David.")], isCanonical: true),
+        ]
+        let psalm = ChapterDocument(verses: [title] + psalmVerses)
+        XCTAssertEqual(psalm.paragraphs.map(\.id), [0, 1, 6])
+        // A commentary: the chapter summary, then a record where each range of
+        // verses begins.
+        let commentary = ChapterDocument(verses: [
+            ChapterVerse(number: 0, runs: [InlineRun(text: "The chapter, in outline.")]),
+            ChapterVerse(number: 1, runs: text),
+            ChapterVerse(number: 3, runs: text),
+        ])
+
+        // Where a scroll to a verse lands, on a pane that has just been given
+        // the chapter.
+        let cases: [(document: ChapterDocument, name: String, mode: ReadingMode,
+                     versePerLine: Bool, verse: Int, row: Int)] = [
+            (titled, "a title, a row per verse", .bible, true, 1, 0),
+            (titled, "a title, a row per verse", .bible, true, 2, 2),
+            (titled, "a title, a row per verse", .bible, true, 31, 31),
+            (untitled, "no title, a row per verse", .bible, true, 1, 1),
+            (untitled, "no title, a row per verse", .bible, true, 2, 2),
+            (titled, "a title, flowing", .bible, false, 1, 0),
+            (titled, "a title, flowing", .bible, false, 7, 6),
+            (psalm, "a psalm, flowing", .bible, false, 1, 0),
+            (psalm, "a psalm, flowing", .bible, false, 2, 1),
+            (psalm, "a psalm, flowing", .bible, false, 7, 6),
+            (psalm, "a psalm, a row per verse", .bible, true, 1, 0),
+            (untitled, "no title, flowing", .bible, false, 1, 1),
+            (untitled, "no title, flowing", .bible, false, 7, 6),
+            (commentary, "a commentary", .commentary, true, 1, 1),
+            (commentary, "a commentary", .commentary, true, 2, 1),
+            (commentary, "a commentary", .commentary, true, 3, 3),
+        ]
+        for testCase in cases {
+            let pane = ReaderPaneModel(mode: testCase.mode)
+            pane.versePerLine = testCase.versePerLine
+            pane.document = testCase.document
+            pane.pendingRestore = .verse(testCase.verse)
+            pane.applyPendingWork()
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertEqual(
+                targetRow(of: pane), testCase.row,
+                "With \(testCase.name), a scroll to verse \(testCase.verse) went "
+                    + "to the wrong row."
+            )
+        }
+
+        // The landing is offset 0 under verse 1, and what the view reports from
+        // there — offset 0, and row 0, which is verse 1 to the pane — changes
+        // nothing. So it is saved when it is asked for.
+        let reader = ReaderPaneModel(mode: .bible)
+        reader.versePerLine = true
+        reader.document = titled
+        reader.scrollOffsetChanged(sample(1500), from: reader.scrollSurface)
+        reader.topmostVerseChanged(20, from: reader.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: verseKey), "20")
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1500")
+        reader.scrollToVerse(1)
+        reader.scrollOffsetChanged(sample(0), from: reader.scrollSurface)
+        reader.topmostVerseChanged(0, from: reader.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: verseKey), "1",
+                       "A display toggle would jump back to the verse being left.")
+        XCTAssertEqual(standard.string(forKey: scrollKey), "0",
+                       "A bookmark or a relaunch would restore the offset being left.")
+
+        // At the top of a chapter the size hook re-issues the row of the verse
+        // the pane believes, by id: the bars settling at launch (height alone)
+        // and a rotation.
+        for widthChanged in [false, true] {
+            let resting = ReaderPaneModel(mode: .bible)
+            resting.versePerLine = true
+            resting.document = titled
+            await sizeChange(resting, widthChanged: widthChanged)
+            XCTAssertEqual(
+                targetRow(of: resting), 0,
+                "A size change at the top of the chapter (width changed: "
+                    + "\(widthChanged)) scrolled the title off."
+            )
+            // Any other verse is re-anchored on its own row, as it was.
+            resting.topmostVerseChanged(20, from: resting.scrollSurface)
+            await sizeChange(resting, widthChanged: true)
+            XCTAssertEqual(targetRow(of: resting), 20)
+        }
+        let flowing = ReaderPaneModel(mode: .bible)
+        flowing.versePerLine = false
+        flowing.document = psalm
+        await sizeChange(flowing, widthChanged: false)
+        XCTAssertEqual(targetRow(of: flowing), 0,
+                       "Launch's size changes scrolled a psalm's number off.")
+
+        // The store's own chapters, through the workspace: arriving at verse 1
+        // (the picker from another chapter, a display toggle, a link), and then
+        // the picker's own path for a verse of the chapter already open.
+        standard.set(true, forKey: headingsKey)
+        let chapters: [(book: String, chapter: Int, versePerLine: Bool)] = [
+            ("Genesis", 1, true), ("Psalms", 3, true), ("Psalms", 3, false),
+        ]
+        for chapter in chapters {
+            let ref = "\(chapter.book) \(chapter.chapter)"
+            let layout = chapter.versePerLine ? "a row per verse" : "flowing"
+            standard.set(chapter.versePerLine, forKey: vplKey)
+            standard.set(ref, forKey: Defaults.lastRef)
+            standard.set("1", forKey: verseKey)
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter(ref, polling: .bible, restore: .verse)
+            let bible = workspace.bible
+            XCTAssertEqual(bible.document.verses.first?.isIntro, true,
+                           "\(ref) has no title row with Headings on.")
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertEqual(targetRow(of: bible), 0,
+                           "\(ref), \(layout): arriving at verse 1 left the title "
+                               + "above the reading area.")
+
+            bible.scrollOffsetChanged(sample(700), from: bible.scrollSurface)
+            bible.topmostVerseChanged(5, from: bible.scrollSurface)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "700")
+            workspace.selectReference(
+                bookName: chapter.book, chapter: chapter.chapter, verse: 1
+            )
+            XCTAssertEqual(standard.string(forKey: scrollKey), "0",
+                           "\(ref), \(layout): picking verse 1 of the open chapter "
+                               + "did not save the top of it.")
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertEqual(targetRow(of: bible), 0,
+                           "\(ref), \(layout): picking verse 1 of the open chapter "
+                               + "left the title above the reading area.")
+        }
+    }
+
+    /// An offset restore names no verse, so a scroll persisted after it lands
+    /// keeps the verse the keys already pair with that offset.
+    ///
+    /// A pane that has shown nothing believes it is at verse 1, and the launch
+    /// restore is always an offset. The first offset saved once it had landed —
+    /// the rows settling a few points is enough — wrote that 1 over the saved
+    /// verse and retitled to `…:1`, with the reader correctly mid-chapter, until
+    /// a different row reached the top. A display toggle or a font change in
+    /// that window (a `.verse` restore) jumped to verse 1.
+    ///
+    /// The first assertion is why the saved verse is carried BESIDE what the
+    /// pane believes and not written into it: the row at the top before the
+    /// scroll lands reports verse 1, and is dropped only because the pane
+    /// already believes that.
+    @MainActor
+    func testAnOffsetRestoreKeepsTheSavedVerseUntilTheViewReportsOne() {
+        withPreservedPanePositionKeys { standard, scrollKey in
+            let sample = { (y: CGFloat) in
+                ReaderScrollSample(offset: y, contentHeight: 5000, containerHeight: 675)
+            }
+            standard.set("1500", forKey: scrollKey)
+            standard.set("16", forKey: Defaults.bibleVersePosition)
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.pendingRestore = .offset(1500)
+            pane.applyPendingWork()
+            let surface = pane.scrollSurface
+
+            pane.topmostVerseChanged(1, from: surface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "16",
+                           "The row at the top before the restore landed was "
+                               + "persisted as the reader's verse.")
+
+            // Landed, and then the rows settle four points.
+            pane.scrollOffsetChanged(sample(1500), from: surface)
+            pane.scrollOffsetChanged(sample(1504), from: surface)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "1504")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "16",
+                           "A scroll after the restore landed overwrote the saved "
+                               + "verse with the one a new pane starts on.")
+
+            // The view's own report takes over from there.
+            pane.topmostVerseChanged(17, from: surface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "17")
+            pane.scrollOffsetChanged(sample(1600), from: surface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "17",
+                           "The saved verse came back after the view had reported one.")
+
+            // A report that CONFIRMS what the pane believes is the view's report
+            // too, once the restore has landed, though it persists nothing.
+            // Quit with verse 2 just at the top; the landing's own report is
+            // dropped (launch's size changes); the reader nudges back a point
+            // and row 1 reports — the verse a new pane already believes.
+            standard.set("64", forKey: scrollKey)
+            standard.set("2", forKey: Defaults.bibleVersePosition)
+            let nudged = ReaderPaneModel(mode: .bible)
+            nudged.pendingRestore = .offset(64)
+            nudged.applyPendingWork()
+            nudged.scrollOffsetChanged(sample(64), from: nudged.scrollSurface)
+            nudged.topmostVerseChanged(1, from: nudged.scrollSurface)
+            nudged.scrollOffsetChanged(sample(60), from: nudged.scrollSurface)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "60")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1",
+                           "The saved verse was written over the one the view "
+                               + "had just reported.")
+        }
+    }
+
+    /// `ReaderScreen`'s size hook — the two calls, back to back — and then the
+    /// hop the pane defers its scroll to.
+    ///
+    /// **A position key is not carried across this, or across any other
+    /// `await` in these tests.** The bundle is app-hosted, so the host app's own
+    /// reader is alive in the same process, on the same `UserDefaults.standard`
+    /// position keys, and it saves its place on main-actor turns of its own: its
+    /// launch restore settling, or a re-render that a notification posted by a
+    /// test provoked. Every yield is a turn it may take. So a test writes a key
+    /// it is about to read, or about to let a pane read, on the same turn as
+    /// the read. A synchronous test cannot be interleaved this way.
+    @MainActor
+    private func sizeChange(_ pane: ReaderPaneModel, widthChanged: Bool) async {
+        pane.prepareForSizeChange()
+        pane.restoreAfterSizeChange(widthChanged: widthChanged)
+        for _ in 0..<10 { await Task.yield() }
+    }
+
+    /// What `pane`'s scroll position was last told, as a row: the row's id after
+    /// a `scrollTo(id:)`, nil after a `scrollTo(y:)`. `ScrollPosition` is a value,
+    /// so this needs no scroll view.
+    @MainActor
+    private func targetRow(of pane: ReaderPaneModel) -> Int? {
+        pane.scrollPosition.viewID(type: Int.self)
+    }
+
+    /// A rotation re-anchors on the verse being read. It does not replay the
+    /// offset the old width was scrolled to.
+    ///
+    /// A width change re-wraps every row, so a pixel offset names different text.
+    /// Genesis 1 with Verse Per Line on is 4198 pt tall in portrait and verse 20
+    /// sits near 2700; in landscape the rows are about half as tall and 2700 is
+    /// past the end of the chapter. The reader was pinned there, that was saved
+    /// as the position, and rotating back replayed IT into the portrait layout.
+    ///
+    /// The offset is still what is replayed wherever it names the same text or
+    /// there is no verse to go by. Each of those is pinned here too, because the
+    /// change is wrong if it reaches any of them:
+    ///
+    ///  * a HEIGHT-only change — the bars settling at launch, the keyboard —
+    ///    which re-wraps nothing, and where the verse would snap a row scrolled
+    ///    part-way to its top;
+    ///  * the flowing layout, whose row is a paragraph and not the verse;
+    ///  * a verse nobody has measured: after an offset restore the pane goes on
+    ///    believing what it did before — verse 1, at every launch — until the
+    ///    view reports the row at the top;
+    ///  * a pane that owes a render, which is holding a chapter the reader has
+    ///    left, under position keys already settled for the next one.
+    ///
+    /// This is the model's half. Where a scroll view lands after a real rotation
+    /// is a simulator check.
+    @MainActor
+    func testAWidthChangeReanchorsOnTheTopmostVerseInsteadOfReplayingPixels() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previousScroll = standard.string(forKey: scrollKey)
+        let previousVerse = standard.string(forKey: verseKey)
+        defer {
+            if let previousScroll {
+                standard.set(previousScroll, forKey: scrollKey)
+            } else {
+                standard.removeObject(forKey: scrollKey)
+            }
+            if let previousVerse {
+                standard.set(previousVerse, forKey: verseKey)
+            } else {
+                standard.removeObject(forKey: verseKey)
+            }
+        }
+        let chapter = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+        let portrait = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+        let landscape = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 2400, containerHeight: 340)
+        }
+
+        // Reading at verse 20 in portrait, having scrolled there.
+        let pane = ReaderPaneModel(mode: .bible)
+        pane.versePerLine = true
+        pane.document = chapter
+        let surface = pane.scrollSurface
+        pane.scrollOffsetChanged(portrait(2700), from: surface)
+        pane.topmostVerseChanged(20, from: surface)
+
+        await sizeChange(pane, widthChanged: true)
+        XCTAssertEqual(targetRow(of: pane), 20,
+                       "Rotating replayed portrait's offset into the landscape "
+                           + "layout, where it is past the end of the chapter.")
+
+        // A rotation's size arrives in steps, as the launch's does: the bars
+        // settle after the width has changed. Everything published in between is
+        // suppressed, so the only offset the pane holds is still portrait's.
+        await sizeChange(pane, widthChanged: false)
+        XCTAssertEqual(targetRow(of: pane), 20,
+                       "The bars settling after the rotation replayed portrait's "
+                           + "offset.")
+
+        // Where it lands is the position now, under the same verse.
+        pane.scrollOffsetChanged(landscape(1310), from: surface)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1310")
+        XCTAssertEqual(standard.string(forKey: verseKey), "20")
+
+        // Height alone, at this width: the offset still names the same text. A
+        // scroll view the change has moved is sent back to it, not to the verse.
+        pane.prepareForSizeChange()
+        pane.scrollOffsetChanged(landscape(1250), from: surface)
+        pane.restoreAfterSizeChange(widthChanged: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertNil(targetRow(of: pane),
+                     "A height change re-wraps nothing, and re-anchoring on the "
+                         + "verse snaps a row scrolled part-way to its top.")
+        XCTAssertEqual(pane.scrollPosition.y, 1310)
+        pane.scrollOffsetChanged(landscape(1310), from: surface)
+        // One it has not moved is asked for nothing, the verse included. An
+        // offset handed to a scroll view that is already there stays in the
+        // scroll position — see
+        // `testAnOffsetIsTakenOutOfTheScrollPositionOnceTheScrollViewIsThere`.
+        await sizeChange(pane, widthChanged: false)
+        XCTAssertNil(targetRow(of: pane),
+                     "A height change that moved nothing re-anchored on the verse.")
+        XCTAssertNil(pane.scrollPosition.y)
+
+        // And back to portrait.
+        await sizeChange(pane, widthChanged: true)
+        XCTAssertEqual(targetRow(of: pane), 20,
+                       "Rotating back replayed landscape's offset into the "
+                           + "portrait layout.")
+
+        // The flowing layout. Its row is the paragraph — one, here, whose id is
+        // verse 1 — so the verse is not something it can be scrolled to.
+        let prose = ReaderPaneModel(mode: .bible)
+        prose.versePerLine = false
+        prose.document = chapter
+        prose.scrollOffsetChanged(portrait(2700), from: prose.scrollSurface)
+        prose.topmostVerseChanged(20, from: prose.scrollSurface)
+        await sizeChange(prose, widthChanged: true)
+        XCTAssertNil(targetRow(of: prose),
+                     "The flowing layout jumped to the first verse of the "
+                         + "paragraph being read.")
+
+        // An offset restore names no verse. The row at the top BEFORE it lands
+        // reports itself, and that is no measurement: it is where the view was.
+        standard.set("600", forKey: scrollKey)
+        standard.set("9", forKey: verseKey)
+        let restored = ReaderPaneModel(mode: .bible)
+        restored.versePerLine = true
+        restored.document = chapter
+        restored.pendingRestore = .offset(600)
+        restored.applyPendingWork()
+        restored.topmostVerseChanged(1, from: restored.scrollSurface)
+        restored.scrollOffsetChanged(portrait(600), from: restored.scrollSurface)
+        await sizeChange(restored, widthChanged: true)
+        XCTAssertNil(targetRow(of: restored),
+                     "A reader restored mid-chapter was dragged to verse 1, the "
+                         + "verse a pane that has shown nothing believes it is on.")
+
+        // Once the view has said which row is at the top, that is the verse.
+        restored.topmostVerseChanged(10, from: restored.scrollSurface)
+        await sizeChange(restored, widthChanged: true)
+        XCTAssertEqual(targetRow(of: restored), 10)
+
+        // The row the restore lands ON may report before the landing itself is
+        // published. It is told from the row that was at the top by changing
+        // what the pane believes. The restore still wins until it has landed —
+        // launch's own size changes arrive in that window.
+        standard.set("600", forKey: scrollKey)
+        standard.set("9", forKey: verseKey)
+        let early = ReaderPaneModel(mode: .bible)
+        early.versePerLine = true
+        early.document = chapter
+        early.pendingRestore = .offset(600)
+        early.applyPendingWork()
+        early.topmostVerseChanged(1, from: early.scrollSurface)
+        early.topmostVerseChanged(9, from: early.scrollSurface)
+        await sizeChange(early, widthChanged: true)
+        XCTAssertNil(targetRow(of: early),
+                     "A width change re-anchored over an offset restore that had "
+                         + "not landed.")
+        early.scrollOffsetChanged(portrait(600), from: early.scrollSurface)
+        await sizeChange(early, widthChanged: true)
+        XCTAssertEqual(targetRow(of: early), 9,
+                       "The verse the restore landed on was not taken for a "
+                           + "measurement because it was reported before the landing.")
+
+        // A pane that owes a render: it has been paged past while hidden.
+        let owing = ReaderPaneModel(mode: .bible)
+        owing.versePerLine = true
+        owing.document = chapter
+        owing.scrollOffsetChanged(portrait(2700), from: owing.scrollSurface)
+        owing.topmostVerseChanged(20, from: owing.scrollSurface)
+        owing.deferRender(of: "Genesis 2", restore: .chapterStart)
+        // The keys are the next chapter's from here.
+        XCTAssertEqual(standard.string(forKey: scrollKey), "0")
+        XCTAssertEqual(standard.string(forKey: verseKey), "1")
+        await sizeChange(owing, widthChanged: true)
+        XCTAssertNil(targetRow(of: owing))
+        // And are written again, now that the size change's hop is over, so that
+        // what is read below is what the landing did to them. This bundle is
+        // app-hosted: the host app's own reader is alive in the same process, on
+        // the same position keys, and saves its place on main-actor turns of its
+        // own, which the hop yields to. MEASURED: 1 run of this class in 5 read
+        // "1144" / "9" below — the host reader's place — after a landing that
+        // had written nothing.
+        standard.set("0", forKey: scrollKey)
+        standard.set("1", forKey: verseKey)
+        owing.scrollOffsetChanged(portrait(2700), from: owing.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "0",
+                       "Re-anchoring the chapter being left moved its scroll view, "
+                           + "and the landing was saved over the top of the next one.")
+        XCTAssertEqual(standard.string(forKey: verseKey), "1")
+    }
+
+    /// A bookmark change draws the chapter again where it stands, and the verse
+    /// the view measured there is still the verse a rotation returns to.
+    ///
+    /// The redraw arrives as an offset restore to the pane's own saved offset,
+    /// which is `"%d"` of the offset the scroll view is at. Nothing moves: the
+    /// row at the top stays there and reports nothing (a row reports when it
+    /// BECOMES the topmost one), and a scroll view already at the offset
+    /// publishes no landing. Taken for a restore, the redraw left the verse
+    /// unmeasured and the restore in flight until the reader next put a finger
+    /// down, and a rotation in between replayed portrait's offset into the
+    /// landscape layout — add a bookmark at Genesis 1:20, turn the phone, and
+    /// the reader was pinned past the end of the chapter.
+    ///
+    /// Both panes: a bookmark edited in the Library redraws the commentary when
+    /// that is the pane showing.
+    ///
+    /// An offset the scroll view is NOT at is still a restore. Where it lands,
+    /// no row has reported from.
+    @MainActor
+    func testABookmarkChangeKeepsTheMeasuredVerseForTheNextRotation() async {
+        let standard = UserDefaults.standard
+        let vplKey = standard.psModuleKey(Defaults.vplPreference, BundledModules.bible)
+        let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
+                    Defaults.commentaryVersePosition,
+                    "bibleScrollPosition", "commentaryScrollPosition", vplKey]
+        // By hand: `withPreservedReadingKeys` takes a synchronous closure.
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        standard.set(true, forKey: vplKey)
+        standard.set("Genesis 1", forKey: Defaults.lastRef)
+        standard.set("1", forKey: Defaults.bibleVersePosition)
+        standard.set("1", forKey: Defaults.commentaryVersePosition)
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+
+        // Reading Genesis 1 at verse 20, having scrolled there.
+        let workspace = ReadingWorkspaceModel()
+        workspace.displayChapter("Genesis 1", polling: .bible, restore: .verse)
+        let bible = workspace.bible
+        bible.scrollOffsetChanged(sample(2700.6), from: bible.scrollSurface)
+        bible.topmostVerseChanged(20, from: bible.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2700")
+
+        // Add Bookmark, Save. The scroll view is where the key says: it
+        // publishes nothing, and no row reports.
+        workspace.redisplayAfterBookmarksChange()
+        // The redraw's own hop first; the rotation comes after it.
+        for _ in 0..<10 { await Task.yield() }
+        await sizeChange(bible, widthChanged: true)
+        XCTAssertEqual(targetRow(of: bible), 20,
+                       "A bookmark added at verse 20 cost the pane its verse, and "
+                           + "the rotation after it replayed portrait's offset.")
+
+        // The commentary, read down to its third record, and a bookmark edited
+        // in the Library while it shows.
+        workspace.mode = .commentary
+        let commentary = workspace.commentary
+        XCTAssertGreaterThan(commentary.document.verses.count, 2,
+                             "No commentary on Genesis 1 to read down.")
+        let record = commentary.document.verses[2].number
+        commentary.scrollOffsetChanged(sample(900.4), from: commentary.scrollSurface)
+        commentary.topmostVerseChanged(record, from: commentary.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: "commentaryScrollPosition"), "900")
+
+        workspace.redisplayAfterBookmarksChange()
+        for _ in 0..<10 { await Task.yield() }
+        // Nothing is in flight either: the rows settling is saved as it was
+        // before the edit, with no finger on the reader to release a restore.
+        commentary.scrollOffsetChanged(sample(904), from: commentary.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: "commentaryScrollPosition"), "904",
+                       "The redraw left an offset restore in flight that nothing "
+                           + "would see land.")
+        await sizeChange(commentary, widthChanged: true)
+        XCTAssertEqual(targetRow(of: commentary), record,
+                       "A bookmark edited in the Library cost the commentary on "
+                           + "screen its verse.")
+
+        // An offset somewhere else moves the scroll view, and names no verse.
+        let moved = ReaderPaneModel(mode: .bible)
+        moved.versePerLine = true
+        moved.document = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+        moved.scrollOffsetChanged(sample(2700), from: moved.scrollSurface)
+        moved.topmostVerseChanged(20, from: moved.scrollSurface)
+        moved.pendingRestore = .offset(600)
+        moved.applyPendingWork()
+        for _ in 0..<10 { await Task.yield() }
+        await sizeChange(moved, widthChanged: true)
+        XCTAssertNil(targetRow(of: moved),
+                     "An offset restore to another place in the chapter "
+                         + "re-anchored on the verse the reader had left.")
+    }
+
     // MARK: Paging
 
     /// Paging replaces the scroll view and persists the top of the new chapter.
@@ -2404,6 +5577,617 @@ final class AppStateStoresTests: XCTestCase {
             }
         }
         body(standard)
+    }
+
+    /// The chapter the commentary pane renders for `ref`, built the way the pane
+    /// builds it: what a test compares the pane's document against to say WHICH
+    /// chapter it is showing.
+    @MainActor
+    private func commentaryChapter(_ ref: String) throws -> ChapterDocument {
+        let module = try XCTUnwrap(PSModuleController.default()?.primaryCommentaryName)
+        let document = try XCTUnwrap(PSContentReader.shared.chapterDocument(
+            module: module, ref: ref, kind: .commentary
+        ))
+        XCTAssertFalse(document.verses.isEmpty, "No commentary text for \(ref).")
+        return document
+    }
+
+    /// A chapter load renders the pane it polls and defers into the other, and a
+    /// deferral is drained when its pane APPEARS — which a pane already on screen
+    /// never does.
+    ///
+    /// A bookmark edit in the Library is such a load: it re-renders the Bible
+    /// whichever pane is showing. Made while the commentary was up, it left the
+    /// commentary owing the chapter it was already on, and paging on did not
+    /// clear that. The next Bible → commentary switch then rendered the OLD
+    /// chapter and wrote it back to `lastRef`, under a Bible pane still showing
+    /// the new one — where Add Bookmark saved the wrong chapter.
+    @MainActor
+    func testARedisplayOfTheHiddenPaneLeavesNoDeferralOnThePaneOnScreen() throws {
+        let john4 = try commentaryChapter("John 4")
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter("John 3", polling: .bible, restore: .scroll)
+            workspace.mode = .commentary
+            XCTAssertNil(workspace.commentary.refToShow)
+
+            // What `bookmarksChanged` runs, here with the commentary showing.
+            workspace.displayChapter("John 3", polling: .bible, restore: .scroll)
+            XCTAssertNil(workspace.commentary.refToShow,
+                         "The pane on screen was left owing a render nothing will ask for.")
+            XCTAssertNil(workspace.commentary.pendingRestore)
+
+            workspace.nextChapter()
+            workspace.mode = .bible
+            workspace.mode = .commentary
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "John 4",
+                           "Switching back to the commentary returned the reader to "
+                               + "the chapter it had paged away from.")
+            XCTAssertTrue(workspace.commentary.document == john4,
+                          "The commentary is not showing the chapter it paged to.")
+        }
+    }
+
+    /// The other half: a pane that renders drops whatever it had deferred. The
+    /// render is the newer instruction, and a deferral left behind it is replayed
+    /// over it at the next switch.
+    @MainActor
+    func testRenderingAPaneDropsWhateverItHadDeferred() {
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            workspace.mode = .commentary
+            workspace.commentary.refToShow = "John 3"
+            workspace.commentary.pendingRestore = .offset(800)
+
+            workspace.nextChapter()
+
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "John 4")
+            XCTAssertNil(workspace.commentary.refToShow,
+                         "The commentary paged to John 4 and still owes John 3.")
+            XCTAssertNil(workspace.commentary.pendingRestore)
+        }
+    }
+
+    /// The same trap from a reset. `resetPreferences()` posts
+    /// `.redisplayPrimaryBible` whichever pane is showing; on a warm resume into
+    /// the commentary that rendered the hidden Bible and left the commentary on
+    /// the old chapter, under a "Genesis 1" title.
+    @MainActor
+    func testAResetWhileTheCommentaryShowsRerendersTheCommentary() throws {
+        let genesis1 = try commentaryChapter("Genesis 1")
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter("John 3", polling: .bible, restore: .scroll)
+            workspace.mode = .commentary
+
+            // The reset: `lastRef` falls back to Genesis 1, and this call is the
+            // `.redisplayPrimaryBible` observer's body.
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            workspace.redisplay(pane: .bible, restore: .verse)
+
+            XCTAssertNil(workspace.commentary.refToShow)
+            XCTAssertTrue(workspace.commentary.document == genesis1,
+                          "The commentary on screen kept the chapter from before the reset.")
+        }
+    }
+
+    /// A page turn owed to the pane that is not on screen is settled in that
+    /// pane's keys when it is deferred, and is still a page turn when it drains.
+    ///
+    /// Only the rendered pane used to write verse 1 / offset 0. The other pane's
+    /// keys went on describing the chapter it last showed, and every later load
+    /// rebuilt its deferral from them: a display toggle or a font change turned
+    /// the owed chapter start into the old chapter's verse, a bookmark add into
+    /// the old chapter's offset, and a relaunch read that offset straight back.
+    @MainActor
+    func testADeferredPageTurnSurvivesARedisplay() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            standard.set("20", forKey: Defaults.commentaryVersePosition)
+            standard.set("4000", forKey: "commentaryScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+
+            workspace.nextChapter()
+            XCTAssertEqual(standard.string(forKey: Defaults.commentaryVersePosition), "1",
+                           "The commentary's verse is still the one in the chapter being left.")
+            XCTAssertEqual(standard.string(forKey: "commentaryScrollPosition"), "0",
+                           "A relaunch would open the new chapter at the old one's offset.")
+
+            // Paging BACK needs no earlier visit to the commentary to go wrong:
+            // `setToPreviousChapter` writes the destination's LAST verse into the
+            // commentary's key itself.
+            workspace.previousChapter()
+            XCTAssertEqual(standard.string(forKey: Defaults.commentaryVersePosition), "1")
+
+            // A display toggle or a font change...
+            workspace.redisplay(pane: .bible, restore: .verse)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
+            // ...and a bookmark added from the verse menu.
+            workspace.redisplayAfterBookmarksChange()
+            XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
+
+            let surface = workspace.commentary.scrollSurface
+            workspace.mode = .commentary
+            XCTAssertEqual(workspace.commentary.scrollSurface, surface + 1,
+                           "The page turn drained as something other than a chapter start.")
+            XCTAssertNil(workspace.commentary.pendingRestore)
+        }
+    }
+
+    /// The mirror: paging in the commentary owes the BIBLE a chapter start.
+    ///
+    /// Its offset key is what a relaunch restores (the app always relaunches into
+    /// the Bible), and a Library bookmark edit used to render the hidden Bible
+    /// there and then at that old offset, throwing the owed page turn away. The
+    /// edit now re-renders the pane on screen and leaves the Bible what it owes.
+    @MainActor
+    func testPagingFromTheCommentaryLeavesTheBibleAtTheChapterStart() {
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            standard.set("20", forKey: Defaults.bibleVersePosition)
+            standard.set("1500", forKey: "bibleScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+            workspace.mode = .commentary
+
+            workspace.nextChapter()
+            XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "0",
+                           "A relaunch would open John 4 at John 3's offset.")
+
+            // A render re-reads the font size, which is how this tells that one ran:
+            // the document it builds is equal to the one it replaces, and an
+            // `@Observable` property set to an equal value notifies nobody.
+            let fontSize = standard.object(forKey: Defaults.fontSizePreference)
+            defer {
+                if let fontSize {
+                    standard.set(fontSize, forKey: Defaults.fontSizePreference)
+                } else {
+                    standard.removeObject(forKey: Defaults.fontSizePreference)
+                }
+            }
+            let probe = Int(workspace.commentary.textStyle.fontSize) + 3
+            standard.set(probe, forKey: Defaults.fontSizePreference)
+
+            workspace.redisplayAfterBookmarksChange()
+            XCTAssertEqual(workspace.bible.pendingRestore, .chapterStart,
+                           "A bookmark edit spent the Bible's page turn while it was hidden.")
+            XCTAssertEqual(
+                PSModuleController.createRefString(workspace.bible.refToShow), "John 4"
+            )
+            // The pane on screen is polled in the Bible's place, so the edit still
+            // goes through `displayChapter` and something is rendered. It has
+            // nothing new to draw there: a commentary row carries no bookmark
+            // colour (the builder looks one up for a Bible only). So this pins
+            // that the render ran, not that the commentary shows the edit.
+            XCTAssertEqual(workspace.commentary.textStyle.fontSize, CGFloat(probe),
+                           "The bookmark edit re-rendered neither pane.")
+
+            // The keep rule is for a restore that names no verse. A commentary
+            // route writes the Bible's verse too (`ReadingStateStore.persist`), and
+            // that verse has to win over the owed chapter start: draining
+            // `.chapterStart` would persist verse 1 over it.
+            standard.set("16", forKey: Defaults.bibleVersePosition)
+            workspace.redisplay(pane: .commentary, restore: .verse)
+            XCTAssertEqual(workspace.bible.pendingRestore, .verse(16))
+        }
+    }
+
+    /// A chapter start replaces a verse scroll that was armed before it.
+    ///
+    /// A `.verse` load arms `verseToShow` on both panes, and the deferred pane's
+    /// copy is spent by the `.verse` restore it drains with. Draining a kept
+    /// `.chapterStart` instead left it armed, and the next time the pane appeared
+    /// with nothing owed it scrolled to that verse.
+    @MainActor
+    func testAChapterStartDisarmsAVerseScrollArmedBeforeIt() {
+        withPreservedPanePositionKeys { standard, scrollKey in
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.setVerseToShow(7)
+            pane.pendingRestore = .chapterStart
+            pane.applyPendingWork()
+
+            // The reader scrolls on into the chapter...
+            let resting = ReaderScrollSample(
+                offset: 700, contentHeight: 2138, containerHeight: 675
+            )
+            pane.scrollOffsetChanged(resting, from: pane.scrollSurface)
+            pane.topmostVerseChanged(9, from: pane.scrollSurface)
+            // ...and the pane appears again with nothing owed.
+            pane.applyPendingWork()
+
+            // A scroll to verse 7 resets where the pane thinks it is, so the same
+            // resting offset then reads as a move and is persisted against verse 7.
+            pane.scrollOffsetChanged(resting, from: pane.scrollSurface)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "9",
+                           "A verse scroll armed before the page turn ran after it.")
+            XCTAssertEqual(standard.string(forKey: scrollKey), "700")
+        }
+    }
+
+    /// A bookmark add re-renders the Bible at its scroll OFFSET, and used to hand
+    /// the other pane an offset as well — its own key, which describes whatever
+    /// chapter that pane last showed — over the verse it had been sent to in
+    /// this one.
+    @MainActor
+    func testABookmarkChangeKeepsTheVerseADeferredPaneWasSentTo() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            standard.set("4000", forKey: "commentaryScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+
+            workspace.selectReference(bookName: "John", chapter: 3, verse: 16)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .verse(16))
+
+            workspace.redisplayAfterBookmarksChange()
+            XCTAssertEqual(workspace.commentary.pendingRestore, .verse(16),
+                           "The commentary will open John 3 at Genesis 1's offset.")
+
+            // A pane that has never been shown has no offset key at all, and "no
+            // position" says no more about this chapter than another one's offset.
+            standard.removeObject(forKey: "commentaryScrollPosition")
+            workspace.redisplayAfterBookmarksChange()
+            XCTAssertEqual(workspace.commentary.pendingRestore, .verse(16),
+                           "The commentary will open John 3 at the top, not at the verse.")
+        }
+    }
+
+    /// A verse a pane was sent to does not outlive the load that sent it there.
+    ///
+    /// A `.verse` load arms a scroll to that verse on BOTH panes, and the pane
+    /// that is not on screen spent it only by draining as that verse. Pick
+    /// Romans 8:16, page on, and the commentary opened Romans 9 at the top with
+    /// verse 16 still armed: the next Bible → commentary switch, with nothing
+    /// navigated in between, scrolled it there and saved verse 16 over the one
+    /// the reader had read down to. The same the other way round.
+    ///
+    /// The stale scroll shows in the persisted verse. It resets where the pane
+    /// believes it is, so the next scroll report is saved against that verse.
+    @MainActor
+    func testASupersededVerseRestoreDoesNotFireOnALaterPaneSwitch() {
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4000, containerHeight: 675)
+        }
+        // Picked and paged in one pane, read in the other — both ways round.
+        for reading in [ReadingMode.commentary, .bible] {
+            let picking: ReadingMode = reading == .bible ? .commentary : .bible
+            let verseKey = reading == .bible
+                ? Defaults.bibleVersePosition
+                : Defaults.commentaryVersePosition
+            withPreservedReadingKeys { standard in
+                standard.set("Romans 7", forKey: Defaults.lastRef)
+                let workspace = ReadingWorkspaceModel()
+                workspace.mode = picking
+                workspace.selectReference(bookName: "Romans", chapter: 8, verse: 16)
+                workspace.nextChapter()
+                XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Romans 9")
+
+                workspace.mode = reading
+                let pane = workspace.activePane
+                pane.topmostVerseChanged(25, from: pane.scrollSurface)
+                pane.scrollOffsetChanged(sample(1900), from: pane.scrollSurface)
+                XCTAssertEqual(standard.string(forKey: verseKey), "25")
+
+                // A look at the other pane and straight back; then the rows settle.
+                workspace.mode = picking
+                workspace.mode = reading
+                pane.scrollOffsetChanged(sample(1903), from: pane.scrollSurface)
+                XCTAssertEqual(standard.string(forKey: verseKey), "25",
+                               "Coming back to the \(reading) pane scrolled it to the "
+                                   + "verse picked a chapter ago.")
+            }
+        }
+    }
+
+    /// Whatever a pane drains supersedes a verse scroll armed before it — an
+    /// offset as much as a verse or a chapter start, and with a chapter owed or
+    /// without.
+    ///
+    /// Only `.verse` and `.chapterStart` spend the armed verse themselves. An
+    /// offset drained over it left it armed, and the next time the pane appeared
+    /// with nothing owed it scrolled there. `deferRender` no longer hands a pane
+    /// an offset over a verse it was sent to, so no load builds this pair today;
+    /// the drain is where the rule belongs all the same, or the next producer
+    /// of one brings the jump back.
+    @MainActor
+    func testADrainedOffsetDisarmsAVerseScrollArmedBeforeIt() {
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4000, containerHeight: 675)
+        }
+        for owedChapter in [nil, "John 3"] as [String?] {
+            withPreservedReadingKeys { standard in
+                let pane = ReaderPaneModel(mode: .bible)
+                pane.setVerseToShow(5)
+                pane.refToShow = owedChapter
+                pane.pendingRestore = .offset(400)
+                pane.applyPendingWork()
+                pane.scrollOffsetChanged(sample(400), from: pane.scrollSurface)
+
+                // The reader scrolls on into the chapter...
+                pane.topmostVerseChanged(30, from: pane.scrollSurface)
+                pane.scrollOffsetChanged(sample(2600), from: pane.scrollSurface)
+                // ...and the pane appears again with nothing owed.
+                pane.applyPendingWork()
+
+                pane.scrollOffsetChanged(sample(2603), from: pane.scrollSurface)
+                XCTAssertEqual(
+                    standard.string(forKey: Defaults.bibleVersePosition), "30",
+                    "A verse scroll armed before the drain ran after it "
+                        + "(chapter owed: \(owedChapter ?? "none"))."
+                )
+                XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2603")
+            }
+        }
+    }
+
+    /// Paging restores no position on EITHER pane, so it disarms a verse scroll
+    /// on both — not only on the pane that is on screen.
+    ///
+    /// The other pane usually spends its own by draining the chapter start it is
+    /// handed. It does not have to drain: a load that polls it renders it where
+    /// it stands, at its offset, and an offset leaves an armed verse alone. Here
+    /// the Bible was sent to Romans 8:16 while the commentary showed, the reader
+    /// paged on, and the Bible was then rendered in place — after which showing
+    /// it scrolled Romans 9 to verse 16. (A bookmark edit was that load. It now
+    /// leaves a Bible that owes a render alone, so nothing polls one today.)
+    @MainActor
+    func testPagingDisarmsAPendingVerseOnBothPanes() {
+        withPreservedReadingKeys { standard in
+            standard.set("Romans 7", forKey: Defaults.lastRef)
+            standard.set("0", forKey: "bibleScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter("Romans 7", polling: .bible, restore: .scroll)
+            workspace.mode = .commentary
+
+            workspace.selectReference(bookName: "Romans", chapter: 8, verse: 16)
+            workspace.nextChapter()
+            workspace.displayChapter("Romans 9", polling: .bible, restore: .scroll)
+
+            workspace.mode = .bible
+            workspace.bible.scrollOffsetChanged(
+                ReaderScrollSample(offset: 300, contentHeight: 4000, containerHeight: 675),
+                from: workspace.bible.scrollSurface
+            )
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1",
+                           "Showing the Bible scrolled the chapter paged to back to "
+                               + "the verse picked in the one before it.")
+        }
+    }
+
+    /// Picking a verse in the chapter already open reaches a pane that has not
+    /// rendered that chapter yet.
+    ///
+    /// The picker's same-chapter path scrolled both panes. In the Bible the
+    /// commentary almost always still OWES the chapter — every Bible load defers
+    /// into it, launch included — so the scroll moved a document about to be
+    /// replaced, and the commentary then opened wherever its old deferral said,
+    /// under a title naming the picked verse. Neither verse key was written
+    /// either, unlike a pick in any other chapter.
+    @MainActor
+    func testPickingAVerseInTheOpenChapterReachesThePaneThatHasNotRenderedIt() {
+        withPreservedReadingKeys { standard in
+            standard.set("John 3", forKey: Defaults.lastRef)
+            standard.set("4", forKey: Defaults.bibleVersePosition)
+            standard.set("9", forKey: Defaults.commentaryVersePosition)
+            standard.set("700", forKey: "commentaryScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+            // What launch does.
+            workspace.displayChapter("John 3", polling: .bible, restore: .scroll)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .offset(700))
+
+            workspace.selectReference(bookName: "John", chapter: 3, verse: 16)
+
+            XCTAssertEqual(workspace.commentary.pendingRestore, .verse(16),
+                           "The commentary will open John 3 where it was last left, "
+                               + "not at the verse picked.")
+            XCTAssertNotNil(workspace.commentary.refToShow)
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "16")
+            XCTAssertEqual(standard.string(forKey: Defaults.commentaryVersePosition), "16")
+
+            // A page turn the pane still owes IS the top of the chapter, and stays
+            // one: picking verse 1 is no reason to open it on the old scroll view.
+            workspace.nextChapter()
+            workspace.selectReference(bookName: "John", chapter: 4, verse: 1)
+            XCTAssertEqual(workspace.commentary.pendingRestore, .chapterStart)
+        }
+    }
+
+    /// A highlight on each pane, as two search results opened one after the other
+    /// in the two modules leave them.
+    @MainActor
+    private func highlightBothPanes(of workspace: ReadingWorkspaceModel) {
+        workspace.highlightSearchTerms(["Noah"], mode: .bible)
+        workspace.highlightSearchTerms(["grace"], mode: .commentary)
+    }
+
+    /// A search result's highlight belongs to the chapter the result was opened
+    /// in, and ends on every way of leaving it — in BOTH panes.
+    ///
+    /// Paging was the only exit that ended it, and only on the pane showing. A
+    /// jump from the reference picker, a bookmark, a history row or a `sword://`
+    /// link carried the terms into the chapter it opened, where every occurrence
+    /// was jacketed in yellow, and so did each jump after it, until a page turn in
+    /// that same pane or a relaunch. The pane NOT showing kept its terms through
+    /// a page turn too, and drew the new chapter with them when it was next shown.
+    @MainActor
+    func testLeavingASearchResultsChapterEndsItsHighlightInBothPanes() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 5", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            // What launch does: the Bible renders, the commentary owes the chapter.
+            workspace.displayChapter("Genesis 5", polling: .bible, restore: .scroll)
+
+            // A verse picked in the SAME chapter is a scroll, and keeps it.
+            highlightBothPanes(of: workspace)
+            workspace.selectReference(bookName: "Genesis", chapter: 5, verse: 29)
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, ["Noah"])
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, ["grace"])
+
+            // The reference picker, to another chapter.
+            workspace.selectReference(bookName: "Genesis", chapter: 9, verse: 1)
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 9")
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed the reference picker into "
+                               + "another chapter.")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, [],
+                           "The chapter the picker opened was drawn with the "
+                               + "result's terms.")
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "The pane not showing kept its highlight for the "
+                               + "chapter the picker opened.")
+
+            // A page turn in the Bible ends the commentary's as well...
+            highlightBothPanes(of: workspace)
+            workspace.nextChapter()
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [])
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "Paging the Bible left the commentary's highlight "
+                               + "for the chapter it follows to.")
+
+            // ...and one in the commentary ends the Bible's, which then draws the
+            // chapter it was owed without it.
+            workspace.mode = .commentary
+            highlightBothPanes(of: workspace)
+            workspace.nextChapter()
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "Paging the commentary left the Bible's highlight "
+                               + "for the chapter it follows to.")
+            workspace.mode = .bible
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 11")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, [],
+                           "The Bible drew the chapter paged to in the "
+                               + "commentary with its old result's terms.")
+
+            // An inbound route: a bookmark, a history row, a `sword://` link.
+            highlightBothPanes(of: workspace)
+            workspace.showRoutedMode(.bible)
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed a routed open.")
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "The pane not showing kept its highlight through a "
+                               + "routed open.")
+        }
+    }
+
+    /// Opening a search result ends whatever highlight was showing and THEN puts
+    /// the result's own terms on — in that order, which is why the hand-off is
+    /// one model method and not two calls at the call site.
+    ///
+    /// A search result opens through the same route as a bookmark, and the route
+    /// ends the highlight in both panes. Terms assigned before the open are wiped
+    /// by it, and nothing else fails: the result just opens unhighlighted, as it
+    /// did for every release in which the highlighter had no caller at all.
+    @MainActor
+    func testASearchResultsTermsGoOnAfterTheOpenThatEndsThePreviousHighlight() {
+        withPreservedReadingKeys { standard in
+            // The route loads the module it names, which writes this key.
+            let lastBible = standard.object(forKey: Defaults.lastBible)
+            defer {
+                if let lastBible {
+                    standard.set(lastBible, forKey: Defaults.lastBible)
+                } else {
+                    standard.removeObject(forKey: Defaults.lastBible)
+                }
+            }
+            standard.set("John 3", forKey: Defaults.lastRef)
+            let library = LibraryModel(
+                bookmarkStore: BookmarkStore(
+                    rootProvider: { PSBookmarkFolder() },
+                    save: { true },
+                    notificationCenter: NotificationCenter()
+                ),
+                // No module to record against, so the route writes no history.
+                historyStore: HistoryStore(
+                    defaults: defaults,
+                    cloudStore: HistoryCloudStoreStub(),
+                    notificationCenter: NotificationCenter(),
+                    moduleNameProvider: { _ in nil }
+                ),
+                dictionaryStore: DictionaryStore(
+                    defaults: defaults,
+                    moduleProvider: { nil },
+                    moduleLoader: { _ in },
+                    moduleTypeProvider: { _ in nil },
+                    keysProvider: { _ in [] },
+                    entryProvider: { _, _ in nil }
+                ),
+                notificationCenter: NotificationCenter()
+            )
+            let session = AppSession(library: library, dismissKeyboard: {})
+            let workspace = ReadingWorkspaceModel(session: session)
+            // Marks the session ready. Until then `open` only parks the URL.
+            session.replayPendingURL()
+
+            // An older result, opened in the commentary.
+            workspace.highlightSearchTerms(["grace"], mode: .commentary)
+            // A whole word and a word Fuzzy ran as a prefix: how a term was
+            // matched has to arrive with it.
+            let terms: [SearchHighlightTerm] = [
+                "Noah", SearchHighlightTerm("comf", matchesPrefix: true),
+            ]
+            workspace.openSearchResult(
+                "Genesis 5:29",
+                module: BundledModules.bible,
+                terms: terms,
+                mode: .bible
+            )
+
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 5")
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, terms,
+                           "The open wiped the terms of the result it was opening.")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, terms,
+                           "The result's chapter is drawn without its terms.")
+            XCTAssertNotEqual(workspace.bible.textStyle.highlightTerms, ["Noah", "comf"],
+                              "A fuzzy term reached the reader as a whole word.")
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "An older result's terms outlived the open of a new one.")
+
+            // The same route without terms — a bookmark — ends it again.
+            workspace.openLibraryReference("Romans 8:28", module: nil)
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Romans 8")
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed a bookmark into another chapter.")
+        }
+        // A route posts `redisplayPrimaryBible` on the shared centre, so the host
+        // app's own reader followed both of them. With the keys back, return it
+        // to the chapter they name: left on Romans 8, it goes on saving its
+        // scroll position from there, against a `lastRef` that says otherwise.
+        NotificationCenter.default.post(name: .redisplayPrimaryBible, object: nil)
+    }
+
+    /// A reset leaves the result's chapter too, by the one path that is not a
+    /// navigation: it removes `lastRef`, and the `redisplayPrimaryBible` it posts
+    /// next renders Genesis 1. A redisplay is otherwise the SAME chapter drawn
+    /// again, which is why it carries the highlight across. The reset flag is
+    /// set in the Settings app, so it can arrive with a result open.
+    @MainActor
+    func testAResetEndsTheSearchHighlight() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 5", forKey: Defaults.lastRef)
+            let workspace = ReadingWorkspaceModel()
+            // A reset reaches the workspace as a notification, and `start()` is
+            // where it starts listening.
+            workspace.start()
+            highlightBothPanes(of: workspace)
+
+            // Delivered on `OperationQueue.main` in registration order, so by the
+            // time this probe fulfils the workspace's own observer has run.
+            let handled = expectation(description: "appStateDidReset handled")
+            let probe = NotificationCenter.default.addObserver(
+                forName: .appStateDidReset,
+                object: nil,
+                queue: .main
+            ) { _ in handled.fulfill() }
+            defer { NotificationCenter.default.removeObserver(probe) }
+            NotificationCenter.default.post(name: .appStateDidReset, object: nil)
+            wait(for: [handled], timeout: 5)
+
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed a reset to Genesis 1.")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, [])
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [])
+        }
     }
 
     // MARK: Page-turn slide

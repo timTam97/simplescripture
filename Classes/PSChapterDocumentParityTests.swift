@@ -24,6 +24,8 @@
 //  Tiering: the default tier covers a fixed sample chosen to hit every structural
 //  feature (see `sampleRefs`) at BOTH option endpoints. `PSDOC_EXHAUSTIVE=1` walks
 //  all 1,189 chapters × 2 modules × 2 endpoints (4,756 builds, ~30 s).
+//  `testTheReadersWordsAreTheWordsTheSearchMatched` is tiered the same way (the
+//  sample by default, every KJV chapter under the switch, ~8 s in all).
 //
 
 import XCTest
@@ -741,10 +743,14 @@ final class PSChapterDocumentParityTests: XCTestCase {
         let reader = PSContentReader.shared
         // Genesis 4:1 carries KJV's first footnote; the passage arrives URL-encoded
         // off the anchor, which `noteBody` decodes itself.
-        let body = reader.noteBody(module: "KJV", osisRef: "Genesis+4%3A1", marker: "1")
-        guard let body else {
-            throw XCTSkip("KJV Genesis 4:1 note 1 is not in the store")
-        }
+        //
+        // Unwrapped, not skipped: the note is baked (`notes_index` has
+        // `KJV|Genesis 4:1|1`), so a nil here is the lookup or the passage decoding
+        // breaking, and a skip would report that as a green run.
+        let body = try XCTUnwrap(
+            reader.noteBody(module: "KJV", osisRef: "Genesis+4%3A1", marker: "1"),
+            "KJV Genesis 4:1 note 1 is in the store; a nil body is a lookup regression"
+        )
         let document = PSEntryDocumentBuilder.build(html: body)
         let text = document.blocks.map { $0.runs.map(\.text).joined() }.joined()
         XCTAssertFalse(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
@@ -833,6 +839,19 @@ final class PSChapterDocumentParityTests: XCTestCase {
             string.isEmpty,
             "the verse rendered empty"
         )
+
+        // The marker is left alone: its text is a link's label, not a word of the
+        // verse, so a term that occurs only there highlights nothing.
+        style.highlightTerms = ["H0430"]
+        let markerOnly = ChapterTextRenderer.text(for: verse, style: style)
+        XCTAssertEqual(String(markerOnly.characters), string)
+        for run in markerOnly.runs {
+            XCTAssertNil(
+                run.backgroundColor,
+                "a term was highlighted inside a marker: "
+                    + "'\(String(markerOnly[run.range].characters))'"
+            )
+        }
     }
 
     /// An empty term list highlights nothing — the state a Strong's search leaves
@@ -859,7 +878,7 @@ final class PSChapterDocumentParityTests: XCTestCase {
 
         XCTAssertEqual(
             SearchModel.highlightTerms(
-                query: "H430", matchType: .AndSearch, strongs: true
+                query: "H430", matchType: .AndSearch, fuzzy: false, strongs: true
             ),
             [],
             "a Strong's query must contribute no highlight terms"
@@ -935,5 +954,1007 @@ final class PSChapterDocumentParityTests: XCTestCase {
             if i >= record.endIndex { break }
         }
         return out
+    }
+
+    // MARK: - Bookmark highlights
+
+    /// One chapter rendered both ways with a lookup that calls EVERY verse
+    /// bookmarked, recording which verses each emitter asked it about.
+    ///
+    /// `renderBoth` hands both emitters `{ _ in nil }`, which is why the parity
+    /// comparison says nothing about highlights.
+    private func renderBothAskingForHighlights(
+        module: String,
+        ref: String,
+        kind: PSChapterAssembler.ModuleKind,
+        colour: String
+    ) throws -> (html: PSChapterAssembler.Result, document: ChapterDocument,
+                 askedByAssembler: [Int], askedByBuilder: [Int]) {
+        let store = try store()
+        let resolver = try resolver()
+        let options = PSChapterExpander.Options.allOn
+        let (book, chapter) = try XCTUnwrap(resolver.resolve(ref: ref),
+                                            "\(module) \(ref) did not resolve")
+        let chapterRecords = try XCTUnwrap(
+            store.chapterRecords(module: module, bookOsis: book.osisName,
+                                 chapter: chapter),
+            "\(module) \(ref) has no records")
+        let records = chapterRecords.records
+        let headings = store.headings(module: module, bookName: book.longName,
+                                      chapter: chapter)
+
+        // ── HTML side ──
+        var expanded: [String] = []
+        for record in records {
+            if record.isEmpty {
+                expanded.append("")
+                continue
+            }
+            let expandedRecord = try XCTUnwrap(
+                PSChapterExpander.expand(record, options: options),
+                "\(module) \(ref): a record failed to expand")
+            expanded.append(expandedRecord)
+        }
+        var config = PSChapterAssembler.Config()
+        config.kind = kind
+        config.versePerLine = false
+        config.headingsOn = options.headings
+        var askedByAssembler: [Int] = []
+        let assembled = PSChapterAssembler.assemble(
+            records: expanded,
+            headings: headings,
+            config: config,
+            headingHTML: { PSChapterExpander.expand($0.html, options: options.forHeading) },
+            highlightColour: { verse in
+                askedByAssembler.append(verse)
+                return colour
+            },
+            emptyChapterMessage: "")
+        let html = try XCTUnwrap(assembled, "\(module) \(ref): HTML assembly failed")
+
+        // ── Native side ──
+        var docConfig = PSChapterDocumentBuilder.Config()
+        docConfig.kind = kind
+        docConfig.headingsOn = options.headings
+        var askedByBuilder: [Int] = []
+        let built = PSChapterDocumentBuilder.build(
+            records: records,
+            headings: headings,
+            config: docConfig,
+            options: options,
+            highlightColour: { verse in
+                askedByBuilder.append(verse)
+                return colour
+            },
+            emptyChapterMessage: "")
+        let document = try XCTUnwrap(built, "\(module) \(ref): document build failed")
+
+        return (html, document, askedByAssembler, askedByBuilder)
+    }
+
+    /// The bookmark highlight is looked up for a Bible only — by BOTH emitters.
+    ///
+    /// The assembler's lookup sits inside its `case .bible`. The builder asked for
+    /// every row, and a commentary row's number is the loop counter of the first
+    /// slot of a verse RANGE (MHCC Genesis 1 has rows 0, 1, 3, 6, 14, 20, 26, 29,
+    /// 31). So a Bible bookmark on Genesis 1:3 painted the whole "3-5" section of
+    /// the commentary in its folder's colour, and one on 1:4 painted nothing.
+    ///
+    /// The KJV case is the control — it must keep asking, and keep painting.
+    func testBookmarkHighlightIsLookedUpForABibleOnlyInBothEmitters() throws {
+        let colour = "rgba(255,204,0,0.8)"
+        let cases: [(String, String, PSChapterAssembler.ModuleKind)] = [
+            ("MHCC", "Genesis 1", .commentary),
+            ("MHCC", "John 3", .commentary),
+            ("KJV", "Genesis 1", .bible),
+        ]
+
+        for (module, ref, kind) in cases {
+            let label = "\(module) \(ref)"
+            let rendered = try renderBothAskingForHighlights(
+                module: module, ref: ref, kind: kind, colour: colour)
+            let rows = rendered.document.verses.map(\.number)
+            let painted = rendered.document.verses
+                .filter { $0.highlightColour != nil }
+                .map(\.number)
+
+            XCTAssertEqual(
+                rendered.askedByBuilder, rendered.askedByAssembler,
+                "\(label): the builder looked up bookmarks for verses the assembler did not")
+
+            switch kind {
+            case .commentary:
+                XCTAssertEqual(
+                    painted, [],
+                    "\(label): commentary rows carry a Bible bookmark's colour")
+                XCTAssertFalse(
+                    rendered.html.body.contains("highlightedVerse"),
+                    "\(label): the oracle highlighted a commentary; this test's premise moved")
+            case .bible:
+                XCTAssertFalse(rows.isEmpty, "\(label): the chapter built no rows")
+                XCTAssertEqual(
+                    painted, rows,
+                    "\(label): a bookmarked Bible verse lost its colour")
+                XCTAssertTrue(
+                    rendered.html.body.contains("highlightedVerse"),
+                    "\(label): the oracle did not highlight a Bible; this test's premise moved")
+            }
+        }
+    }
+
+    // MARK: - The intro slot and its title
+
+    /// The joined text of each heading.
+    private func headingTexts(_ headings: [ChapterHeading]) -> [String] {
+        headings.map { $0.runs.map(\.text).joined() }
+    }
+
+    /// The text of every run, in a verse or a heading, that still carries the
+    /// builder's internal title marker.
+    private func runsCarryingTheTitleMarker(in document: ChapterDocument) -> [String] {
+        document.verses
+            .flatMap { $0.runs + $0.headings.flatMap(\.runs) }
+            .filter { $0.style.contains(.titleMarker) }
+            .map(\.text)
+    }
+
+    /// A title token that leads a record becomes a HEADING, not bold text in the
+    /// verse.
+    ///
+    /// Every title in the KJV sits in slot 0 as `" " + <title>` — 1,184 chapters.
+    /// The leading-whitespace strip blanks that space but leaves its run in the
+    /// array, and the hoist looked only at the first run, so it never fired. With
+    /// Headings on and Verse Per Line off the chapter opened `CHAPTER 1.`,
+    /// superscript 1, `In the beginning` as one line of prose, and the builder's
+    /// internal `.titleMarker` reached the view.
+    ///
+    /// The parity comparison cannot see any of it: it joins headings and runs with
+    /// a space, so it does not know which of the two a title is in.
+    func testLeadingTitleTokenBecomesAHeading() throws {
+        var config = PSChapterDocumentBuilder.Config()
+        config.kind = .bible
+        config.headingsOn = true
+        var options = PSChapterExpander.Options.allOff
+        options.headings = true
+
+        // ── The corpus shape, synthetic ──
+        let built = PSChapterDocumentBuilder.build(
+            records: [" \u{000B}CHAPTER 1.\u{000C}", "In the beginning", "And the earth"],
+            headings: [:],
+            config: config,
+            options: options,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let document = try XCTUnwrap(built)
+        XCTAssertEqual(document.verses.map(\.number), [0, 1, 2])
+        XCTAssertEqual(document.entryCount, 3)
+
+        let intro = try XCTUnwrap(document.verses.first)
+        XCTAssertEqual(headingTexts(intro.headings), ["CHAPTER 1."],
+                       "the title was not hoisted out of the intro's runs")
+        XCTAssertFalse(intro.hasVisibleText,
+                       "the intro still has text to draw: \(intro.runs.map(\.text))")
+        XCTAssertEqual(runsCarryingTheTitleMarker(in: document), [],
+                       "the builder's internal title marker reached the document")
+
+        // Prose: the title heads the first paragraph and verse 1 flows under it.
+        let first = try XCTUnwrap(document.paragraphs.first)
+        XCTAssertEqual(headingTexts(first.headings), ["CHAPTER 1."])
+        XCTAssertEqual(first.verses.map(\.number), [0, 1, 2])
+        XCTAssertFalse(
+            first.verses.flatMap(\.runs).map(\.text).joined().contains("CHAPTER"),
+            "the title is still inside the flowed paragraph text")
+
+        // ── A title that does NOT lead stays inline: bold, and unmarked ──
+        let inlineBuilt = PSChapterDocumentBuilder.build(
+            records: ["", "Text \u{000B}MID\u{000C} more"],
+            headings: [:],
+            config: config,
+            options: options,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let inline = try XCTUnwrap(inlineBuilt)
+        XCTAssertEqual(inline.verses.map(\.number), [1])
+        let verse = try XCTUnwrap(inline.verses.first)
+        XCTAssertEqual(verse.headings, [])
+        XCTAssertEqual(verse.runs.map(\.text).joined(), "Text MID more")
+        XCTAssertEqual(verse.runs.first { $0.text == "MID" }?.style, InlineStyle.bold)
+        XCTAssertEqual(runsCarryingTheTitleMarker(in: inline), [],
+                       "an inline title kept the builder's internal marker")
+
+        // ── The store's own records ──
+        let genesisBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "Genesis 1", options: options, kind: .bible))
+        let genesis = genesisBoth.document
+        XCTAssertEqual(headingTexts(genesis.verses.first?.headings ?? []), ["CHAPTER 1."])
+        XCTAssertEqual(genesis.verses.first?.hasVisibleText, false)
+        XCTAssertEqual(headingTexts(genesis.paragraphs.first?.headings ?? []),
+                       ["CHAPTER 1."])
+        XCTAssertEqual(genesis.paragraphs.first?.verses.map(\.number), [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(runsCarryingTheTitleMarker(in: genesis), [])
+
+        let psalmBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "Psalms 3", options: options, kind: .bible))
+        let psalm = psalmBoth.document
+        XCTAssertEqual(
+            psalm.verses.prefix(2).map { headingTexts($0.headings) },
+            [["PSALM 3."], ["A Psalm of David, when he fled from Absalom his son."]])
+        // The psalm's own title breaks the paragraph at verse 1, so the intro is a
+        // paragraph by itself with nothing but its heading — the row the views must
+        // not lay an empty `Text` under. 117 psalms have this shape.
+        let opening = Array(psalm.paragraphs.prefix(2))
+        XCTAssertEqual(opening.map(\.id), [0, 1])
+        XCTAssertEqual(opening.first?.verses.map(\.number), [0])
+        XCTAssertEqual(opening.first?.verses.contains(where: \.hasVisibleText), false)
+        XCTAssertEqual(runsCarryingTheTitleMarker(in: psalm), [])
+    }
+
+    /// A bible intro that is only whitespace is not a row.
+    ///
+    /// With Headings off — a fresh install — the intro record `" " + <title>`
+    /// expands to one space. The engine's HTML showed that as a space the browser
+    /// collapsed to nothing. The builder made it verse 0, which the verse-per-line
+    /// layout drew as a blank line above verse 1 (29.7 pt at the default size) in
+    /// 1,184 of the KJV's 1,189 chapters, and the prose layout as a leading space.
+    ///
+    /// The slot still COUNTS: `entryCount` is the loop counter that
+    /// `chapter-loop-counters.tsv` pins.
+    func testWhitespaceOnlyBibleIntroIsNotARow() throws {
+        var config = PSChapterDocumentBuilder.Config()
+        config.kind = .bible
+        config.headingsOn = false
+
+        // ── The corpus shape, synthetic ──
+        let built = PSChapterDocumentBuilder.build(
+            records: [" \u{000B}CHAPTER 1.\u{000C}", "In the beginning", "And the earth"],
+            headings: [:],
+            config: config,
+            options: .allOff,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let document = try XCTUnwrap(built)
+        XCTAssertEqual(document.verses.map(\.number), [1, 2],
+                       "the whitespace-only intro was given a row")
+        XCTAssertEqual(document.entryCount, 3, "the intro slot must still count")
+        XCTAssertEqual(document.paragraphs.first?.id, 1)
+        XCTAssertNil(document.emptyMessage)
+
+        // Only the INTRO. A numbered slot that is all whitespace keeps its row: the
+        // assembler gives it a `vv` anchor, and verse identity is part of parity.
+        let numberedBuilt = PSChapterDocumentBuilder.build(
+            records: ["", "In the beginning", " "],
+            headings: [:],
+            config: config,
+            options: .allOff,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let numbered = try XCTUnwrap(numberedBuilt)
+        XCTAssertEqual(numbered.verses.map(\.number), [1, 2])
+
+        // And only a BIBLE's. The rule is the assembler's, which is bible-only;
+        // MHCC's intro is the chapter summary, real text in every chapter.
+        config.kind = .commentary
+        let commentaryBuilt = PSChapterDocumentBuilder.build(
+            records: ["* Summary.", "Verse one."],
+            headings: [:],
+            config: config,
+            options: .allOff,
+            highlightColour: { _ in nil },
+            emptyChapterMessage: "")
+        let commentary = try XCTUnwrap(commentaryBuilt)
+        XCTAssertEqual(commentary.verses.map(\.number), [0, 1])
+
+        // ── The store's own records ──
+        let genesisBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "Genesis 1", options: .allOff, kind: .bible))
+        let genesis = genesisBoth.document
+        XCTAssertEqual(genesis.verses.first?.number, 1)
+        XCTAssertEqual(genesis.verses.count, 31)
+        XCTAssertEqual(genesis.entryCount, 32)
+        XCTAssertEqual(genesis.paragraphs.first?.id, 1)
+
+        for ref in Self.sampleRefs {
+            let both = try XCTUnwrap(
+                renderBoth(module: "KJV", ref: ref, options: .allOff, kind: .bible))
+            XCTAssertEqual(both.document.verses.first?.number, 1,
+                           "KJV \(ref): the chapter opens with a row above verse 1")
+        }
+    }
+
+    // MARK: - Red-letter spacing
+
+    /// The red-letter construct's spaces fold into whitespace that is already
+    /// there.
+    ///
+    /// The HTML carried a space just inside each end of the span
+    /// (`<span class="WordOfChrist"> ` … `</span> `), and a browser folded each
+    /// into any whitespace on the other side of the tag. The builder emitted both
+    /// as text whatever was beside them, and `Text` folds nothing: with Red Letter
+    /// on, `said unto him,  Verily` had two spaces at 611 openings and 153
+    /// closings across the Gospels and Acts.
+    ///
+    /// The construct's space is still the ONLY separator at 14 of the 2,038
+    /// openings (mid-record, straight after a morph marker), and 1,865 of the
+    /// 2,038 closes end their record with it, so it cannot simply go. The parity
+    /// tests are the guard in that direction — John 3 is in their sample.
+    func testRedLetterSpacesFoldIntoAdjacentWhitespace() throws {
+        func text(_ record: String,
+                  _ options: PSChapterExpander.Options = .allOn) throws -> String {
+            let runs = try XCTUnwrap(
+                PSChapterDocumentBuilder.runs(from: record, options: options))
+            return runs.map(\.text).joined()
+        }
+
+        // The record's own whitespace is beside the token: one space, not two.
+        XCTAssertEqual(try text("him, \u{0011}Suffer it\u{0012} Then he"),
+                       "him, Suffer it Then he")
+        XCTAssertEqual(try text("him,\n\u{0011}Suffer it\u{0012}\nThen he"),
+                       "him,\nSuffer it\nThen he")
+        // Two spans back to back share one.
+        XCTAssertEqual(try text("\u{0011}Verily\u{0012}\u{0011}I say\u{0012}"),
+                       " Verily I say ")
+
+        // The construct's spaces are the only separators: kept.
+        XCTAssertEqual(try text("him,\u{0011}Suffer it\u{0012}Then he"),
+                       "him, Suffer it Then he")
+        // Verse-leading and verse-final: as they were. The leading one is the
+        // leading-whitespace strip's to remove.
+        XCTAssertEqual(try text("\u{0011}Verily\u{0012}"), " Verily ")
+        // A token sentinel after the span is whitespace to Swift (U+000B opens a
+        // title) but puts no space in the text, so the construct's space stays.
+        XCTAssertEqual(try text("\u{0011}Verily\u{0012}\u{000B}Title\u{000C}"),
+                       " Verily Title")
+
+        // Red Letter off emits neither space; the record's own are the separators.
+        var off = PSChapterExpander.Options.allOn
+        off.redLetter = false
+        XCTAssertEqual(try text("him, \u{0011}Suffer it\u{0012} Then he", off),
+                       "him, Suffer it Then he")
+
+        // The payload is still red, and so is a space the construct supplies.
+        let folded = try XCTUnwrap(PSChapterDocumentBuilder.runs(
+            from: "him, \u{0011}Suffer\u{0012} Then", options: .allOn))
+        XCTAssertEqual(folded.map(\.text), ["him, ", "Suffer", " Then"])
+        XCTAssertEqual(folded.map { $0.style.contains(.wordOfChrist) },
+                       [false, true, false])
+        let kept = try XCTUnwrap(PSChapterDocumentBuilder.runs(
+            from: "him,\u{0011}Suffer\u{0012}Then", options: .allOn))
+        XCTAssertEqual(kept.map(\.text), ["him,", " ", "Suffer", " ", "Then"])
+        XCTAssertEqual(kept.map { $0.style.contains(.wordOfChrist) },
+                       [false, true, true, true, false])
+
+        // ── The store's own records ──
+        // John 3:3, 3:5 and 3:10 each open a span after `, `.
+        let johnBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "John 3", options: .allOn, kind: .bible))
+        var doubled: [Int] = []
+        for verse in johnBoth.document.verses where !verse.isIntro {
+            let joined = verse.runs.map(\.text).joined()
+            if joined.range(of: "\\S\\s{2,}\\S", options: .regularExpression) != nil {
+                doubled.append(verse.number)
+            }
+        }
+        XCTAssertEqual(doubled, [],
+                       "KJV John 3: verses with a doubled space inside their text")
+    }
+
+    // MARK: - Heading fonts
+
+    /// A heading is bold run by run, and each run keeps the rest of its own font.
+    ///
+    /// `text(for heading:)` put one bold font over the whole string, which replaced
+    /// every run's. A Strong's or morph marker in a Psalm title kept its grey and
+    /// its raise but was drawn at the title's size — `A Psalm<04210> of
+    /// David<01732>` in full-size numbers — and the translators' supplied words
+    /// lost their italic. The HTML had the same anchors inside its `<b>`, as 70%
+    /// superscripts. Of the KJV's 138 canonical headings, 116 carry a Strong's
+    /// token and 39 an `<i>`.
+    ///
+    /// Compares fonts against each other, as the bookmark test compares colours, so
+    /// this file needs no `import SwiftUI`.
+    @MainActor
+    func testHeadingKeepsEachRunsOwnFont() throws {
+        let style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        // The shape of Psalms 3's title with Strong's on. Every run is already
+        // bold: the whole heading sits inside a title token.
+        let runs = [
+            InlineRun(text: "A Psalm", style: .bold),
+            InlineRun(text: "<04210>", style: [.smaller, .bold],
+                      link: .strongs(type: "Hebrew", value: "04210"), isMarker: true),
+            InlineRun(text: " which", style: [.bold, .transChangeAdded]),
+        ]
+        let heading = ChapterTextRenderer.text(
+            for: ChapterHeading(runs: runs, isCanonical: true), style: style
+        )
+        let fonts = heading.runs.map { $0.font }
+        guard fonts.count == 3 else {
+            return XCTFail(
+                "expected one attributed run per heading run, got \(fonts.count)"
+            )
+        }
+        XCTAssertNotEqual(fonts[0], fonts[1],
+                          "the marker is drawn in the title's own font")
+        XCTAssertNotEqual(fonts[0], fonts[2],
+                          "the supplied words lost their italic")
+        XCTAssertEqual(
+            fonts,
+            ChapterTextRenderer.attributed(runs: runs, style: style).runs.map { $0.font },
+            "a heading's runs are not in the fonts the renderer gives those runs"
+        )
+
+        // Bold does not lean on the title token: a run that arrives without it is
+        // bold in a heading all the same.
+        let plain = ChapterTextRenderer.text(
+            for: ChapterHeading(runs: [InlineRun(text: "ALEPH.")], isCanonical: true),
+            style: style
+        )
+        XCTAssertEqual(
+            plain.runs.first?.font,
+            ChapterTextRenderer.attributed(
+                runs: [InlineRun(text: "ALEPH.", style: .bold)], style: style
+            ).runs.first?.font,
+            "a heading run without its own bold was not drawn bold"
+        )
+        XCTAssertNotEqual(
+            plain.runs.first?.font,
+            ChapterTextRenderer.attributed(
+                runs: [InlineRun(text: "ALEPH.")], style: style
+            ).runs.first?.font,
+            "bold and regular compare equal, so the assertion above proves nothing"
+        )
+    }
+
+    // MARK: - Heading links
+
+    /// The markers in a Psalm's title are links the reader's tap handler reads.
+    ///
+    /// A title has Strong's and morph markers of its own — 116 of the KJV's 138
+    /// canonical headings carry a Strong's token — and they are drawn as the
+    /// raised grey markers the verse text has. The heading row sat outside the
+    /// verse text's link routing, so a tap on one went to the system, which has
+    /// nothing registered for `pslink://`, and did nothing.
+    ///
+    /// This pins the two ends a unit test can reach: the title's rendered text
+    /// carries every marker's link as a URL, and each URL decodes back to the
+    /// typed link the pane routes. What joins them is a view's environment —
+    /// `routesChapterLinks(to:)` on the heading row's `Text` — and that the tap
+    /// reaches the pane can only be seen by tapping one.
+    @MainActor
+    func testAPsalmTitlesMarkersAreLinksTheReaderRoutes() throws {
+        let style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        let psalmBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "Psalms 3", options: .allOn, kind: .bible))
+        let title = try XCTUnwrap(
+            psalmBoth.document.verses.flatMap(\.headings).first { $0.isCanonical },
+            "Psalms 3 has no canonical title"
+        )
+        let typed = title.runs.filter { !$0.text.isEmpty }.compactMap(\.link)
+        // `A Psalm<04210>` — in Psalms 3 that number is in the title alone.
+        XCTAssertTrue(
+            typed.contains(.strongs(type: "Hebrew", value: "04210")),
+            "the title carries no Strong's link for 'A Psalm': \(typed)"
+        )
+        XCTAssertTrue(
+            typed.contains { link in
+                if case .morph = link { return true }
+                return false
+            },
+            "the title carries no morph link: \(typed)"
+        )
+
+        let text = ChapterTextRenderer.text(for: title, style: style)
+        var routed: [InlineLink] = []
+        for run in text.runs {
+            guard let url = run.link else { continue }
+            routed.append(try XCTUnwrap(
+                InlineLink(url: url),
+                "the title's link \(url) is not one the reader's handler reads"
+            ))
+        }
+        XCTAssertEqual(routed, typed,
+                       "the title's text does not carry its markers' links")
+    }
+
+    // MARK: - Search highlighting across markers
+
+    /// The search terms are matched against the verse's words; the markers between
+    /// them are neither searched nor jacketed.
+    ///
+    /// The highlighter searched the rendered string, markers included. With
+    /// Strong's on nearly every word is followed by one, so an exact phrase —
+    /// `beginning God` over `beginning<07225> God` — was never found and the
+    /// chapter opened from a phrase search with nothing highlighted, though the
+    /// result row that was tapped showed the match. And a term could be jacketed
+    /// inside a marker's own text: `prep` in `(PREP)`.
+    ///
+    /// The words are what the search matched and what the row shows. A match is
+    /// mapped back onto the rendered text stretch by stretch, so a marker inside a
+    /// matched phrase stays as it was.
+    @MainActor
+    func testSearchHighlightReadsTheWordsAndLeavesMarkersAlone() throws {
+        let verse = ChapterVerse(
+            number: 1,
+            runs: [
+                InlineRun(text: "In the beginning"),
+                InlineRun(text: "<07225>", isMarker: true),
+                InlineRun(text: " God"),
+                InlineRun(text: "<0430>", isMarker: true),
+                InlineRun(text: " created"),
+                InlineRun(text: "(8804)", isMarker: true),
+                InlineRun(text: "."),
+            ]
+        )
+        let rendered = "In the beginning<07225> God<0430> created(8804)."
+        let base = ChapterTextRenderer.Style.current()
+
+        /// The jacketed stretches for `terms`, in order. The text itself must come
+        /// through untouched whatever is highlighted.
+        func jacketed(_ terms: [SearchHighlightTerm], line: UInt = #line) -> [String] {
+            var style = base
+            style.highlightTerms = terms
+            let text = ChapterTextRenderer.text(for: verse, style: style)
+            XCTAssertEqual(String(text.characters), rendered,
+                           "highlighting \(terms) changed the text", line: line)
+            var out: [String] = []
+            for run in text.runs where run.backgroundColor != nil {
+                out.append(String(text[run.range].characters))
+            }
+            return out
+        }
+
+        // A phrase whose words have a marker between them: both words, and not
+        // the marker.
+        XCTAssertEqual(jacketed(["beginning God"]), ["beginning", " God"])
+        // A term is its words. The full stop typed after one is no part of what
+        // the query matched, and is not jacketed (it was, when a term was
+        // matched character for character).
+        XCTAssertEqual(jacketed(["created."]), ["created"])
+        // Case-insensitively, as before, and starting inside a run.
+        XCTAssertEqual(jacketed(["GOD CREATED"]), ["God", " created"])
+        // A marker's own text is not searched.
+        XCTAssertEqual(jacketed(["0430"]), [])
+        XCTAssertEqual(jacketed(["8804"]), [])
+        // Every term still gets its turn.
+        XCTAssertEqual(jacketed(["beginning God", "the"]), ["the", "beginning", " God"])
+        // Control: a term inside one run is jacketed as it always was.
+        XCTAssertEqual(jacketed(["God"]), ["God"])
+    }
+
+    /// The reader marks a search term as a whole word, as the row that opened
+    /// the chapter did, and a fuzzy term over every word that begins with it.
+    ///
+    /// The reader looked for the term's letters anywhere in the verse's words,
+    /// so the chapter a search for `the` opened had it marked inside "father",
+    /// "there" and "thee". And it was never told about Fuzzy: a result found by
+    /// `lov*` opened with "lov" marked inside "loved", where its row had marked
+    /// the word.
+    ///
+    /// Both now ask `PSSearchQuery.highlightRanges`, with the terms the query
+    /// ran. This pins the reader's half: the marks land on the right words of
+    /// the rendered text with a marker after nearly every one of them, which is
+    /// the reader's own work (`applyHighlights` maps a match in the words back
+    /// onto the text).
+    @MainActor
+    func testTheReaderMarksASearchTermAsAWholeWord() throws {
+        // Genesis 46:3 as the reader holds it with Strong's numbers on: one
+        // "the", and "father", "there" and "thee" with those letters in them.
+        let verse = ChapterVerse(
+            number: 3,
+            runs: [
+                InlineRun(text: "And he said"),
+                InlineRun(text: "<0559>", isMarker: true),
+                InlineRun(text: ", I am God"),
+                InlineRun(text: "<0410>", isMarker: true),
+                InlineRun(text: ", the God"),
+                InlineRun(text: "<0430>", isMarker: true),
+                InlineRun(text: " of thy father"),
+                InlineRun(text: "<01>", isMarker: true),
+                InlineRun(text: ": fear"),
+                InlineRun(text: "<03372>", isMarker: true),
+                InlineRun(text: " not to go down"),
+                InlineRun(text: "<03381>", isMarker: true),
+                InlineRun(text: " into Egypt"),
+                InlineRun(text: "<04714>", isMarker: true),
+                InlineRun(text: "; for I will there make"),
+                InlineRun(text: "<07760>", isMarker: true),
+                InlineRun(text: " of thee a great"),
+                InlineRun(text: "<01419>", isMarker: true),
+                InlineRun(text: " nation"),
+                InlineRun(text: "<01471>", isMarker: true),
+                InlineRun(text: ":"),
+            ]
+        )
+        let rendered = verse.runs.map(\.text).joined()
+        let base = ChapterTextRenderer.Style.current()
+
+        func jacketed(_ terms: [SearchHighlightTerm], line: UInt = #line) -> [String] {
+            var style = base
+            style.highlightTerms = terms
+            let text = ChapterTextRenderer.text(for: verse, style: style)
+            XCTAssertEqual(String(text.characters), rendered,
+                           "highlighting \(terms) changed the text", line: line)
+            var out: [String] = []
+            for run in text.runs where run.backgroundColor != nil {
+                out.append(String(text[run.range].characters))
+            }
+            return out
+        }
+
+        XCTAssertEqual(jacketed(["the"]), ["the"])
+        XCTAssertEqual(jacketed(["he"]), ["he"])
+        XCTAssertEqual(jacketed(["fat"]), [])
+        // A marker's digits are no word of the verse, whole or not.
+        XCTAssertEqual(jacketed(["0430"]), [])
+        // Fuzzy: the words that begin with the term, whole. Not "father".
+        XCTAssertEqual(
+            jacketed([SearchHighlightTerm("the", matchesPrefix: true)]),
+            ["the", "there", "thee"]
+        )
+        XCTAssertEqual(
+            jacketed([SearchHighlightTerm("fat", matchesPrefix: true)]),
+            ["father"]
+        )
+        // A phrase across the verse's own punctuation and across markers: its
+        // words and what is printed between them, and no marker.
+        XCTAssertEqual(jacketed(["am God the God of"]),
+                       ["am God", ", the God", " of"])
+
+        // "LORD" is two runs in the reader, a capital and three small ones
+        // (MEASURED: a word spans a run boundary in 5,825 KJV verses — LORD,
+        // GOD, JEHOVAH, JAH). The words are matched joined, so it is one word:
+        // found whole, and no "ORD" to be found on its own.
+        let genesis2v4 = ChapterVerse(
+            number: 4,
+            runs: [
+                InlineRun(text: "in the day that the L"),
+                InlineRun(text: "ORD", style: .smaller),
+                InlineRun(text: "<03068>", isMarker: true),
+                InlineRun(text: " God"),
+                InlineRun(text: "<0430>", isMarker: true),
+                InlineRun(text: " made the earth"),
+            ]
+        )
+        func jacketedInGenesis2v4(_ terms: [SearchHighlightTerm]) -> [String] {
+            var style = base
+            style.highlightTerms = terms
+            let text = ChapterTextRenderer.text(for: genesis2v4, style: style)
+            var out: [String] = []
+            for run in text.runs where run.backgroundColor != nil {
+                out.append(String(text[run.range].characters))
+            }
+            return out
+        }
+        XCTAssertEqual(jacketedInGenesis2v4(["lord"]), ["L", "ORD"])
+        XCTAssertEqual(jacketedInGenesis2v4(["the LORD God"]), ["the L", "ORD", " God"])
+        XCTAssertEqual(
+            jacketedInGenesis2v4([SearchHighlightTerm("lor", matchesPrefix: true)]),
+            ["L", "ORD"]
+        )
+        XCTAssertEqual(jacketedInGenesis2v4(["ord"]), [])
+    }
+
+    /// The reader's words are the words the search matched, verse for verse.
+    ///
+    /// A search matches the words of the store's plain text for a verse: what
+    /// the index holds, and what the result row shows. The reader marks a
+    /// different derivation of the same verse — its runs with the markers left
+    /// out (`ChapterTextRenderer.applyHighlights`). Marking whole words
+    /// depends on the two breaking into the same words. A word glued to the
+    /// next where a marker was taken out, or held apart from itself, would be a
+    /// verse the search found and the chapter opened without a mark; while a
+    /// term was looked for anywhere in the text, no such difference could show.
+    ///
+    /// MEASURED 2026-11-11 (iOS 27.2): all 31,102 verses break into the same
+    /// words at all 32 combinations of the five display options, and no marker
+    /// sits inside a word. A word does span a RUN boundary in 5,825 verses
+    /// ("L" + "ORD"), which is why the words are matched joined.
+    ///
+    /// The reader's side is the highlighter's own join
+    /// (`ChapterTextRenderer.searchableWords`), and both sides are cut by its
+    /// own tokenizer. So this fails if the join changes — a space put between
+    /// runs, a marker let in — if the document builder moves a word across a
+    /// run, or if the baked text does. The default tier walks the sample
+    /// chapters at both option endpoints; `PSDOC_EXHAUSTIVE=1` walks every
+    /// chapter (about 8 s in all).
+    ///
+    /// The Bible only. MHCC has no markers to take out, and six of its
+    /// passages cannot pass: the store's plain text for them has words the
+    /// chapter body lacks, 145 in all, each stretch from an `&c` to the next
+    /// semicolon or the passage's end (Genesis 3:1 and 43:1, Numbers 35:9,
+    /// Deuteronomy 18:9, II Samuel 5:17, Matthew 1:1). That is the baked data.
+    /// A search can find a passage on those words; the reader has nothing to
+    /// mark there, and never had.
+    func testTheReadersWordsAreTheWordsTheSearchMatched() throws {
+        let store = try store()
+        let resolver = try resolver()
+
+        // The chapters to walk, as the cursor names them. Nil is all of them.
+        var wanted: Set<String>?
+        if !Self.isExhaustive {
+            wanted = Set(try Self.sampleRefs.map { ref in
+                let (book, chapter) = try XCTUnwrap(resolver.resolve(ref: ref), ref)
+                return "\(book.osisName)|\(chapter)"
+            })
+        }
+
+        // The search's side: each verse's index text, cut into words.
+        var index: [String: [Int: [String]]] = [:]
+        let cursor = store.verseCursor(module: "KJV")
+        while let row = cursor.next() {
+            let ref = row.osisRef
+            guard let colon = ref.lastIndex(of: ":"),
+                  let space = ref[..<colon].lastIndex(of: " "),
+                  let chapter = Int(ref[ref.index(after: space)..<colon]),
+                  let verse = Int(ref[ref.index(after: colon)...]) else {
+                return XCTFail("cannot read the reference of an index row: \(ref)")
+            }
+            let key = "\(row.bookOsis)|\(chapter)"
+            if let wanted, !wanted.contains(key) { continue }
+            let plain = PSSearchQuery.cleanDisplayText(row.textPlain)
+            if plain.isEmpty { continue }
+            index[key, default: [:]][verse] = SearchHighlightTerm(plain).tokens
+        }
+        XCTAssertFalse(cursor.failed, "the store's verse cursor stopped early")
+
+        var compared = 0
+        for book in resolver.books {
+            for chapter in 1...book.chapterCount {
+                guard let verses = index["\(book.osisName)|\(chapter)"] else {
+                    XCTAssertNotNil(wanted, "the index has no verse of \(book.name) \(chapter)")
+                    continue
+                }
+                for options in [PSChapterExpander.Options.allOn, .allOff] {
+                    let label = "\(book.name) \(chapter), \(options.strongs ? "all-on" : "all-off")"
+                    let document = try XCTUnwrap(
+                        PSContentReader.shared.chapterDocument(
+                            module: "KJV", ref: "\(book.name) \(chapter)", kind: .bible,
+                            options: options, applyBookmarkHighlights: false),
+                        label)
+                    var found = 0
+                    for verse in document.verses {
+                        // A heading-only intro row is no verse of the index.
+                        guard let matched = verses[verse.number] else { continue }
+                        found += 1
+                        // The words as the highlighter itself joins them.
+                        let words = ChapterTextRenderer.searchableWords(of: verse.runs).words
+                        let shown = SearchHighlightTerm(words).tokens
+                        guard shown == matched else {
+                            return XCTFail("""
+                                \(label), verse \(verse.number): the reader's words are not \
+                                the words the search matched.
+                                  search: \(matched)
+                                  reader: \(shown)
+                                """)
+                        }
+                        compared += 1
+                    }
+                    XCTAssertEqual(found, verses.count,
+                                   "\(label): the index holds verses the reader does not show")
+                }
+            }
+        }
+        // 329 verses in the sample chapters, 31,102 in the Bible; twice each.
+        XCTAssertEqual(compared, Self.isExhaustive ? 62_204 : 658)
+    }
+
+    // MARK: - The flowed paragraph's join
+
+    /// Flowing verses have a space between them, and a verse number cannot be
+    /// parted from its verse.
+    ///
+    /// The prose layout ran each verse straight into the next number — `the
+    /// earth.²And the earth` — where the engine ended every entry with a newline,
+    /// which the browser showed as a space. And the one place a line could break
+    /// near a verse boundary was after the hair space that followed the number, so
+    /// a verse that began a new line left its number at the end of the line above:
+    /// 133 of 1,655 numbers over real KJV paragraphs, measured in CoreText.
+    ///
+    /// This pins the join as text: a space after every verse but the last, none
+    /// doubled after a verse that already ends in one (red-letter), none for an
+    /// intro that is only its heading, the space outside the verse's bookmark
+    /// colour — the one added here and a verse's own alike — and a no-break gap
+    /// after each number. Where the lines then break can only be seen on a device.
+    ///
+    /// A verse's own trailing space was painted. A verse that ends in Christ's
+    /// words ends in the red-letter span's space, which is then the gap before the
+    /// next number, so a bookmark's colour ran up to that number where every other
+    /// verse's stopped at its last word.
+    @MainActor
+    func testFlowedVersesAreSpacedAndNumbersStayWithTheirVerse() throws {
+        let style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        XCTAssertEqual(
+            String(ChapterTextRenderer.verseLabel(2, style: style).characters),
+            "2\u{202F}",
+            "the gap after a verse number must be a no-break space"
+        )
+
+        // A chapter's first paragraph with Headings on: the intro's title is the
+        // paragraph's heading and the intro itself has nothing left to draw.
+        let paragraph = ChapterParagraph(
+            verses: [
+                ChapterVerse(number: 0),
+                ChapterVerse(number: 1, runs: [InlineRun(text: "In the beginning.")]),
+                ChapterVerse(number: 2, runs: [InlineRun(text: "And the earth.")]),
+                ChapterVerse(number: 3,
+                             runs: [InlineRun(text: "Verily. ", style: .wordOfChrist)]),
+                ChapterVerse(number: 4, runs: [InlineRun(text: "And God saw.")]),
+            ],
+            headings: [
+                ChapterHeading(runs: [InlineRun(text: "CHAPTER 1.", style: .bold)],
+                               isCanonical: false),
+            ]
+        )
+        let pieces = ChapterTextRenderer.flowedPieces(
+            for: paragraph, style: style, tappable: true
+        )
+        XCTAssertEqual(pieces.map { $0.verse }, [0, 1, 2, 3, 4])
+        XCTAssertEqual(
+            pieces.map { String($0.text.characters) },
+            [
+                "",
+                "1\u{202F}In the beginning. ",
+                "2\u{202F}And the earth. ",
+                "3\u{202F}Verily. ",
+                "4\u{202F}And God saw.",
+            ]
+        )
+
+        // An intro with text of its own is an entry like any other.
+        let withIntro = ChapterTextRenderer.flowedPieces(
+            for: ChapterParagraph(verses: [
+                ChapterVerse(number: 0, runs: [InlineRun(text: "A Song.")]),
+                ChapterVerse(number: 1, runs: [InlineRun(text: "Blessed.")]),
+            ]),
+            style: style, tappable: true
+        )
+        XCTAssertEqual(withIntro.map { String($0.text.characters) },
+                       ["A Song. ", "1\u{202F}Blessed."])
+
+        // The space is no part of the verse's highlight: the bookmark colour stops
+        // at the verse's last word, whether the space is the one added here
+        // (verse 1) or the verse's own (verses 2 and 3).
+        func painted(_ text: AttributedString) -> String {
+            var out = ""
+            for run in text.runs where run.backgroundColor != nil {
+                out += String(text[run.range].characters)
+            }
+            return out
+        }
+        let colour = "rgba(255,204,0,0.8)"
+        // A verse that ends in Christ's words, as the builder emits it: the
+        // red-letter span's own space is its last run. 1,865 of the KJV's 2,038
+        // spans close at the end of their record.
+        let christsWords = try XCTUnwrap(PSChapterDocumentBuilder.runs(
+            from: "He said, \u{0011}Verily.\u{0012}", options: .allOn))
+        XCTAssertEqual(christsWords.map(\.text), ["He said, ", "Verily.", " "])
+        let marked = ChapterTextRenderer.flowedPieces(
+            for: ChapterParagraph(verses: [
+                ChapterVerse(number: 1, runs: [InlineRun(text: "In the beginning.")],
+                             highlightColour: colour),
+                ChapterVerse(number: 2, runs: christsWords, highlightColour: colour),
+                // The last verse of a chapter: its record ends in a space, in all
+                // 1,189 chapters.
+                ChapterVerse(number: 3, runs: [InlineRun(text: "And the earth. ")],
+                             highlightColour: colour),
+            ]),
+            style: style, tappable: true
+        )
+        XCTAssertEqual(
+            marked.map { String($0.text.characters) },
+            [
+                "1\u{202F}In the beginning. ",
+                "2\u{202F}He said, Verily. ",
+                "3\u{202F}And the earth. ",
+            ]
+        )
+        XCTAssertEqual(
+            marked.map { painted($0.text) },
+            ["In the beginning.", "He said, Verily.", "And the earth."],
+            "the bookmark colour runs past a verse's last word"
+        )
+
+        // The same verse on its own row, in the Verse Per Line layout.
+        let alone = ChapterTextRenderer.text(
+            for: ChapterVerse(number: 2, runs: christsWords, highlightColour: colour),
+            style: style
+        )
+        XCTAssertEqual(String(alone.characters), "He said, Verily. ")
+        XCTAssertEqual(painted(alone), "He said, Verily.")
+
+        // ── The store's own records ──
+        // John 3:3 ends in Christ's words.
+        let johnBoth = try XCTUnwrap(
+            renderBoth(module: "KJV", ref: "John 3", options: .allOn, kind: .bible))
+        var verse = try XCTUnwrap(johnBoth.document.verses.first { $0.number == 3 })
+        verse.highlightColour = colour
+        let real = ChapterTextRenderer.text(for: verse, style: style)
+        let whole = String(real.characters)
+        XCTAssertEqual(whole.last, " ", "John 3:3 no longer ends in the span's space")
+        XCTAssertEqual(painted(real), whole.trimmingCharacters(in: .whitespaces),
+                       "John 3:3's bookmark colour runs past its last word")
+    }
+
+    /// The transliteration in a Hebrew Strong's popup header keeps its vocal shewa
+    /// inside the word.
+    ///
+    /// StrongsRealHebrew writes the shewa as `<sup><font size="-1"><i>e</i></font></sup>`
+    /// inside the bracketed transliteration: 1,414 of its 8,674 entries, H3068
+    /// (LORD), H1285 (covenant) and H3063 (Judah) among them. A tag strip that
+    /// leaves a space for every tag turned `[y<sup>…e…</sup>hôvâh]` into
+    /// "y e hôvâh" in the header, above a body that renders the word whole.
+    func testHebrewTransliterationKeepsItsSuperscriptVowelInsideTheWord() throws {
+        let store = try store()
+        let html = try XCTUnwrap(
+            store.dictEntry(module: BundledModules.strongsHebrew, key: "03068"),
+            "StrongsRealHebrew 03068 is missing from the store"
+        )
+        XCTAssertTrue(
+            html.contains("[y<sup><font size=\"-1\"><i>e</i></font></sup>h&#244;v&#226;h]"),
+            "the entry's shape changed; this test targets the superscript shewa"
+        )
+
+        let lexeme = PSInfoPopupContent.parseStrongsLexeme(fromRenderedEntry: html)
+        XCTAssertEqual(lexeme.transliteration, "yeh\u{00F4}v\u{00E2}h")
+        XCTAssertEqual(lexeme.lemma, "\u{05D9}\u{05D4}\u{05D5}\u{05D4}")
+
+        // Through the entry point the popup itself uses.
+        let covenant = try XCTUnwrap(
+            PSInfoPopupContent.lexiconEntry(
+                module: BundledModules.strongsHebrew,
+                key: "01285",
+                allowsSearch: false
+            ),
+            "StrongsRealHebrew 01285 did not resolve"
+        )
+        XCTAssertEqual(covenant.transliteration, "ber\u{00EE}yth")
+
+        // The other superscript, which must not move: 114 lemmas end in a
+        // superscript `o`, and the lemma is script only.
+        let trailing = try XCTUnwrap(
+            store.dictEntry(module: BundledModules.strongsHebrew, key: "00726"),
+            "StrongsRealHebrew 00726 is missing from the store"
+        )
+        XCTAssertTrue(
+            trailing.contains("&#1497;<sup><font size=\"-1\"><i>o</i></font></sup><br />"),
+            "the entry's shape changed; this test targets the lemma's trailing superscript"
+        )
+        let edomite = PSInfoPopupContent.parseStrongsLexeme(fromRenderedEntry: trailing)
+        XCTAssertEqual(edomite.lemma, "\u{05D0}\u{05E8}\u{05D5}\u{05DE}\u{05D9}")
+        XCTAssertEqual(edomite.transliteration, "'\u{0103}r\u{00F4}m\u{00EE}y")
+
+        // Corpus-wide: every transliteration that carries a superscript comes out
+        // with no letter standing alone. Collected rather than asserted per entry,
+        // so a regression reports once instead of 1,414 times.
+        var superscripted = 0
+        var broken: [String] = []
+        for key in store.dictKeys(module: BundledModules.strongsHebrew) {
+            guard let entry = store.dictEntry(module: BundledModules.strongsHebrew, key: key),
+                  let open = entry.firstIndex(of: "["),
+                  let close = entry[open...].firstIndex(of: "]"),
+                  entry[open...close].contains("<sup>") else { continue }
+            superscripted += 1
+            let parsed = PSInfoPopupContent.parseStrongsLexeme(fromRenderedEntry: entry)
+            guard let transliteration = parsed.transliteration else {
+                broken.append("\(key): none")
+                continue
+            }
+            if transliteration.range(of: "(^| )[a-z]( |$)",
+                                     options: .regularExpression) != nil {
+                broken.append("\(key): \(transliteration)")
+            }
+        }
+        XCTAssertEqual(superscripted, 1_414,
+                       "the number of transliterations carrying a superscript changed")
+        XCTAssertTrue(
+            broken.isEmpty,
+            "\(broken.count) transliterations were split around their superscript: "
+                + "\(broken.prefix(5))"
+        )
     }
 }

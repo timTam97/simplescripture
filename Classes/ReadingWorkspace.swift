@@ -21,13 +21,20 @@
 //    that it applies when it next becomes active. That is what lets a verse's
 //    "commentary" action land on the right verse without rendering MHCC on every
 //    Bible chapter change. `applyPendingWork()`'s branch order is load-bearing.
+//    A deferral only ever waits on a HIDDEN pane: `mode`'s `didSet` drains a pane
+//    as it appears, `displayChapter` drains the pane on screen at once when that
+//    is not the one it polled, and a pane that renders drops its own.
 //  * **Chapter paging restores no position in either direction** — do not
 //    "restore" a verse position on `previousChapter`. It also starts the new
 //    chapter on a NEW scroll view (`ReaderPaneModel.scrollSurface`) rather than
 //    scrolling the old one to the top, which did not land reliably. The swap is
 //    also what the page-turn slide animates (`ReaderPaneModel.pageTurn`), so the
 //    scroll view being left stays on screen for the length of the slide — which
-//    is why every scroll callback names the surface it came from.
+//    is why every scroll callback names the surface it came from. The pane a page
+//    turn is DEFERRED into has its position keys reset when the turn is deferred,
+//    not when it drains, and keeps the turn through any redisplay in between
+//    (`ReaderPaneModel.deferRender`): until it has shown the new chapter its keys
+//    describe the old one, and a relaunch or a redisplay restores from them.
 //  * **`bibleScrollPosition` / `commentaryScrollPosition`** are raw `UserDefaults`
 //    string keys with no `Defaults` constant, written as `"%d"` of a `CGFloat`.
 //    They are persisted; `displayChapter`'s `.scroll` arm reads them back into an
@@ -172,8 +179,10 @@ final class ReaderPaneModel {
     /// without reloading the chapter. Clear it by assigning `[]`.
     ///
     /// A list because an "all words" / "any words" query matches on several, and
-    /// the results list highlights each of them.
-    var searchHighlightTerms: [String] = [] {
+    /// the results list highlights each of them. Each term says how the query
+    /// matched it (a whole word or phrase, or under Fuzzy a word's beginning),
+    /// so the chapter marks what the row that opened it marked.
+    var searchHighlightTerms: [SearchHighlightTerm] = [] {
         didSet {
             guard searchHighlightTerms != oldValue else { return }
             textStyle.highlightTerms = searchHighlightTerms
@@ -181,7 +190,9 @@ final class ReaderPaneModel {
     }
 
     /// A chapter this pane should render the next time it appears, with the
-    /// position to restore. Set by `displayChapter` for the pane it did NOT poll.
+    /// position to restore. Set by `displayChapter` for the pane it did NOT poll,
+    /// through `deferRender(of:restore:)`; `selectReference` re-aims the restore
+    /// of a chapter already owed the same way.
     @ObservationIgnored var refToShow: String?
     @ObservationIgnored var pendingRestore: PaneRestore?
 
@@ -253,10 +264,59 @@ final class ReaderPaneModel {
     /// The last scroll offset seen, clamped at 0 (see `scrollOffsetChanged`).
     @ObservationIgnored private var lastScrollOffset: CGFloat = 0
     /// An offset restore that has been requested but not yet observed to have landed.
-    /// Two things read it, and both are load-bearing: `scrollOffsetChanged` (do not
-    /// persist a position from before the restore lands) and `restoreAfterSizeChange`
-    /// (do not re-anchor on a verse while an offset restore is still in flight).
+    /// Three things read it, and each is load-bearing: `scrollOffsetChanged` (do not
+    /// persist a position from before the restore lands), `restoreAfterSizeChange`
+    /// (do not re-anchor on a verse while an offset restore is still in flight) and
+    /// `topmostVerseChanged` (the row at the top before it lands has not measured
+    /// where it lands — see `shownVerseIsMeasured`).
     @ObservationIgnored private var outstandingOffsetRestore: CGFloat?
+    /// The scroll view's last laid-out report about the chapter it is showing.
+    /// EVERY one: those a size change suppresses and those inside the two-point
+    /// dead zone as well, which `lastScrollOffset` leaves out. nil until this
+    /// scroll view has reported on this chapter. `scroll(toOffset:)` reads it.
+    @ObservationIgnored private var reportedSample: ReaderScrollSample?
+    /// The chapter `document` holds, which is how a report is told from one
+    /// about the chapter before it.
+    @ObservationIgnored private var renderedRef: String?
+    /// The verse the position keys pair with an offset restore, used for what
+    /// `scrollOffsetChanged` persists until the view reports the topmost verse
+    /// itself.
+    ///
+    /// An offset names no verse, and `currentShownVerse` is whatever the pane
+    /// last knew — 1 on a pane that has shown nothing, which is every launch. The
+    /// first scroll persisted after the restore landed (the rows settling a few
+    /// points is enough) wrote that 1 over the saved verse and retitled to `…:1`
+    /// with the reader correctly mid-chapter, until a DIFFERENT row reached the
+    /// top. A display toggle or a font change in that window jumped to verse 1.
+    ///
+    /// **Kept apart from `currentShownVerse`, not written into it.** The row at
+    /// the top BEFORE the scroll lands reports verse 1, and `topmostVerseChanged`
+    /// drops it only because that is what the pane already believes. Seeded with
+    /// the saved verse, it would take that report for a move and persist verse 1.
+    ///
+    /// Ended by any persist, by any newer restore, and by the view's first report
+    /// that counts as a measurement (`topmostVerseChanged`) — whether that report
+    /// changes the verse or confirms it.
+    @ObservationIgnored private var offsetRestoreVerse: Int?
+    /// Whether `currentShownVerse` says where the scroll view IS: the view
+    /// reported it as the row at the top, or a restore that names a verse (or the
+    /// top of the chapter) sent the scroll view there.
+    ///
+    /// False after an offset restore that MOVES the scroll view, which names no
+    /// verse: `currentShownVerse` is then whatever the pane believed before it —
+    /// 1 on a pane that has shown nothing, which is every launch — until the
+    /// view reports. An offset the scroll view is already at keeps it (a
+    /// bookmark change — see `apply`).
+    /// `restoreAfterSizeChange` reads it. A width change re-anchors on a measured
+    /// verse; on a leftover one it would drag a reader restored mid-chapter back
+    /// to verse 1.
+    ///
+    /// **A different question from `offsetRestoreVerse`.** That is the verse the
+    /// KEYS hold, carried so that a scroll does not save a leftover over it. It
+    /// says what to persist, not where the scroll view is — nothing has checked
+    /// it against the rows — so the scroll that writes it into
+    /// `currentShownVerse` (`scrollOffsetChanged`) leaves this false.
+    @ObservationIgnored private var shownVerseIsMeasured = true
 
     @ObservationIgnored weak var workspace: ReadingWorkspaceModel?
 
@@ -287,6 +347,11 @@ final class ReaderPaneModel {
     /// Renders `ref` into this pane now and applies `restore`. Bookmark highlight
     /// colours, verse anchors and link targets are all in the document value.
     func render(ref: String?, restore: PaneRestore) {
+        // What the scroll view last reported was about the chapter it had.
+        if ref != renderedRef {
+            reportedSample = nil
+            renderedRef = ref
+        }
         guard let ref else {
             document = ChapterDocument()
             return
@@ -359,6 +424,9 @@ final class ReaderPaneModel {
     /// kept against new row heights (e.g. flipping Verse Per Line at Gen 1:1 landed
     /// on verse 6). Affects font changes and every display toggle.
     private func apply(_ restore: PaneRestore) {
+        // It belongs to the offset restore that set it. Any newer instruction
+        // ends it, another offset included, which sets its own below.
+        offsetRestoreVerse = nil
         switch restore {
         case .verse(let verse):
             guard verse > 0 else { return }
@@ -369,8 +437,28 @@ final class ReaderPaneModel {
             // verse target rather than replaying stale pixels.
             lastScrollOffset = 0
             currentShownVerse = verse
+            shownVerseIsMeasured = true
             verseToShow = 0
             let target = rowID(containing: verse)
+            // The chapter's first row is the one landing nothing may report. It
+            // rests at offset 0, which `lastScrollOffset` was just reset to, so
+            // `scrollOffsetChanged` sees no move — and when the verse asked for is
+            // the one at its top, `topmostVerseChanged` sees no change either. The
+            // keys then kept the position the reader had just LEFT, and a display
+            // toggle, a bookmark or a relaunch went back there. So it is persisted
+            // here, as `.chapterStart` persists its own. (`document.verses.first`
+            // is the first row in either layout: that row with a row per verse,
+            // the first paragraph's id in prose. With Headings on it is the title
+            // row, which is where verse 1 lands — see `rowID(containing:)`. With a
+            // row per verse that row reports itself as verse 0, which is verse 1
+            // to this pane; alone in a paragraph it reports nothing.)
+            //
+            // Only the first row. Any row below it lands past the threshold and is
+            // persisted when it does; writing offset 0 for one of those would be
+            // wrong until then, and for good if the re-render never moves the view.
+            if target == document.verses.first?.number {
+                persistPosition(verse: verse, scrollOffset: 0)
+            }
             Task { @MainActor [weak self] in
                 self?.scrollPosition.scrollTo(id: target, anchor: .top)
             }
@@ -379,12 +467,43 @@ final class ReaderPaneModel {
                 outstandingOffsetRestore = nil
                 return
             }
+            // A redisplay IN PLACE: the offset the scroll view is already at, under
+            // a verse the view measured there. A bookmark change is the producer.
+            // It redraws the chapter at the pane's own saved offset, and that key
+            // is `"%d"` of `lastScrollOffset`, so the two agree to within a point.
+            //
+            // Nothing moves, so there is nothing to land and no verse to forget:
+            // the row at the top stays the row at the top, and a row reports only
+            // when it BECOMES the topmost one. Taken for a restore, the pane gave
+            // up a verse nothing would measure again until the reader scrolled a
+            // row past it, and armed a landing a scroll view that does not move
+            // never publishes. A rotation in between replayed the old width's
+            // offset: add a bookmark at Genesis 1:20, turn the phone, and the
+            // reader was pinned past the end of the chapter.
+            //
+            // Asked of what the pane itself knows, and nothing else. Wherever it
+            // cannot vouch for both — a launch, a verse scroll whose landing has
+            // not been reported, a rotation's — the offset is the restore it
+            // always was.
+            let redisplaysInPlace = shownVerseIsMeasured
+                && abs(lastScrollOffset - offset) <= Self.scrollThreshold
             lastScrollOffset = offset
-            // Recorded BEFORE the hop: the scroll view publishes geometry (and
-            // `scrollOffsetChanged` would persist it) before the hop runs.
-            outstandingOffsetRestore = offset
+            if !redisplaysInPlace {
+                // An offset names no verse — see `shownVerseIsMeasured`.
+                shownVerseIsMeasured = false
+                // Recorded BEFORE the hop: the scroll view publishes geometry (and
+                // `scrollOffsetChanged` would persist it) before the hop runs.
+                outstandingOffsetRestore = offset
+                // The verse this offset was saved with — see `offsetRestoreVerse`.
+                // The clamp is `persistPosition`'s.
+                offsetRestoreVerse = UserDefaults.standard
+                    .string(forKey: versePositionKey)
+                    .map { max(1, ($0 as NSString).integerValue) }
+            }
+            // Asked for either way. In place it is where the view already is, and
+            // `scroll(toOffset:)` then issues nothing.
             Task { @MainActor [weak self] in
-                self?.scrollPosition.scrollTo(y: offset)
+                self?.scroll(toOffset: offset)
             }
         case .none:
             // A chapter change lands at the top, which is what
@@ -392,6 +511,7 @@ final class ReaderPaneModel {
             outstandingOffsetRestore = nil
             lastScrollOffset = 0
             currentShownVerse = 1
+            shownVerseIsMeasured = true
             Task { @MainActor [weak self] in
                 self?.scrollPosition.scrollTo(edge: .top)
             }
@@ -401,33 +521,183 @@ final class ReaderPaneModel {
             // arriving has a row with the same id.
             outstandingOffsetRestore = nil
             lastScrollOffset = 0
+            // A verse scroll armed before the page turn is spent by it. A `.verse`
+            // load arms one on both panes, and a deferred pane that keeps its page
+            // turn through that load (`deferRender`) drains here rather than through
+            // `.verse`, which is what would have cleared it. Left armed, it scrolls
+            // the pane to that verse the next time it appears with nothing owed.
+            verseToShow = 0
             scrollPosition = ScrollPosition(idType: Int.self)
             scrollSurface += 1
+            reportedSample = nil
             // Persisted HERE because nothing else will. A scroll view that starts at
             // the top publishes no offset change and no new topmost verse, so the keys
             // would keep the position in the chapter being left — and `setToPreviousChapter`
             // has just written the destination's LAST verse into the verse key. A
             // relaunch (`.scroll`) or a display toggle (`.verse`) would land there.
+            // (A DEFERRED page turn has had the same two keys written already, by
+            // `deferRender`; this also retitles.)
             persistPosition(verse: 1, scrollOffset: 0)
+            shownVerseIsMeasured = true
         }
     }
 
-    /// Applies deferred work when the pane becomes active.
+    /// Hands this pane `ref` to render the next time it appears, restoring
+    /// `restore` — unless what the pane already owes says more about where it
+    /// should open than `restore` does.
+    ///
+    /// **`restore` is built from this pane's position keys, and those describe
+    /// the chapter the pane last SHOWED.** A pane that owes a render is about to
+    /// show a different one, so:
+    ///
+    ///  * **A page turn settles the keys here, at defer time.** The pane itself
+    ///    writes verse 1 / offset 0 only when it drains (`apply(.chapterStart)`).
+    ///    Until then a relaunch restores the old chapter's offset in the new one,
+    ///    and every other load rebuilds this deferral from the old chapter's verse
+    ///    — paging BACK guarantees a wrong one, because `setToPreviousChapter`
+    ///    writes the destination's last verse into the commentary's key.
+    ///  * **An owed page turn outlasts a redisplay.** With the keys settled, a
+    ///    display toggle or a font change arrives as `.verse(1)` and a bookmark
+    ///    change as `.offset(0)`. Neither is a chapter start: `.offset(0)` does not
+    ///    scroll at all, so the pane would show the new chapter wherever its
+    ///    scroll view was left in the old one.
+    ///  * **A verse past the first wins**, over an owed page turn too. That is
+    ///    somebody naming a verse: the reference picker, or a `sword://` route —
+    ///    which writes the BIBLE's verse key for a commentary destination as
+    ///    well. Draining `.chapterStart` instead would persist verse 1 over it.
+    ///  * **An offset, or no saved position at all, never replaces an owed verse
+    ///    or chapter start.** A bookmark added after picking John 3:16 would
+    ///    otherwise open the commentary's John 3 at the offset it was left at in
+    ///    whatever chapter it last showed.
+    func deferRender(of ref: String?, restore: PaneRestore) {
+        // Only a restore owed WITH a render counts. One on its own is
+        // `showInCommentary`'s, and is consumed by the switch that follows it.
+        let owed = refToShow == nil ? nil : pendingRestore
+        refToShow = ref
+        switch restore {
+        case .chapterStart:
+            pendingRestore = .chapterStart
+            // The bytes `persistPosition(verse: 1, scrollOffset: 0)` writes, without
+            // the rest of it: `currentShownVerse` still belongs to the scroll view
+            // this pane is holding, and `displayChapter` titles both panes itself.
+            let defaults = UserDefaults.standard
+            defaults.set("0", forKey: scrollPositionKey)
+            defaults.set("1", forKey: versePositionKey)
+        case .verse(let verse) where verse > 1:
+            pendingRestore = restore
+        case .verse:
+            pendingRestore = owed == .chapterStart ? .chapterStart : restore
+        case .offset, .none:
+            if case .offset? = owed {
+                pendingRestore = restore
+            } else {
+                pendingRestore = owed ?? restore
+            }
+        }
+    }
+
+    /// Applies deferred work: when the pane becomes active, and straight away if
+    /// it is handed some while it already is (see `displayChapter`).
     ///
     /// The order is load-bearing: a pending ref wins over a pending restore, which
     /// wins over a pending verse scroll. Collapsing these into "do whatever is set"
     /// would re-render a chapter that was only meant to scroll.
+    ///
+    /// **The first two branches disarm the third.** A `.verse` load arms
+    /// `verseToShow` on both panes, and anything this pane is owed was handed to
+    /// it by that load or by a later one, so draining it supersedes the armed
+    /// verse. `.verse` and `.chapterStart` spend it themselves; an offset does
+    /// not, and one drained over it left it armed for the pane's NEXT appearance
+    /// with nothing owed — a Bible ⇄ commentary round trip, nothing navigated —
+    /// which scrolled to a verse from an earlier chapter and persisted it over
+    /// the reader's place.
     func applyPendingWork() {
         if let ref = refToShow {
+            verseToShow = 0
             render(ref: ref, restore: pendingRestore ?? .none)
             refToShow = nil
             pendingRestore = nil
         } else if let restore = pendingRestore {
+            verseToShow = 0
             apply(restore)
             pendingRestore = nil
         } else if verseToShow > 0 {
             scrollToVerse(verseToShow)
         }
+    }
+
+    // MARK: Offset scrolls
+
+    /// Sends the scroll view to `offset`, unless it has said it is there already.
+    /// Called from the hop a scroll is deferred to.
+    ///
+    /// **An offset handed to `ScrollPosition` stays in it after the scroll view
+    /// has gone there, and SwiftUI applies it again whenever the content or the
+    /// container size changes — as a raw content offset.** `scrollTo(y:)` lands
+    /// inset-relative: 1099 rests at content offset (-16, 983) under a 116 pt
+    /// top inset and the 16 pt gutter. Applied again it is (0, 1099): the chapter
+    /// one top inset further on and flush against the left screen edge, and the
+    /// pane saved that as the reader's position. MEASURED (iOS 27.2): the lazy
+    /// stack re-measures its rows when the app goes to the background and on
+    /// the first accessibility read of the reader, so a position restored at
+    /// launch moved the first time the app was left, 3 launches in 3, and on by
+    /// another inset at every launch after it (1099, 1215, 1331, 1447). The same
+    /// after a bookmark was added, in the commentary, and after a rotation in
+    /// the flowing layout. Only a finger on the reader ended it: SwiftUI takes
+    /// the offset out itself when the user scrolls.
+    ///
+    /// So the offset is held only while the scroll is on its way.
+    /// `scrollOffsetChanged` takes it out when the scroll view reports that it
+    /// has arrived, and nothing is asked of a scroll view that is already
+    /// there: it would not move, so it would report nothing, and the offset
+    /// would stay. That is the size hook's replay once a restore has landed and
+    /// a bookmark change's redisplay in place.
+    ///
+    /// While it is held it can still be applied raw, by a size change that
+    /// arrives with the landing. MEASURED in a rotation of the flowing layout:
+    /// (-16, 349) and then (0, 427) in one layout pass. That is a container
+    /// change, so the size hook follows it, finds the scroll view somewhere
+    /// else and sends it back.
+    ///
+    /// The report is as current as it can be where this is called. A size
+    /// change publishes the scroll view's geometry in the layout pass that
+    /// fires the hook, ahead of the hop; a redisplay of the same chapter moves
+    /// nothing (MEASURED: a bookmark added at Genesis 1:16 left its number at
+    /// the same 130.5 pt); and a report about another chapter is dropped
+    /// (`render`).
+    private func scroll(toOffset offset: CGFloat) {
+        if let reportedSample, has(reportedSample, reached: offset) {
+            // Anything still held is not wanted either: an older offset this one
+            // supersedes.
+            takeOffsetOutOfScrollPosition()
+            return
+        }
+        scrollPosition.scrollTo(y: offset)
+    }
+
+    /// Whether `sample` has the scroll view at `offset` to the tolerance a scroll
+    /// counts as moved, or pinned at its end with `offset` beyond it, which is
+    /// as near as it gets. The two ways the restore gate in
+    /// `scrollOffsetChanged` is satisfied.
+    private func has(_ sample: ReaderScrollSample, reached offset: CGFloat) -> Bool {
+        let position = max(0, sample.offset)
+        if abs(position - offset) <= Self.scrollThreshold { return true }
+        return offset > sample.maxOffset
+            && position >= sample.maxOffset - Self.scrollThreshold
+    }
+
+    /// Leaves the scroll view where it is, with no offset for SwiftUI to apply
+    /// again.
+    ///
+    /// By `isPositionedByUser`, which is what a finger leaves behind and is
+    /// documented to clear the offset: the scroll view "acts as if it has been
+    /// positioned by the user". MEASURED (iOS 27.2): set as the landing is
+    /// reported, the scroll view does not move, and the re-measure in the
+    /// background leaves it at (-16, 983). Nothing else is touched, so a row id
+    /// or an edge the position holds is left alone.
+    private func takeOffsetOutOfScrollPosition() {
+        guard scrollPosition.y != nil else { return }
+        scrollPosition.isPositionedByUser = true
     }
 
     // MARK: Verse position
@@ -447,7 +717,31 @@ final class ReaderPaneModel {
     /// the middle of a paragraph has to resolve to that paragraph's id. This is the
     /// one place the prose layout costs something: the scroll lands at the top of
     /// the verse's paragraph rather than exactly on the verse.
+    ///
+    /// **Verse 1 starts at the chapter's title when the title is the row above
+    /// it.** With Headings on a KJV chapter opens with a row that is only its
+    /// title (`CHAPTER 1.`, row 0 — see `ChapterVerse.hasVisibleText`), and verse
+    /// 1's own row is the next one. Sent there, the reader rested with the title
+    /// above the reading area, behind the navigation bar. MEASURED (iOS 27.2,
+    /// 20 pt, a row per verse): "CHAPTER 1." at y 87–110 under a bar whose bottom
+    /// edge is at 116 — after the reference picker, after turning Headings on at
+    /// the top of the chapter, and at launch, where the size hook re-issues the
+    /// row of the verse the pane believes. Only a page turn showed it. Flowing,
+    /// the title heads verse 1's paragraph and that row was already the answer,
+    /// except in the 117 psalms whose own title starts a paragraph at verse 1 and
+    /// leaves `PSALM n.` a row by itself.
+    ///
+    /// Only a row with no text of its own, which is a title and nothing else. A
+    /// commentary's row 0 is the chapter summary, a record in its own right, and
+    /// verse 1 keeps the record under it: "Show in Commentary" on verse 1 opens
+    /// on that one. And only verse 1 — the title is not part of any other verse.
     private func rowID(containing verse: Int) -> Int {
+        if verse == 1, let first = document.verses.first,
+           first.isIntro, !first.hasVisibleText {
+            // The first row in either layout: its own row with a row per verse,
+            // and the first paragraph's id in prose.
+            return first.number
+        }
         if versePerLine {
             // Every verse is its own row — but only among rows the document actually
             // HAS, which is not the same thing on a commentary. See below.
@@ -486,10 +780,23 @@ final class ReaderPaneModel {
     /// and topmost verses from the old chapter in the 420 ms AFTER the new one's
     /// position was persisted, any of which would have overwritten it.
     func scrollOffsetChanged(_ sample: ReaderScrollSample, from surface: Int) {
-        guard surface == scrollSurface, !isRestoringAfterTransition else { return }
+        guard surface == scrollSurface else { return }
         // A scroll view with no content has not answered the question: its 0 is not
         // the top of the chapter, and persisting it would clobber the saved offset.
-        guard sample.isLaidOut else { return }
+        guard sample.isLaidOut else {
+            reportedSample = nil
+            return
+        }
+        // Ahead of the suppression below. Where the scroll view IS does not
+        // depend on whether the pane is taking its reports for scrolls, and an
+        // offset scroll that has arrived during a size change has arrived.
+        reportedSample = sample
+        if let asked = scrollPosition.y, has(sample, reached: asked) {
+            // The scroll view is where the offset sent it, so the offset comes
+            // out — see `scroll(toOffset:)`.
+            takeOffsetOutOfScrollPosition()
+        }
+        guard !isRestoringAfterTransition else { return }
         let normalized = max(0, sample.offset)
         if let target = outstandingOffsetRestore {
             if abs(normalized - target) <= Self.scrollThreshold {
@@ -515,7 +822,12 @@ final class ReaderPaneModel {
         // counts as a scroll and rewrites the persisted position on every layout pass.
         guard abs(lastScrollOffset - normalized) > Self.scrollThreshold else { return }
         lastScrollOffset = normalized
-        persistPosition(verse: currentShownVerse, scrollOffset: normalized)
+        // After an offset restore the pane does not know its verse until the view
+        // says — see `offsetRestoreVerse` — and the saved one is the better answer.
+        persistPosition(
+            verse: offsetRestoreVerse ?? currentShownVerse,
+            scrollOffset: normalized
+        )
     }
 
     /// The two-point dead zone. The restore gate above uses it too, so a restore
@@ -544,7 +856,26 @@ final class ReaderPaneModel {
         // would let verse 0 through as "changed" forever (0 != 1) and rewrite the
         // position on every layout pass.
         let clamped = max(1, verse)
-        guard !isRestoringAfterTransition, clamped != currentShownVerse else { return }
+        guard !isRestoringAfterTransition else { return }
+        // The view has said which row is at the top, so `currentShownVerse` is a
+        // measurement from here on, whether or not this report changes it.
+        //
+        // One report is not: the one the row at the top makes BEFORE an offset
+        // restore lands, which says where the view was. It is told apart the way
+        // `offsetRestoreVerse` already relies on — it is the verse the pane
+        // believes anyway (1, on a new pane) — so while a restore is in flight a
+        // report counts only if it changes that. The row the restore lands on may
+        // report before the landing itself is published, and it does change it.
+        if outstandingOffsetRestore == nil || clamped != currentShownVerse {
+            shownVerseIsMeasured = true
+            // A measurement also ends the verse carried from the keys — see
+            // `offsetRestoreVerse`. A report that changes the verse ends it through
+            // the persist below. One that CONFIRMS what the pane believes persists
+            // nothing, and left the saved verse armed for the next scroll to write
+            // over the one the view had just reported.
+            offsetRestoreVerse = nil
+        }
+        guard clamped != currentShownVerse else { return }
         persistPosition(verse: clamped, scrollOffset: lastScrollOffset)
     }
 
@@ -563,6 +894,9 @@ final class ReaderPaneModel {
         // 0 would silently do nothing.
         let verse = max(1, verse)
         currentShownVerse = verse
+        // Any persist settles it: the pane now holds a verse of its own, whether
+        // the view reported it or the saved one was just written back.
+        offsetRestoreVerse = nil
         let verseString = String(format: "%d", Int32(verse))
         let defaults = UserDefaults.standard
         defaults.set(
@@ -623,35 +957,75 @@ final class ReaderPaneModel {
 
     // MARK: Size changes
 
-    /// Rotation, or an iPad split-view resize.
+    /// Rotation, or an iPad split-view resize — or the reader's height alone
+    /// changing, as the bars settle at launch and when a keyboard goes.
     ///
     /// Scroll identity is width-independent, so nothing needs re-measuring. All
-    /// that is needed is suppressing the transient scroll callbacks the transition
-    /// produces, which would otherwise overwrite the persisted position.
+    /// that is needed here is suppressing the transient scroll callbacks the
+    /// transition produces, which would otherwise overwrite the persisted
+    /// position. A scroll OFFSET is not width-independent, and what is restored
+    /// afterwards turns on that — see `restoreAfterSizeChange(widthChanged:)`.
     func prepareForSizeChange() {
         sizeChangeGeneration += 1
         isRestoringAfterTransition = true
     }
 
     /// **The suppression has to outlive this call.** `ReaderScreen` calls
-    /// `prepareForSizeChange()` and `restoreAfterSizeChange()` back to back in one
-    /// `onGeometryChange` action, so clearing the flag synchronously would let every
-    /// transient rotation callback overwrite the saved position.
+    /// `prepareForSizeChange()` and `restoreAfterSizeChange(widthChanged:)` back
+    /// to back in one `onGeometryChange` action, so clearing the flag synchronously
+    /// would let every transient rotation callback overwrite the saved position.
     ///
-    /// A prose paragraph is one flowing `Text`, not one scroll target per verse, so
+    /// **A height change replays the scroll offset; a width change re-anchors on
+    /// the verse.** The hook fires for both. Height alone re-wraps nothing, so the
+    /// offset still names the same text and is preserved exactly — which, for a
+    /// scroll view the change did not move, is by asking nothing of it (see
+    /// `scroll(toOffset:)`). A width change re-wraps every row, and the old
+    /// width's offset names different text: Genesis 1 with a row per verse is
+    /// 4198 pt tall in portrait and about half that in landscape, so the offset
+    /// of verse 20 is past the end of the landscape chapter. Replayed, it pinned
+    /// the reader there, that was persisted as the position, and rotating back
+    /// replayed IT into the portrait layout.
+    ///
+    /// The flowing layout keeps the offset on a width change too. A prose
+    /// paragraph is one flowing `Text`, not one scroll target per verse, so
     /// re-anchoring to `rowID(containing:)` would jump to the paragraph's first
-    /// verse. Preserve the actual scroll offset across the size change instead; the
-    /// per-verse layout tracker updates the title independently.
-    func restoreAfterSizeChange() {
+    /// verse; the per-verse layout tracker updates the title independently.
+    func restoreAfterSizeChange(widthChanged: Bool) {
         let generation = sizeChangeGeneration
+        // Re-anchor on the verse only where it is a better answer than the pixels:
+        //
+        //  * the rows are per verse (per record, on a commentary) and not
+        //    paragraphs — see above;
+        //  * the verse is one the view measured or a restore named. After an
+        //    offset restore it is a leftover — see `shownVerseIsMeasured`;
+        //  * no offset restore is in flight (below);
+        //  * the pane owes no render. One that does is holding a chapter the
+        //    reader has left, under position keys that already describe the one it
+        //    will open on (`deferRender`). Re-anchoring moves its scroll view, and
+        //    the landing would be persisted over them. The offset replayed instead
+        //    lands on `lastScrollOffset`, which `scrollOffsetChanged` does not
+        //    take for a move — unless the new width cannot reach it.
+        let reanchorsOnVerse = widthChanged && versePerLine && shownVerseIsMeasured
+            && outstandingOffsetRestore == nil && refToShow == nil
+        if reanchorsOnVerse {
+            // As in `apply(.verse)`: the old width's offset is not evidence for
+            // this position, and neither is a verse saved with it. Zeroed rather
+            // than skipped over, because a rotation's size arrives in steps, as
+            // the launch's does — the bars settle after the width has changed —
+            // and with everything published in between suppressed, the
+            // height-only step that follows would replay it.
+            lastScrollOffset = 0
+            offsetRestoreVerse = nil
+        }
         // An OFFSET restore still in flight wins over `currentShownVerse`.
         //
         // The reader's size settles in steps at launch ((402, 0) → (402, 623) →
         // (402, 675) as the nav bar and tab bar come in), so this hook fires during
         // launch, after an `.offset` restore is requested but before it lands.
         // Re-anchoring on `currentShownVerse` (still 1 — an offset restore names no
-        // verse) would drag the reader back to the top. `.verse` restores are
-        // unaffected because they set `currentShownVerse` first.
+        // verse, and the one its keys pair with it is held apart, in
+        // `offsetRestoreVerse`) would drag the reader back to the top. `.verse`
+        // restores are unaffected because they set `currentShownVerse` first.
         //
         // A positive offset is preserved exactly. Zero is different: `scrollTo(y: 0)`
         // bypasses the top content margin and paints verse 1 under the navigation bar,
@@ -667,7 +1041,7 @@ final class ReaderPaneModel {
         Task { @MainActor [weak self] in
             guard let self else { return }
             if let restoreOffset {
-                self.scrollPosition.scrollTo(y: restoreOffset)
+                self.scroll(toOffset: restoreOffset)
             } else if let verseTarget {
                 self.scrollPosition.scrollTo(id: verseTarget, anchor: .top)
             }
@@ -859,9 +1233,9 @@ final class ReadingWorkspaceModel {
     /// Renders the persisted chapter and starts observing the notifications that
     /// have posters outside this file: `resetBibleAndCommentaryView` (font/size,
     /// via `SettingsModel`), `redisplayPrimary{Bible,Commentary}` (display toggles
-    /// and the `sword://` router), `bookmarksChanged`, and
+    /// and the `sword://` router), `bookmarksChanged`,
     /// `newPrimary{Bible,Commentary}` (module load, including `render`'s nil-primary
-    /// recovery).
+    /// recovery), and `appStateDidReset` (the Settings-app reset).
     func start() {
         _ = PSModuleController.default()
 
@@ -886,6 +1260,13 @@ final class ReadingWorkspaceModel {
         }
         observe(.newPrimaryCommentary) { [weak self] in
             self?.commentary.refreshForModuleChange()
+        }
+        // A reset leaves the chapter by the one path that is not a navigation. It
+        // removes `lastRef`, and the `redisplayPrimaryBible` it posts next renders
+        // Genesis 1 through `redisplay` — which is otherwise the SAME chapter
+        // drawn again, and so carries the search highlight across.
+        observe(.appStateDidReset) { [weak self] in
+            self?.clearSearchHighlight()
         }
 
         // The post covers a module *change*; priming directly covers the first
@@ -952,13 +1333,14 @@ final class ReadingWorkspaceModel {
 
     /// Loads `ref` into one pane and defers it into the other. Deliberate:
     ///
-    ///  1. **Only the polled pane renders.** The other is handed `refToShow` +
-    ///     `pendingRestore` and renders when it next becomes active, which stops
-    ///     every Bible chapter change from also rendering MHCC. An inbound
-    ///     `sword://` route must DISCARD that deferral rather than drain it — see
-    ///     `showRoutedMode(_:)`.
+    ///  1. **Only the polled pane renders, unless the other one is on screen.** A
+    ///     hidden pane is handed `refToShow` + `pendingRestore` and renders when it
+    ///     next becomes active, which stops every Bible chapter change from also
+    ///     rendering MHCC. An inbound `sword://` route must DISCARD that deferral
+    ///     rather than drain it — see `showRoutedMode(_:)`.
     ///  2. **Each pane's restore is built from its own verse-position pref**; they
-    ///     track position independently.
+    ///     track position independently. The deferred pane's may be overruled by
+    ///     what it already owes — `ReaderPaneModel.deferRender(of:restore:)`.
     ///  3. **Each pane's title verse comes from that pane's OWN verse-position
     ///     pref.** Sharing one value would title the Bible pane with a stale
     ///     commentary verse on a `.verse` restore (e.g. "John 3:4" while scrolled to
@@ -997,25 +1379,44 @@ final class ReadingWorkspaceModel {
             }
         case .none:
             // Paging — the only caller that passes `.none`. Each pane starts the new
-            // chapter on a new scroll surface, the deferred one when it is drained.
+            // chapter on a new scroll surface, the deferred one when it is drained
+            // (its position keys are reset now, not then — see `deferRender`).
             bibleRestore = .chapterStart
             commentaryRestore = .chapterStart
         }
 
+        // The pane that renders drops whatever it had deferred. This render is the
+        // newer instruction, and a deferral left behind it is replayed over it the
+        // next time the pane appears: the reader pages on, switches away and back,
+        // and is returned — `lastRef` included — to the chapter they had left.
+        let polledPane: ReaderPaneModel?
         switch polling {
         case .bible:
+            polledPane = bible
+            bible.refToShow = nil
+            bible.pendingRestore = nil
             bible.render(ref: ref, restore: bibleRestore)
-            commentary.refToShow = ref
-            commentary.pendingRestore = commentaryRestore
+            commentary.deferRender(of: ref, restore: commentaryRestore)
         case .commentary:
+            polledPane = commentary
+            commentary.refToShow = nil
+            commentary.pendingRestore = nil
             commentary.render(ref: ref, restore: commentaryRestore)
-            bible.refToShow = ref
-            bible.pendingRestore = bibleRestore
+            bible.deferRender(of: ref, restore: bibleRestore)
         case .none:
-            bible.refToShow = ref
-            bible.pendingRestore = bibleRestore
-            commentary.refToShow = ref
-            commentary.pendingRestore = commentaryRestore
+            polledPane = nil
+            bible.deferRender(of: ref, restore: bibleRestore)
+            commentary.deferRender(of: ref, restore: commentaryRestore)
+        }
+
+        // `mode`'s `didSet` drains a pane when it APPEARS; this drains one that is
+        // already showing. Nothing else would: a deferral handed to the pane on
+        // screen waits for the reader to switch away and back, with the old chapter
+        // on screen under the new one's title until they do. Most callers poll the
+        // pane on screen and never get here. A bookmark change and a reset poll the
+        // Bible whichever pane is showing.
+        if activePane !== polledPane {
+            activePane.applyPendingWork()
         }
 
         var bibleVerse = bibleVersePosition ?? "1"
@@ -1083,7 +1484,16 @@ final class ReadingWorkspaceModel {
     ///
     /// The user's own Bible/commentary picker writes `mode` directly and wants the
     /// drain — which is why this clears at the CALL SITE and not in `didSet`.
+    ///
+    /// **An inbound route also ends the search highlight**, in both panes. This
+    /// is the one place a bookmark, a history row and every `sword://` link pass
+    /// through on their way out of the chapter a search result was opened in. It
+    /// ends even when the route is to the chapter already showing: `lastRef` has
+    /// been rewritten by the time this runs, so there is nothing left to compare
+    /// against. A search result arrives by this route too, which is why its own
+    /// terms go on AFTER the open — see `openSearchResult`.
     func showRoutedMode(_ newMode: ReadingMode) {
+        clearSearchHighlight()
         let pane = newMode == .bible ? bible : commentary
         pane.refToShow = nil
         pane.pendingRestore = nil
@@ -1106,9 +1516,10 @@ final class ReadingWorkspaceModel {
     /// `SettingsModel.onReadingAppearanceChanged`): re-render the pane the user is
     /// on, and leave the other one's deferral alone.
     ///
-    /// Must poll the ACTIVE pane: both panes stay in the hierarchy and `mode`'s
-    /// `didSet` is the only drain, so polling neither would leave the change
-    /// invisible until the user switched Bible ⇄ commentary.
+    /// Polls the ACTIVE pane so that it is the only one rendered. Polling the
+    /// other would still reach this one — `displayChapter` drains a deferral
+    /// handed to the pane on screen — but would render the hidden pane as well,
+    /// for a change the reader cannot see there yet.
     private func redisplayWithDefaults() {
         redisplay(pane: mode, restore: .verse)
     }
@@ -1117,14 +1528,22 @@ final class ReadingWorkspaceModel {
     /// not its verse — the user has not navigated, only recoloured. The highlight
     /// is a property of the document, so re-rendering both adds and removes it.
     /// This is the ONLY `bookmarksChanged` re-render.
-    private func redisplayAfterBookmarksChange() {
-        bible.refToShow = nil
-        bible.pendingRestore = nil
-        displayChapter(
-            PSModuleController.getCurrentBibleRef(),
-            polling: .bible,
-            restore: .scroll
-        )
+    ///
+    /// It polls the Bible even when the commentary is showing (a bookmark edited
+    /// in the Library). `displayChapter` then re-renders the commentary as well,
+    /// at its own offset, rather than leaving it a deferral it would not drain.
+    ///
+    /// **Unless the Bible owes a render.** It is hidden then, and it reads the
+    /// bookmarks when it drains. Polling it here would spend the chapter start or
+    /// the verse it owes on its offset key, which is where it was last LEFT —
+    /// after a page turn that is 0, which does not scroll, so the Bible would
+    /// show the new chapter wherever its scroll view sat in the old one. The pane
+    /// on screen is polled instead, and `deferRender` keeps what the Bible owes.
+    ///
+    /// Not `private` so that a test can call it: posting `bookmarksChanged` on the
+    /// shared centre would reach the host app's own workspace as well.
+    func redisplayAfterBookmarksChange() {
+        redisplay(pane: bible.refToShow == nil ? .bible : mode, restore: .scroll)
     }
 
     // MARK: Chapter paging
@@ -1166,9 +1585,17 @@ final class ReadingWorkspaceModel {
     @discardableResult
     private func page(forward: Bool) -> Bool {
         // Paging away from a search result's chapter ends that result's highlight;
-        // otherwise it follows the reader through every later chapter.
-        activePane.searchHighlightTerms = []
-        activePane.setVerseToShow(0)
+        // otherwise it follows the reader through every later chapter. In both
+        // panes: the one that is not showing follows to the new chapter through
+        // its deferral, and drew it with its own terms when it was next shown.
+        clearSearchHighlight()
+        // No position is restored on EITHER pane, so a verse scroll armed before
+        // the page turn is spent on both. The pane that is not on screen spends
+        // its own when it drains the chapter start it is handed below — but a
+        // load that polls it first renders it where it stands, and at an offset
+        // the armed verse survived to fire when the pane was next shown.
+        bible.setVerseToShow(0)
+        commentary.setVerseToShow(0)
         let current = PSModuleController.getCurrentBibleRef()
         let boundary = forward
             ? PSModuleController.getLastRefAvailable()
@@ -1201,14 +1628,34 @@ final class ReadingWorkspaceModel {
     /// The same-chapter fast path is preserved: selecting a verse in the chapter
     /// already on screen scrolls both panes rather than re-rendering, which is
     /// the difference between an instant jump and a visible reload.
+    ///
+    /// **Only a pane that has rendered the chapter is scrolled.** One that still
+    /// owes it (`refToShow` — the commentary after any Bible navigation, and
+    /// always straight after launch) is holding the chapter it last showed, or
+    /// nothing. Scrolling that moved a document about to be replaced, and a
+    /// pending ref outranks everything when the pane drains, so it then opened
+    /// this chapter wherever its old deferral said, under a title naming the
+    /// verse picked. Its deferral is re-aimed at the verse instead, through
+    /// `deferRender`, so a page turn it still owes is kept for verse 1.
+    ///
+    /// Both paths write both verse keys. On the fast path nothing else would
+    /// until a scroll moved the view, and every later `.verse` load reads them.
     func selectReference(bookName: String, chapter: Int, verse: Int) {
         let ref = "\(bookName) \(chapter)"
         let verseString = "\(verse)"
         let controller = PSModuleController.default()
+        let defaults = UserDefaults.standard
+        defaults.set(verseString, forKey: Defaults.bibleVersePosition)
+        defaults.set(verseString, forKey: Defaults.commentaryVersePosition)
 
         if PSModuleController.getCurrentBibleRef() == ref {
-            bible.scrollToVerse(verse)
-            commentary.scrollToVerse(verse)
+            for pane in [bible, commentary] {
+                if let owed = pane.refToShow {
+                    pane.deferRender(of: owed, restore: .verse(verse))
+                } else {
+                    pane.scrollToVerse(verse)
+                }
+            }
             if controller?.primaryBibleName != nil {
                 bible.setTitle("\(ref):\(verseString)")
             }
@@ -1218,9 +1665,9 @@ final class ReadingWorkspaceModel {
             return
         }
 
-        let defaults = UserDefaults.standard
-        defaults.set(verseString, forKey: Defaults.bibleVersePosition)
-        defaults.set(verseString, forKey: Defaults.commentaryVersePosition)
+        // Another chapter, so a search result's highlight ends here. The path
+        // above is a scroll within the result's own chapter, and keeps it.
+        clearSearchHighlight()
         displayChapter(
             ref,
             polling: mode == .bible ? .bible : .commentary,
@@ -1302,20 +1749,63 @@ final class ReadingWorkspaceModel {
         session?.selectedWorkspace = .search
     }
 
-    /// Highlights every occurrence of the search terms in the pane that produced
-    /// the results. The terms are pane state applied while rendering, so they
+    /// Highlights the search terms in the pane that produced the results,
+    /// wherever the query would match them (`PSSearchQuery.highlightRanges`). The terms are pane state applied while rendering, so they
     /// cannot drift from the content; clear by assigning an empty list.
     ///
-    /// Takes the term LIST from `SearchModel.highlightTerms`, which splits an
-    /// all/any-words query into words, honours quoted phrases, drops
-    /// one-character noise, and returns **empty** for a Strong's search (the
-    /// matched text is a lemma, not text present in the verse).
-    func highlightSearchTerms(_ terms: [String], mode: ReadingMode) {
+    /// Takes the term LIST from `SearchModel.highlightTerms` — the query's own
+    /// terms: an all/any-words query's words, a quoted phrase whole, the words
+    /// Fuzzy ran as prefixes marked as such — which is **empty** for a Strong's
+    /// search (the matched text is a lemma, not text present in the verse).
+    ///
+    /// **Not the way to open a result** — that is `openSearchResult`, which owns
+    /// the order. A routed open ends the highlight in both panes, so terms set
+    /// before one are wiped by it.
+    func highlightSearchTerms(_ terms: [SearchHighlightTerm], mode: ReadingMode) {
         let pane = mode == .bible ? bible : commentary
-        pane.searchHighlightTerms = terms.filter { !$0.isEmpty }
+        pane.searchHighlightTerms = terms.filter { !$0.tokens.isEmpty }
+    }
+
+    /// Ends the search highlight in both panes.
+    ///
+    /// A result's highlight belongs to the chapter it was opened in, and every way
+    /// of leaving that chapter ends it: a page turn, the reference picker, an
+    /// inbound route (a bookmark, a history row, a `sword://` link, the next
+    /// search result) and a reset. Drawing the SAME chapter again — a font change,
+    /// a display toggle, a bookmark edit, the Bible/commentary picker — keeps it:
+    /// `render` carries the terms across.
+    ///
+    /// BOTH panes, because the pane that is not showing follows to the new chapter
+    /// through its deferral, and would draw it with its own terms when next shown.
+    func clearSearchHighlight() {
+        bible.searchHighlightTerms = []
+        commentary.searchHighlightTerms = []
     }
 
     // MARK: Search hand-off
+
+    /// Opens a search result and highlights its terms in the pane that produced
+    /// it.
+    ///
+    /// **The terms go on AFTER the open, and that order is the whole method.** The
+    /// open is a route like any other, so it ends whatever highlight was showing
+    /// (`showRoutedMode`); assigning the terms then re-highlights the chapter it
+    /// rendered. The other way round, the open wipes the terms it was handed and
+    /// the result opens unhighlighted — with nothing failing, which is how the
+    /// highlighter went without a caller for as long as it did. Pinned by
+    /// `testASearchResultsTermsGoOnAfterTheOpenThatEndsThePreviousHighlight`.
+    ///
+    /// A reference the router rejects opens nothing, and its terms still land on
+    /// the chapter showing, as they always have.
+    func openSearchResult(
+        _ reference: String,
+        module: String,
+        terms: [SearchHighlightTerm],
+        mode: ReadingMode
+    ) {
+        openLibraryReference(reference, module: module)
+        highlightSearchTerms(terms, mode: mode)
+    }
 
     /// The module choices the search workspace offers — the two readable modules,
     /// in pane order.
@@ -1377,8 +1867,8 @@ final class ReadingWorkspaceModel {
         commentary.prepareForSizeChange()
     }
 
-    func restoreAfterSizeChange() {
-        bible.restoreAfterSizeChange()
-        commentary.restoreAfterSizeChange()
+    func restoreAfterSizeChange(widthChanged: Bool) {
+        bible.restoreAfterSizeChange(widthChanged: widthChanged)
+        commentary.restoreAfterSizeChange(widthChanged: widthChanged)
     }
 }

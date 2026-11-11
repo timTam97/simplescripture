@@ -266,6 +266,27 @@ final class PSSearchEngine {
 
     /// Builds the index from scratch. Blocks the calling thread; expected to run on
     /// a background queue. On cancel or error the partial DB is dropped.
+    ///
+    /// Returning normally MEANS every row is in and committed. Both drivers
+    /// (`SearchIndexCoordinator`, `SearchIndexBackgroundManager`) take a return as
+    /// success whatever their own cancel flag says by then, because a cancel is
+    /// seen only at the 500-row progress poll: one raised after the last poll
+    /// stops nothing. A cancel that IS seen must keep throwing `.cancelled`.
+    ///
+    /// It does NOT mean the index is stamped. The meta row is written after the
+    /// COMMIT, outside the `catch` that drops a partial index, and `stampMeta`
+    /// swallows its own failure: a statement that will not prepare returns
+    /// early, and the step's result is not read. The build then returns over a
+    /// committed index with no meta row, which `indexIsFresh()` rejects, and both
+    /// drivers have counted it a success. The foreground one goes to `.ready`,
+    /// where `runQuery` answers every query with nothing until the next
+    /// activation turns that back into the build prompt
+    /// (`SearchModel.indexMayHaveChanged`). The background one clears its
+    /// recovery record, so nothing retries, and Search offers the build at its
+    /// next look. Either way the rows are never used: the next build opens with
+    /// `dropIndex()`. It takes a one-row write failing straight after the COMMIT
+    /// of the whole index succeeded on the same connection — an I/O error, or
+    /// the disk filling in that instant.
     func build(progress: PSSearchProgressBlock?) throws {
         // Start fresh: if there's any prior DB, drop it. A half-built index is worse
         // than none.
@@ -375,6 +396,9 @@ final class PSSearchEngine {
     }
 
     /// The meta row. `module_version` is nil-safe because the column is TEXT.
+    ///
+    /// Best effort: a failure here is neither thrown nor logged. `build`'s doc
+    /// comment says what an unstamped index then costs.
     private func stampMeta() {
         let currentVersion = PSContentStore.shared?.moduleVersion(moduleName)
         guard let meta = try? prepare(
@@ -413,6 +437,43 @@ final class PSSearchEngine {
 
     // MARK: - Query
 
+    /// The words of a verse tagged with any of `tokens`, from its `word_map`:
+    /// one line per tagged word or run of words, `surface TAB lemma lemma …`.
+    /// Each distinct surface once, in the verse's order.
+    ///
+    /// **The surface is returned as words, with its markup taken off.** The
+    /// column carries one tag, around the divine name: Genesis 2:4 has `that
+    /// the <divineName>Lord</divineName>` for H3068, where the verse reads
+    /// "that the LORD God made". Handed on as stored, the surface is in no
+    /// verse, tags and all, and the result row had nothing to mark. MEASURED on
+    /// the KJV index (6,878 of 349,514 lines carry the tag): a search for H3068
+    /// listed 5,521 verses and marked a word in one of them; H3069 in none of
+    /// 295. With the tag off, every tagged surface is in its verse except 424
+    /// that are words of a Psalm's title, which the row's text does not hold.
+    ///
+    /// Read-side only. The column is as the store ships it and as the index
+    /// digest pins it.
+    static func surfaceWords(inWordMap map: String,
+                             taggedWith tokens: Set<String>) -> [String] {
+        var words: [String] = []
+        var seen = Set<String>()
+        for line in map.components(separatedBy: "\n") {
+            guard let tab = line.range(of: "\t") else { continue }
+            let lemmaStr = String(line[tab.upperBound...])
+            let surface = String(line[line.startIndex..<tab.lowerBound])
+                .replacingOccurrences(of: "<[^>]*>", with: "",
+                                      options: .regularExpression)
+            if surface.isEmpty || lemmaStr.isEmpty { continue }
+            let hit = lemmaStr.components(separatedBy: " ")
+                .contains { !$0.isEmpty && tokens.contains($0) }
+            if !hit { continue }
+            if seen.contains(surface) { continue }
+            seen.insert(surface)
+            words.append(surface)
+        }
+        return words
+    }
+
     /// Runs a query against an already-built index. Returns an empty array if the
     /// index isn't fresh. The FTS5 expression should be produced by `PSSearchQuery`.
     /// If `strongsTokens` is non-empty, each returned result has its
@@ -421,7 +482,9 @@ final class PSSearchEngine {
     ///
     /// No cancel flag: callers run this off the main thread under a generation
     /// counter and discard superseded results, so cancelling could only save CPU
-    /// on a `LIMIT 1000` query.
+    /// on a query the caller has already bounded. Search asks for one row past
+    /// the 1,000 it lists (`SearchModel.resultLimit`), which is how it knows the
+    /// list was cut.
     func runQuery(_ fts5Expression: String,
                   scope: PSSearchRange,
                   bookName: String?,
@@ -496,20 +559,7 @@ final class PSSearchEngine {
                 let result = PSSearchResult(reference: ref, fullText: Self.text(st, 1))
 
                 if wantWordMap, let map = Self.text(st, 2), !map.isEmpty {
-                    var words: [String] = []
-                    var seen = Set<String>()
-                    for line in map.components(separatedBy: "\n") {
-                        guard let tab = line.range(of: "\t") else { continue }
-                        let surface = String(line[line.startIndex..<tab.lowerBound])
-                        let lemmaStr = String(line[tab.upperBound...])
-                        if surface.isEmpty || lemmaStr.isEmpty { continue }
-                        let hit = lemmaStr.components(separatedBy: " ")
-                            .contains { !$0.isEmpty && tokenSet.contains($0) }
-                        if !hit { continue }
-                        if seen.contains(surface) { continue }
-                        seen.insert(surface)
-                        words.append(surface)
-                    }
+                    let words = Self.surfaceWords(inWordMap: map, taggedWith: tokenSet)
                     if !words.isEmpty { result.strongsHighlightWords = words }
                 }
 

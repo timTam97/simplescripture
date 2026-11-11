@@ -141,4 +141,213 @@ final class URLRouterTests: XCTestCase {
         XCTAssertEqual(dismissedUnder, [.search, .search])
         XCTAssertEqual(session.selectedWorkspace, .read)
     }
+
+    /// What a `sword://` URL persists to `lastRef` has to be a ref the reader can
+    /// resolve, however the link spelled and cased the book.
+    ///
+    /// The book lookup ignores case; `createRefString` does not. It turns "I "
+    /// into "1 " wherever it finds one, so a link written in capitals passed the
+    /// resolvability check as "MALACHI 3" and was then stored as "MALACH1 3",
+    /// which nothing resolves: a blank reader (a trap in Debug) at that launch and
+    /// every later one, until some other navigation overwrote the ref. Seven
+    /// spellings end that way — MALACHI, HAGGAI, PHI and the USFM codes 1KI, 2KI,
+    /// 1TI, 2TI.
+    func testEverySpellingInEveryCasingPersistsARefTheReaderResolves() throws {
+        let router = try router()
+        let resolver = try XCTUnwrap(PSBookOSISResolver.shared)
+
+        // Built the way `openLibraryReference` builds one.
+        func routing(_ reference: String) -> URLRoute? {
+            var components = URLComponents()
+            components.scheme = "sword"
+            components.host = "Bible"
+            components.path = "/" + reference
+            return router.route(for: components.url)
+        }
+
+        let onceCorrupted: [(reference: String, persisted: String)] = [
+            ("MALACHI 3:10", "Malachi 3"),
+            ("HAGGAI 2:4", "Haggai 2"),
+            ("1KI 3", "1 Kings 3"),
+            ("2KI 3", "2 Kings 3"),
+            ("1TI 1", "1 Timothy 1"),
+            ("2TI 1", "2 Timothy 1"),
+            ("PHI 2", "Philippians 2"),
+        ]
+        for (reference, persisted) in onceCorrupted {
+            XCTAssertEqual(routing(reference)?.persistedChapterRef, persisted,
+                           "sword://Bible/\(reference)")
+        }
+
+        var checked = 0
+        func check(_ reference: String) {
+            guard let route = routing(reference) else {
+                XCTFail("'\(reference)' did not route")
+                return
+            }
+            let persisted = route.persistedChapterRef
+            // Against the route's own book, not the loop's: "Jud" and "Phi" are
+            // intentional collisions (Judges, Philippians).
+            let resolved = resolver.resolve(ref: persisted)
+            XCTAssertEqual(resolved?.book.osisName, route.reference.book.osisName,
+                           "'\(reference)' persists '\(persisted)'")
+            XCTAssertEqual(resolved?.chapter, route.reference.chapter,
+                           "'\(reference)' persists '\(persisted)'")
+            // `ReaderPaneModel.render` puts `lastRef` through `createRefString`
+            // again on every render, so what is stored must already be what that
+            // produces.
+            XCTAssertEqual(PSRefHelper.createRefString(persisted), persisted,
+                           "'\(reference)' persists a ref the next render rewrites")
+            checked += 1
+        }
+        for book in resolver.books {
+            let spellings = [book.name, book.longName, book.localisedName, book.osisName,
+                             book.shortName, book.preferredAbbreviation, book.abbreviation]
+            for spelling in spellings where !spelling.isEmpty {
+                for cased in [spelling, spelling.uppercased(), spelling.lowercased()] {
+                    check("\(cased) \(book.chapterCount):1")
+                }
+            }
+            // A bare book has no chapter to keep, so it takes the canonical ref —
+            // which is stored as it is, without the munge.
+            check(book.name)
+        }
+        XCTAssertGreaterThan(checked, 1000)
+
+        // Otherwise the link's own spelling is kept, deliberately: only a ref the
+        // reader cannot resolve is replaced by the canonical one.
+        XCTAssertEqual(routing("Jn 3:16")?.persistedChapterRef, "Jn 3")
+        XCTAssertEqual(routing("I Samuel 3")?.persistedChapterRef, "1 Samuel 3")
+    }
+
+    /// A lexicon is not something a chapter can be read in.
+    ///
+    /// The host of a `sword://` URL names the module to open the reference in, and
+    /// every bundled module that was not a Bible used to be taken for a
+    /// commentary — so `sword://StrongsRealGreek/John+3:16` installed the Greek
+    /// lexicon as the primary commentary and persisted it. A lexicon has no
+    /// chapters: every chapter then read as empty, across relaunches, and there is
+    /// no module picker to put MHCC back with. Such a host is treated like a
+    /// module that is not installed: it is ignored and the reference still opens.
+    func testALexiconHostIsNotLoadedAsAReadingModule() throws {
+        let router = try router()
+
+        for lexicon in BundledModules.lexicons {
+            let route = try XCTUnwrap(router.route(
+                for: URL(string: "sword://\(lexicon)/John+3:16")
+            ))
+            XCTAssertEqual(route.destination, .bible(module: nil), lexicon)
+            XCTAssertEqual(route.persistedChapterRef, "John 3")
+            XCTAssertEqual(route.versePosition, "16")
+        }
+
+        let asCommentary = try XCTUnwrap(router.route(
+            for: URL(string: "sword://StrongsRealGreek/John+3:16?type=commentary")
+        ))
+        XCTAssertEqual(asCommentary.destination, .commentary(module: nil))
+
+        // The two modules that are read in are still loaded by name.
+        let commentary = try XCTUnwrap(router.route(
+            for: URL(string: "sword://MHCC/John+3:16")
+        ))
+        XCTAssertEqual(commentary.destination, .commentary(module: "MHCC"))
+        let bible = try XCTUnwrap(router.route(
+            for: URL(string: "sword://KJV/John+3:16?type=commentary")
+        ))
+        XCTAssertEqual(bible.destination, .bible(module: "KJV"))
+    }
+
+    /// The verse part of a `sword://` URL only ever leaves the router as a verse
+    /// the reader can scroll to.
+    ///
+    /// Only the chapter part goes through `PSRefParser`; the verse is read here.
+    /// "0" and "-5" used to pass straight through to the verse-position key, and
+    /// the reader's verse restore ignores anything below 1 — so the new chapter
+    /// opened wherever the last one had been scrolled to, under a title and a
+    /// history row reading "John 3:0". A verse too large for the `Int32` the
+    /// reader formats a position through went the same way, and that conversion
+    /// traps on overflow.
+    func testAVerseTheReaderCannotScrollToFallsBackToVerseOne() throws {
+        let router = try router()
+        func verse(_ path: String) throws -> String {
+            try XCTUnwrap(
+                router.route(for: URL(string: "sword://KJV/" + path)),
+                path
+            ).versePosition
+        }
+
+        XCTAssertEqual(try verse("John+3:0"), "1")
+        XCTAssertEqual(try verse("John+3:-5"), "1")
+        XCTAssertEqual(try verse("John+3:3000000000"), "1")
+        // A space after the colon is still that verse ("+" is a space too).
+        XCTAssertEqual(try verse("John+3:%2016"), "16")
+        XCTAssertEqual(try verse("John+3:+16"), "16")
+
+        // What already held, and must keep holding.
+        XCTAssertEqual(try verse("John+3:16"), "16")
+        XCTAssertEqual(try verse("John+3:007"), "7")
+        XCTAssertEqual(try verse("Gen.+1:28-30"), "28")
+        XCTAssertEqual(try verse("Genesis%201:1."), "1")
+        XCTAssertEqual(try verse("John+3:abc"), "1")
+        XCTAssertEqual(try verse("John+3:"), "1")
+        // Past the end of the chapter is not a verse the router rewrites — see
+        // `testOutOfRangeVerseStillRoutesToAValidChapter`.
+        XCTAssertEqual(try verse("John+3:99"), "99")
+    }
+
+    /// A bare book opens at its first chapter — the numbered books written without
+    /// a space included ("1John", "1Cor"), which the parser used to take for a
+    /// chapter-and-verse with no book, and decline.
+    func testAnUnspacedNumberedBookOpensAtItsFirstChapter() throws {
+        let router = try router()
+
+        for (path, persisted) in [("1John", "1 John 1"),
+                                  ("1Cor", "1 Corinthians 1"),
+                                  ("3Jn", "3 John 1")] {
+            guard let route = router.route(
+                for: URL(string: "sword://Bible/" + path)
+            ) else {
+                XCTFail("sword://Bible/\(path) did not route")
+                continue
+            }
+            XCTAssertEqual(route.destination, .bible(module: nil))
+            XCTAssertEqual(route.persistedChapterRef, persisted)
+            XCTAssertEqual(route.versePosition, "1")
+        }
+    }
+
+    /// A URL scheme is case-insensitive (RFC 3986 §3.1) and `URL.scheme` returns
+    /// it as written, so `Sword://` has to be compared as `sword://` — it used to
+    /// be dropped, without so much as a log line.
+    func testSchemeMatchingIgnoresCase() throws {
+        let router = try router()
+        let lower = try XCTUnwrap(router.route(
+            for: URL(string: "sword://KJV/John+3:16")
+        ))
+
+        for string in ["Sword://KJV/John+3:16", "SWORD://KJV/John+3:16"] {
+            let url = try XCTUnwrap(URL(string: string))
+            guard let route = router.route(for: url) else {
+                XCTFail("\(string) did not route")
+                continue
+            }
+            // The URL itself is passed on as it arrived.
+            XCTAssertEqual(route.sourceURL, url)
+            XCTAssertEqual(route.destination, lower.destination)
+            XCTAssertEqual(route.reference, lower.reference)
+            XCTAssertEqual(route.persistedChapterRef, lower.persistedChapterRef)
+            XCTAssertEqual(route.versePosition, lower.versePosition)
+        }
+
+        let development = try XCTUnwrap(URLRouter(externalScheme: "sword-dev"))
+        XCTAssertNotNil(development.route(
+            for: URL(string: "Sword-Dev://KJV/John+3:16")
+        ))
+
+        // Still only `sword` and the scheme the bundle registers.
+        let production = try XCTUnwrap(URLRouter(externalScheme: "sword"))
+        XCTAssertNil(production.route(for: URL(string: "sword-dev://KJV/John+3:16")))
+        XCTAssertNil(production.route(for: URL(string: "Sword-Dev://KJV/John+3:16")))
+        XCTAssertNil(production.route(for: URL(string: "https://KJV/John+3:16")))
+    }
 }

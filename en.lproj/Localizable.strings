@@ -258,6 +258,8 @@
 "SearchEmptyPromptMessage" = "Enter a word, phrase, or Strong's number.";
 "SearchModuleButtonLabel" = "Search Module";
 "SearchResultCountFormat" = "%lld Results";
+"SearchResultCountOne" = "1 Result";
+"SearchResultCountTruncatedFormat" = "First %lld Results";
 "SearchCopyVerseButton" = "Copy Verse";
 "On" = "On";
 "Off" = "Off";

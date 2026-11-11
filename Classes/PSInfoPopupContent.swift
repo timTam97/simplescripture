@@ -7,9 +7,10 @@
 //
 //  The lexeme parsing below reflects what the bundled strongsrealgreek /
 //  strongsrealhebrew modules actually render: nested beta-code brackets, the
-//  ~114 Hebrew entries whose inline <sup> vowel survives a tag strip as a
-//  spurious ASCII letter, and numeric character references that must be decoded
-//  before the script can be recognised.
+//  Hebrew entries' superscript letters (a shewa inside 1,414 transliterations,
+//  which belongs to the word; a trailing `o` on 114 lemmas, which does not),
+//  and numeric character references that must be decoded before the script can
+//  be recognised.
 //
 
 import UIKit
@@ -136,8 +137,21 @@ final class PSInfoPopupContent: NSObject {
         //   <a name="4018">4018</a> &#960;&#949;&#961;… [PERIBO/LAION] {perib&#243;laion} \…\ neuter of…
         // Strip tags, decode entities to real Unicode, collapse whitespace,
         // then drop the leading key number the hidden anchor leaves behind.
+        //
+        // One shape is unwrapped first instead of stripped. strongsrealhebrew
+        // writes a superscript letter as `<sup><font size="-1"><i>e</i></font></sup>`
+        // (all 1,723 `<sup>` in the store have exactly this shape), and in 1,414
+        // entries — H3068, H1285, H3063… — it is the vocal shewa in the middle of
+        // the bracketed transliteration. The strip leaves a space where each tag
+        // was, which is right between words and wrong inside one:
+        // `[y<sup>…e…</sup>hôvâh]` reached the popup's header as "y e hôvâh".
+        let unwrapped = rawEntry.replacingOccurrences(
+            of: "<sup><font size=\"-1\"><i>([^<]*)</i></font></sup>",
+            with: "$1",
+            options: .regularExpression
+        )
         let decoded = decodingHTMLEntities(
-            rawEntry.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            unwrapped.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
         )
         .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -150,10 +164,10 @@ final class PSInfoPopupContent: NSObject {
         let candidate = String(body[body.startIndex..<openBracket])
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // ~114 strongsrealhebrew entries (H726/H728/H971/H1208/H1269…) render an
-        // inline <sup> vowel that survives the tag strip as a spurious trailing
-        // ASCII letter, e.g. "אֲרוֹן o". The lemma is script only, so keep just
-        // the leading run up to the first ASCII letter.
+        // 114 strongsrealhebrew entries (H726/H728/H971/H1208/H1269…) end the
+        // lemma in a superscript `o`, which the unwrap above leaves attached to
+        // it as a spurious trailing ASCII letter, e.g. "אֲרוֹןo". The lemma is
+        // script only, so keep just the leading run up to the first ASCII letter.
         let lemma = String(candidate.prefix(while: { !($0.isASCII && $0.isLetter) }))
             .trimmingCharacters(in: .whitespacesAndNewlines)
 

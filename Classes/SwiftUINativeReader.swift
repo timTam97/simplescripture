@@ -28,9 +28,10 @@
 //
 //  ── Prose vs verse-per-line ───────────────────────────────────────────────
 //
-//  With the per-module verse-per-line pref OFF (the default) verses flow
-//  together as prose with superscript numbers inline, breaking at the KJV's
-//  pilcrows. With it ON, each verse is its own row. See `ChapterParagraph`.
+//  With the per-module verse-per-line pref OFF verses flow together as prose
+//  with superscript numbers inline and a space between verses, breaking at the
+//  KJV's pilcrows. With it ON (the default: an absent pref reads as on), each
+//  verse is its own row. See `ChapterParagraph`.
 //
 //  ── Scroll position: identity, not pixels ─────────────────────────────────
 //
@@ -57,17 +58,21 @@ enum ChapterTextRenderer {
         /// `createHTMLString`'s `line-height`: 1.4 on iPhone, 1.6 on iPad.
         var lineSpacingMultiple: CGFloat
 
-        /// The terms to highlight, case-insensitively. Empty for a Strong's search,
+        /// The search terms to highlight, each marked where the query matched it
+        /// (`PSSearchQuery.highlightRanges(of:in:)`). Empty for a Strong's search,
         /// where the match is a lemma rather than text present in the verse.
-        var highlightTerms: [String] = []
+        var highlightTerms: [SearchHighlightTerm] = []
 
         /// Resolve from the same defaults keys the HTML shell used, so a font
         /// chosen in Settings applies identically.
         static func current() -> Style {
             let defaults = UserDefaults.standard
-            var name = (defaults.object(forKey: Defaults.fontNamePreference) as? String)
-                ?? AppConstants.defaultFontName
-            if name.isEmpty { name = AppConstants.defaultFontName }
+            // A saved name the system cannot supply renders as an absent key
+            // renders, in the default face; the stored value is left alone. See
+            // `StudyFonts.resolved`.
+            let name = StudyFonts.resolved(
+                defaults.object(forKey: Defaults.fontNamePreference) as? String
+            )
             let size = defaults.integer(forKey: Defaults.fontSizePreference)
             return Style(
                 fontName: name,
@@ -81,16 +86,48 @@ enum ChapterTextRenderer {
                     : 1.6
             )
         }
+
+        /// `current()`, for a view body that has to follow a Settings change.
+        ///
+        /// `current()` reads `UserDefaults`, which SwiftUI does not track: a body
+        /// that resolves its style that way does not depend on the font, and picks
+        /// up a change only if something else happens to re-run it. The reader is
+        /// told by notification and re-renders. A view that stays up behind
+        /// Settings (an open Library dictionary entry) is told nothing.
+        ///
+        /// **The two reads are the subscription, and they are all this adds.** They
+        /// look unused; drop one and the calling body no longer depends on that
+        /// setting, silently. The values still come from `current()`, so there is
+        /// one resolver, fallbacks included. That is safe because `SettingsModel`
+        /// saves a new value inside its setter, before SwiftUI re-evaluates
+        /// anything.
+        @MainActor
+        static func current(observing settings: SettingsModel) -> Style {
+            _ = settings.fontName
+            _ = settings.fontSize
+            return current()
+        }
     }
 
-    /// The verse number as a superscript label (70% size, body colour).
+    /// The verse number as a superscript label (75% size, semibold, body colour).
     ///
     /// `tappable` carries the verse-menu link. It is false on a commentary:
     /// tapping a commentary verse number has never done anything.
     static func verseLabel(_ number: Int, style: Style,
                            tappable: Bool = false) -> AttributedString {
-        // A trailing hair space so the number never touches the first word.
-        var label = AttributedString("\(number)\u{200A}")
+        // A trailing NARROW NO-BREAK SPACE (U+202F): the number never touches the
+        // first word, and never parts from it either.
+        //
+        // It was a hair space (U+200A), which a line may break after. In flowing
+        // prose that was the only place to break near a verse boundary, so a verse
+        // that began a new line left its number at the end of the line above: 133
+        // of 1,655 numbers over real KJV paragraphs (MEASURED, CoreText). With
+        // U+202F, and the space `flowedPieces` puts between verses to break at
+        // instead, none. A hair space plus a word joiner (U+2060) keeps the old
+        // width exactly but still stranded 2. U+202F is the wider gap: 3.0 pt
+        // against 1.25 pt at the default size, both from a fallback font (Georgia
+        // has neither glyph).
+        var label = AttributedString("\(number)\u{202F}")
         // 0.75 and SEMIBOLD (not 0.7 regular): at 12pt in flowing prose, colour
         // alone does not distinguish a verse number from a grey Strong's marker, and
         // the chapter reads as one run of superscripts. Weight separates them
@@ -115,37 +152,193 @@ enum ChapterTextRenderer {
     static func text(for verse: ChapterVerse, style: Style) -> AttributedString {
         var out = attributed(runs: verse.runs, style: style)
         if let colour = verse.highlightColour,
-           let background = Color(bookmarkRGBAString: colour) {
-            // One background over the whole range — the same visible result as the
-            // HTML's span per block element.
-            out.backgroundColor = background
-            out.foregroundColor = .black
+           let background = Color(bookmarkRGBAString: colour),
+           let last = out.characters.lastIndex(where: { !$0.isWhitespace }) {
+            // One background from the verse's first character to its last visible
+            // one, where the HTML had a span per block element.
+            //
+            // NOT over a trailing space. A verse that ends in Christ's words ends
+            // in the red-letter span's own space (1,865 of the KJV's 2,038 spans
+            // close at the end of their record), and the last verse of every
+            // chapter ends in one of the record's. In flowing prose that space is
+            // the gap before the next verse number — `flowedPieces` adds none
+            // after it — so, painted, it carried the bookmark's colour up to the
+            // number where every other verse's stops at its last word.
+            let painted = out.startIndex..<out.characters.index(after: last)
+            out[painted].backgroundColor = background
+            out[painted].foregroundColor = .black
         }
-        for term in style.highlightTerms where !term.isEmpty {
-            applyHighlight(term, to: &out)
+        let terms = style.highlightTerms.filter { !$0.tokens.isEmpty }
+        if !terms.isEmpty {
+            applyHighlights(terms, over: verse.runs, to: &out)
         }
         return out
     }
 
-    /// Jacket every case-insensitive occurrence of `term` in yellow (black text).
-    private static func applyHighlight(_ term: String, to text: inout AttributedString) {
+    /// A flowing paragraph's verses, one piece per verse: its number, its text, and
+    /// the space between it and the next.
+    ///
+    /// **The space is the engine's.** Its prose branch ended every entry with a
+    /// newline (`<a class="verse">2</a>And the earth…\n`), which a browser showed as
+    /// a space: `the earth. ²And the earth`. Joined with nothing between them, the
+    /// verses read `the earth.²And`.
+    ///
+    /// The space is appended to the verse it follows, where the engine had it, and
+    /// only after `text(for:style:)` has returned, so no bookmark colour and no
+    /// search jacket covers it. A verse that already ends in a space keeps its own
+    /// instead (the guard below), and `text(for:style:)` leaves a trailing space
+    /// out of the bookmark colour for the same reason. The gap after the number
+    /// does not break (see `verseLabel`), which leaves this space as the one place
+    /// a line can break at a verse boundary: a number goes to the next line with
+    /// its verse.
+    ///
+    /// Here rather than in `ParagraphRow` so the join can be read without a view
+    /// host. Pinned by `testFlowedVersesAreSpacedAndNumbersStayWithTheirVerse`.
+    static func flowedPieces(
+        for paragraph: ChapterParagraph, style: Style, tappable: Bool
+    ) -> [(verse: Int, text: AttributedString)] {
+        var pieces: [(verse: Int, text: AttributedString)] = []
+        for verse in paragraph.verses {
+            var piece = AttributedString()
+            if !verse.isIntro {
+                piece += verseLabel(verse.number, style: style, tappable: tappable)
+            }
+            // The bookmark highlight is applied UNDER the search jacket — see
+            // `text(for:style:)`.
+            piece += text(for: verse, style: style)
+            pieces.append((verse: verse.number, text: piece))
+        }
+        var gap = AttributedString(" ")
+        gap.font = .custom(style.fontName, size: style.fontSize)
+        for index in pieces.indices.dropLast() {
+            // None after a piece with nothing in it (an intro that is only its
+            // heading), and no second one after a piece that already ends in a space
+            // (a verse that ends in Christ's words ends with the span's own).
+            guard let last = pieces[index].text.characters.last,
+                  !last.isWhitespace else { continue }
+            pieces[index].text += gap
+        }
+        return pieces
+    }
+
+    /// A verse's words as the search highlight reads them: every run that is
+    /// not a marker, joined with NOTHING between — and, for mapping a match
+    /// back, each stretch's span in the words with where it starts in the
+    /// rendered text (`attributed(runs:)`), all counted in unicode scalars.
+    ///
+    /// Nothing between, because a word can be two runs: "LORD" is a capital and
+    /// three small ones. And no marker, because a marker's text is no word of
+    /// the verse. The search matched the words of the store's plain text, and
+    /// these cut into the same words for every verse of the Bible
+    /// (`testTheReadersWordsAreTheWordsTheSearchMatched` reads `words` here).
+    static func searchableWords(of runs: [InlineRun]) -> (
+        words: String,
+        stretches: [(inWords: Range<Int>, inText: Int)],
+        renderedCount: Int
+    ) {
+        var words = ""
+        var stretches: [(inWords: Range<Int>, inText: Int)] = []
+        var wordsCount = 0
+        var textCount = 0
+        for run in runs where !run.text.isEmpty {
+            let count = run.text.unicodeScalars.count
+            if !run.isMarker {
+                words += run.text
+                stretches.append((inWords: wordsCount..<(wordsCount + count),
+                                  inText: textCount))
+                wordsCount += count
+            }
+            textCount += count
+        }
+        return (words, stretches, textCount)
+    }
+
+    /// Jacket each term in yellow (black text) wherever the query matched it.
+    ///
+    /// **Where that is, is not decided here.** `PSSearchQuery.highlightRanges`
+    /// says, for the result row and for this alike: a term is the whole words
+    /// the index holds for it, so `the` is not marked inside "there", and a
+    /// word Fuzzy ran as a prefix is marked over every word that begins with it.
+    /// A row and the chapter it opens mark the same words because they ask the
+    /// same function.
+    ///
+    /// **The terms are matched against the verse's WORDS — its runs with the
+    /// Strong's, morph and footnote markers left out — not against the rendered
+    /// string.** The words are what the search matched and what its result row
+    /// highlights. In the rendered string a marker follows nearly every word once
+    /// Strong's is on (`beginning<07225> God`), so an exact phrase was never found
+    /// there and the chapter opened with nothing highlighted; and a term could be
+    /// found inside a marker's own text (`prep` in `(PREP)`).
+    ///
+    /// Each match is mapped back onto `text` one stretch of words at a time, so a
+    /// marker inside a matched phrase is left as it was.
+    ///
+    /// `text` must be `attributed(runs:)` of the same runs, and the walk below
+    /// MIRRORS it: one stretch of `run.text` per non-empty run, in order. Positions
+    /// are counted in unicode scalars, because joining two runs can merge the
+    /// Characters either side of the join but never the scalars. They become
+    /// indices only at the point of use, so none is carried across a jacket: each
+    /// jacket mutates the string, and an `AttributedString.Index` taken before a
+    /// mutation is not promised to be valid after it.
+    private static func applyHighlights(_ terms: [SearchHighlightTerm],
+                                        over runs: [InlineRun],
+                                        to text: inout AttributedString) {
+        let (words, stretches, textCount) = searchableWords(of: runs)
+        // Out of step with `attributed(runs:)`, a jacket would land on the wrong
+        // letters or run off the end. No highlight is the better failure.
+        guard textCount == text.unicodeScalars.count else {
+            assertionFailure("applyHighlights is out of step with attributed(runs:)")
+            return
+        }
+
         let jacket = AttributeContainer()
             .backgroundColor(.yellow)
             .foregroundColor(.black)
-        var searchRange = text.startIndex..<text.endIndex
-        while let found = text[searchRange].range(of: term,
-                                                  options: .caseInsensitive) {
-            text[found].mergeAttributes(jacket)
-            guard found.upperBound < text.endIndex else { break }
-            searchRange = found.upperBound..<text.endIndex
+        let scalars = words.unicodeScalars
+        // The ranges come in reading order, so each one's place is counted on
+        // from the one before and not from the start of the verse again.
+        var counted = scalars.startIndex
+        var lower = 0
+        for found in PSSearchQuery.highlightRanges(of: terms, in: words) {
+            lower += scalars.distance(from: counted, to: found.lowerBound)
+            counted = found.lowerBound
+            let upper = lower + scalars.distance(from: found.lowerBound,
+                                                 to: found.upperBound)
+            for stretch in stretches
+            where stretch.inWords.lowerBound < upper
+                && stretch.inWords.upperBound > lower {
+                // The part of the match inside this stretch, moved from its
+                // place in the words to its place in the text.
+                let first = max(lower, stretch.inWords.lowerBound)
+                let last = min(upper, stretch.inWords.upperBound)
+                let start = text.index(
+                    text.startIndex,
+                    offsetByUnicodeScalars:
+                        stretch.inText + first - stretch.inWords.lowerBound
+                )
+                let end = text.index(start, offsetByUnicodeScalars: last - first)
+                text[start..<end].mergeAttributes(jacket)
+            }
         }
     }
 
     /// A heading's text — `<p><b>` in the HTML.
+    ///
+    /// Bold PER RUN, not one bold font over the finished string. A font set on the
+    /// whole string replaces each run's own: a Strong's or morph marker keeps its
+    /// grey and its raise but is drawn at the title's size (`A Psalm<04210> of
+    /// David<01732>` in full-size numbers), and the translators' supplied words
+    /// lose their italic. The HTML had the same anchors inside its `<b>`, as 70%
+    /// superscripts.
+    ///
+    /// All the heading text in the corpus already arrives bold from its title token;
+    /// inserting it here is what stops a heading depending on that.
     static func text(for heading: ChapterHeading, style: Style) -> AttributedString {
-        var out = attributed(runs: heading.runs, style: style)
-        out.font = .custom(style.fontName, size: style.fontSize).bold()
-        return out
+        attributed(runs: heading.runs.map { run in
+            var run = run
+            run.style.insert(.bold)
+            return run
+        }, style: style)
     }
 
     /// Map runs to an `AttributedString`, carrying links as `AttributeContainer`
@@ -392,6 +585,35 @@ private extension View {
             )
         }
     }
+
+    /// Routes taps on the links in this view's text to the pane.
+    ///
+    /// Links reach the string as `pslink://` URLs and are turned back into typed
+    /// `InlineLink`s here. An `openURL` environment override is used rather than
+    /// `onOpenURL`: the latter is for URLs from outside the app, and would send a
+    /// Strong's tap out through `AppSession`'s `sword://` router.
+    ///
+    /// **On EVERY `Text` that can carry a link, a heading's included.** A Psalm
+    /// title has Strong's and morph markers of its own (116 of the KJV's 138
+    /// canonical headings carry a Strong's token), and its row is a sibling of the
+    /// verse text, not inside it — an override on the verse text does not reach
+    /// it. Without this the title's markers are drawn like the ones in the verse
+    /// below and a tap on one goes to the system, which has nothing registered
+    /// for `pslink://`: nothing happens.
+    ///
+    /// `.handled` is claimed only for a link the pane takes. Anything else is left
+    /// to the system; a `.handled` with no handler behind it swallows the tap.
+    func routesChapterLinks(to pane: ReaderPaneModel) -> some View {
+        environment(\.openURL, OpenURLAction { url in
+            guard let link = InlineLink(url: url) else {
+                // Not one of ours — let the system have it. MHCC's own
+                // `sword://` scripture links arrive here.
+                return .systemAction
+            }
+            pane.handle(link: link)
+            return .handled
+        })
+    }
 }
 
 struct VerseTextAttribute: TextAttribute {
@@ -440,7 +662,11 @@ final class VerseLayoutStore: @unchecked Sendable {
     }
 }
 
-private struct VerseTrackingTextRenderer: TextRenderer {
+/// Draws the text unchanged and records where each verse's runs were laid out, for
+/// `VerseLayoutStore.verse(at:)` to answer with an offset from the top of the text.
+///
+/// Internal rather than private so the unit tests can render through it.
+struct VerseTrackingTextRenderer: TextRenderer {
     let layoutStore: VerseLayoutStore?
 
     var animatableData: EmptyAnimatableData {
@@ -448,20 +674,44 @@ private struct VerseTrackingTextRenderer: TextRenderer {
         set {}
     }
 
+    /// A fragment is its run's horizontal extent and its LINE's vertical extent,
+    /// with nothing added to either. Both halves are measured (iOS 27.2), and they
+    /// go together:
+    ///
+    /// - **Typographic bounds are already relative to the text view**, a run's and a
+    ///   line's alike. With `line.origin` (the line's baseline) added on top, every
+    ///   fragment sat at about twice its real y: the verse reported was the one half
+    ///   as far into the paragraph, and none in its second half was ever reported.
+    /// - **Every fragment on a line shares the line's extent**, so the store's
+    ///   `order` tie-break returns the first verse on the topmost line. A verse
+    ///   label is raised, and its own bounds start about 2 pt above the body text
+    ///   beside it. At the runs' own heights, on a line holding the tail of verse
+    ///   N-1 and the start of verse N, the gap above the line read N (the label's
+    ///   bounds are the first below it) and the line itself read N-1 again: the
+    ///   title stepped backwards once per verse boundary. Correcting the position
+    ///   alone doubles those steps (11 against 5 over twelve verses), because the
+    ///   whole table is then in reach.
+    ///
+    /// Pinned by `testVerseTrackingRendererRecordsFragmentsInTextViewCoordinates`
+    /// and `testFlowingVerseTrackerNeverStepsBackwards`.
     func draw(layout: Text.Layout, in context: inout GraphicsContext) {
         var fragments: [VerseLayoutFragment] = []
         var order = 0
 
         for line in layout {
+            let lineBounds = line.typographicBounds.rect
             for run in line {
                 if let verse = run[VerseTextAttribute.self]?.verse {
-                    var rect = run.typographicBounds.rect
-                    rect.origin.x += line.origin.x
-                    rect.origin.y += line.origin.y
+                    let runBounds = run.typographicBounds.rect
                     fragments.append(
                         VerseLayoutFragment(
                             verse: verse,
-                            rect: rect,
+                            rect: CGRect(
+                                x: runBounds.minX,
+                                y: lineBounds.minY,
+                                width: runBounds.width,
+                                height: lineBounds.height
+                            ),
                             order: order
                         )
                     )
@@ -487,42 +737,43 @@ private struct ParagraphRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(paragraph.headings.enumerated()), id: \.offset) { _, heading in
-                HeadingRow(heading: heading, style: style)
+                HeadingRow(heading: heading, pane: pane, style: style)
             }
-            ChapterRunsText(
-                text: flowed,
-                pane: pane,
-                style: style,
-                verseLayoutStore: verseLayoutStore
-            )
-                .tracksTopmostVerse(
-                    fallbackVerse: paragraph.verses.first?.number ?? 1,
-                    layoutStore: verseLayoutStore,
+            // A paragraph can be the intro alone, with its title hoisted into the
+            // heading above and no text left: 117 psalms open `PSALM n.` and then
+            // break at verse 1's own title. That row is its heading. An empty `Text`
+            // under it would still take a line, and the padding below it.
+            if paragraph.verses.contains(where: { !$0.isIntro || $0.hasVisibleText }) {
+                ChapterRunsText(
+                    text: flowed,
                     pane: pane,
-                    surface: surface
+                    style: style,
+                    verseLayoutStore: verseLayoutStore
                 )
-                .padding(.bottom, style.fontSize * 0.55)
+                    .tracksTopmostVerse(
+                        fallbackVerse: paragraph.verses.first?.number ?? 1,
+                        layoutStore: verseLayoutStore,
+                        pane: pane,
+                        surface: surface
+                    )
+                    .padding(.bottom, style.fontSize * 0.55)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The verses of this paragraph, run together with their superscript numbers.
+    ///
+    /// What each verse contributes, and the space between two of them, is the
+    /// renderer's: `ChapterTextRenderer.flowedPieces`. This tags each piece with
+    /// its verse, for `VerseTrackingTextRenderer` to find it by.
     private var flowed: Text {
         var out = Text("")
-        for verse in paragraph.verses {
-            var attributed = AttributedString()
-            if !verse.isIntro {
-                attributed += ChapterTextRenderer.verseLabel(
-                    verse.number,
-                    style: style,
-                    tappable: pane.mode == .bible
-                )
-            }
-            // The bookmark highlight is applied by the renderer, UNDER the search
-            // jacket — see `ChapterTextRenderer.text(for:style:)`.
-            attributed += ChapterTextRenderer.text(for: verse, style: style)
-            let verseText = Text(attributed).customAttribute(
-                VerseTextAttribute(verse: verse.number)
+        for piece in ChapterTextRenderer.flowedPieces(
+            for: paragraph, style: style, tappable: pane.mode == .bible
+        ) {
+            let verseText = Text(piece.text).customAttribute(
+                VerseTextAttribute(verse: piece.verse)
             )
             out = Text("\(out)\(verseText)")
         }
@@ -539,10 +790,16 @@ private struct VerseRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(verse.headings.enumerated()), id: \.offset) { _, heading in
-                HeadingRow(heading: heading, style: style)
+                HeadingRow(heading: heading, pane: pane, style: style)
             }
-            ChapterRunsText(text: Text(labelled), pane: pane, style: style)
-                .padding(.bottom, style.fontSize * 0.35)
+            // The intro has no label, and none of its own text once its title has
+            // been hoisted into the heading above (`CHAPTER n.`, with Headings on).
+            // That row is its heading. An empty `Text` under it would still take a
+            // line, and the padding below it.
+            if !verse.isIntro || verse.hasVisibleText {
+                ChapterRunsText(text: Text(labelled), pane: pane, style: style)
+                    .padding(.bottom, style.fontSize * 0.35)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -562,8 +819,13 @@ private struct VerseRow: View {
     }
 }
 
+/// A heading above a verse or a paragraph: a chapter title, or a Psalm's own.
+///
+/// Takes the pane for its links alone (`routesChapterLinks(to:)`): a Psalm
+/// title's Strong's and morph markers are as tappable as the verse's.
 private struct HeadingRow: View {
     let heading: ChapterHeading
+    let pane: ReaderPaneModel
     let style: ChapterTextRenderer.Style
 
     var body: some View {
@@ -572,15 +834,12 @@ private struct HeadingRow: View {
             .padding(.top, style.fontSize * 0.7)
             .padding(.bottom, style.fontSize * 0.3)
             .accessibilityAddTraits(.isHeader)
+            .routesChapterLinks(to: pane)
     }
 }
 
-/// A `Text` that routes taps on its links.
-///
-/// Links reach the string as `pslink://` URLs and are turned back into typed
-/// `InlineLink`s here. An `openURL` environment override is used rather than
-/// `onOpenURL`: the latter is for URLs from outside the app, and would send a
-/// Strong's tap out through `AppSession`'s `sword://` router.
+/// The verse text of a row, with its links routed to the pane
+/// (`routesChapterLinks(to:)`).
 private struct ChapterRunsText: View {
     let text: Text
     let pane: ReaderPaneModel
@@ -595,15 +854,7 @@ private struct ChapterRunsText: View {
             )
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .environment(\.openURL, OpenURLAction { url in
-                guard let link = InlineLink(url: url) else {
-                    // Not one of ours — let the system have it. MHCC's own
-                    // `sword://` scripture links arrive here.
-                    return .systemAction
-                }
-                pane.handle(link: link)
-                return .handled
-            })
+            .routesChapterLinks(to: pane)
     }
 }
 
@@ -623,6 +874,11 @@ struct EntryTextView: View {
     /// Typography, resolved from the same two GLOBAL font preferences the chapter
     /// reader uses (`ChapterTextRenderer.Style.current()`), so footnotes and
     /// definitions follow the Settings size.
+    ///
+    /// The default is resolved when the PARENT's body builds this view, and a
+    /// `UserDefaults` read subscribes that body to nothing. A parent that can
+    /// stay on screen across a Settings change must pass
+    /// `.current(observing:)` instead, as `DictionaryEntryView` does.
     var style: ChapterTextRenderer.Style = .current()
     /// Whether the body renders in the SYSTEM face instead of the user's font.
     /// Footnotes, morph entries and the Dictionary use the user's font; the

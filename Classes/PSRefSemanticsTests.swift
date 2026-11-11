@@ -182,6 +182,173 @@ final class PSRefSemanticsTests: XCTestCase {
 
     // MARK: - Fast tier: the table itself
 
+    /// What one table comparison covered and what it found. The comparisons return
+    /// their findings instead of asserting them, so that
+    /// `testTableComparisonCatchesAChangedVerseMaximum` can run the same code over
+    /// an altered table and count what it reports.
+    private typealias TableComparison = (compared: Int, mismatches: [String])
+
+    /// A verse maximum for a mismatch line. nil is a chapter that side does not have.
+    private static func verseCount(_ value: Int?) -> String {
+        value.map { "\($0)" } ?? "none"
+    }
+
+    /// The table's books against the oracle's on the members the app consumes:
+    /// `name`, `shortName`, `osisName`, the chapter count and chapter 1's verse
+    /// maximum. One line per member that differs. Books are paired by array index,
+    /// so a table in a different order differs too.
+    private func bookMemberMismatches(_ resolver: PSBookOSISResolver,
+                                      _ books: [OracleBook]) -> TableComparison {
+        var compared = 0
+        var mismatches: [String] = []
+        for (i, oracleBook) in books.enumerated() {
+            guard let ours = resolver.book(at: i) else {
+                mismatches.append("index \(i): no table entry")
+                continue
+            }
+            // The oracle's `name` is SwordBook's munge of the localised long name;
+            // the table's `name` is the same munge applied at bake time.
+            if ours.name != oracleBook.name {
+                mismatches.append("index \(i): name '\(ours.name)', the oracle has '\(oracleBook.name)'")
+            }
+            if ours.shortName != oracleBook.shortName {
+                mismatches.append("index \(i) (\(ours.name)): shortName '\(ours.shortName)',"
+                                  + " the oracle has '\(oracleBook.shortName)'")
+            }
+            if ours.osisName != oracleBook.osisName {
+                mismatches.append("index \(i) (\(ours.name)): osisName '\(ours.osisName)',"
+                                  + " the oracle has '\(oracleBook.osisName)'")
+            }
+            if ours.chapterCount != oracleBook.chapters {
+                mismatches.append("index \(i) (\(ours.name)): \(ours.chapterCount) chapters,"
+                                  + " the oracle has \(oracleBook.chapters)")
+            }
+            // The verse maxima are member 5: covered per chapter by
+            // `verseMaximaMismatches`, and spot-checked here at chapter 1 so this
+            // comparison fails on all five.
+            let mine = resolver.verseMax(book: ours, chapter: 1)
+            let theirs = oracleBook.verseMax.first
+            if mine != theirs {
+                mismatches.append("index \(i) (\(ours.name)): chapter 1 has \(Self.verseCount(mine)) verses,"
+                                  + " the oracle has \(Self.verseCount(theirs))")
+            }
+            compared += 1
+        }
+        return (compared, mismatches)
+    }
+
+    /// Every chapter's verse maximum against the oracle's, one line per chapter
+    /// that differs. Walks the longer of the two books, so a chapter only one side
+    /// has is reported rather than skipped.
+    private func verseMaximaMismatches(_ resolver: PSBookOSISResolver,
+                                       _ books: [OracleBook]) -> TableComparison {
+        var compared = 0
+        var mismatches: [String] = []
+        for (i, oracleBook) in books.enumerated() {
+            guard let ours = resolver.book(at: i) else {
+                mismatches.append("index \(i): no table entry")
+                continue
+            }
+            for chapter in 1...max(ours.chapterCount, oracleBook.verseMax.count) {
+                let mine = resolver.verseMax(book: ours, chapter: chapter)
+                let theirs = chapter <= oracleBook.verseMax.count ? oracleBook.verseMax[chapter - 1] : nil
+                if mine != theirs {
+                    mismatches.append("\(ours.name) \(chapter): \(Self.verseCount(mine)) verses,"
+                                      + " the oracle has \(Self.verseCount(theirs))")
+                }
+                compared += 1
+            }
+        }
+        return (compared, mismatches)
+    }
+
+    /// 66 books x the 5 members the app actually consumes, **including array
+    /// order**. Order matters: `nextChapter`/`previousChapter` roll over by index,
+    /// and the ref selector's section index is positional.
+    ///
+    /// The transitions test below cannot stand in for this one. A transition is
+    /// built from the names and the chapter counts alone, so a wrong `shortName`
+    /// or verse maximum passes all 2,376 of them.
+    func testTableMatchesTheCommittedFixtureOnAllFiveMembers() throws {
+        let resolver = try resolver()
+        let books = try oracle().books
+
+        XCTAssertEqual(resolver.books.count, 66)
+
+        let (compared, mismatches) = bookMemberMismatches(resolver, books)
+        XCTAssertTrue(mismatches.isEmpty,
+                      "the table differs from the oracle in \(mismatches.count) member(s): \(mismatches.prefix(5))")
+        print("[refsem/fast] books compared on 5 members: \(compared)")
+        XCTAssertEqual(compared, 66)
+    }
+
+    /// All 1,189 chapters' verse maxima, and the two out-of-range directions.
+    ///
+    /// The maxima are consumed directly: `PSRefParser`'s verse bound, the verse
+    /// `setToPreviousChapter` lands on, and the ref picker's verse list.
+    func testAllVerseMaximaMatchTheCommittedFixture() throws {
+        let resolver = try resolver()
+        let books = try oracle().books
+
+        for (i, oracleBook) in books.enumerated() {
+            XCTAssertEqual(oracleBook.verseMax.count, oracleBook.chapters,
+                           "\(oracleBook.name): the oracle's verseMax length disagrees with its chapter count")
+            guard let ours = resolver.book(at: i) else { continue }
+            // Out of range in both directions. SWORD returned -1 there
+            // (versificationmgr.cpp Book::getVerseMax) and we return nil. The
+            // fixture holds no out-of-range row, so only our side is assertable.
+            XCTAssertNil(resolver.verseMax(book: ours, chapter: 0))
+            XCTAssertNil(resolver.verseMax(book: ours, chapter: ours.chapterCount + 1))
+        }
+
+        let (compared, mismatches) = verseMaximaMismatches(resolver, books)
+        XCTAssertTrue(mismatches.isEmpty,
+                      "\(mismatches.count) verse maxima differ from the oracle: \(mismatches.prefix(5))")
+        print("[refsem/fast] verse maxima compared: \(compared)")
+        XCTAssertEqual(compared, 1189, "the KJV versification is 1,189 chapters")
+        // Sum check, independent of the loop: 31,102 verses.
+        let sum = resolver.books.reduce(0) { $0 + $1.verseMax.reduce(0, +) }
+        XCTAssertEqual(sum, 31102, "total verse count changed")
+    }
+
+    /// The negative control for the two comparisons above. A copy of the bundled
+    /// table that gives Genesis 1 thirty verses instead of 31 still loads and
+    /// still has 66 books and 1,189 chapters, so only a comparison of the maxima
+    /// themselves can tell it from the real one. Each comparison must report it,
+    /// once.
+    func testTableComparisonCatchesAChangedVerseMaximum() throws {
+        let books = try oracle().books
+
+        let bundled = try XCTUnwrap(Bundle.main.url(forResource: "Versification-KJV", withExtension: "json"))
+        let json = try JSONSerialization.jsonObject(with: Data(contentsOf: bundled))
+        var root = try XCTUnwrap(json as? [String: Any])
+        var tableBooks = try XCTUnwrap(root["books"] as? [[String: Any]])
+        var maxima = try XCTUnwrap(tableBooks.first?["verseMax"] as? [Int])
+        XCTAssertEqual(tableBooks[0]["name"] as? String, "Genesis")
+        XCTAssertEqual(maxima.first, 31, "Genesis 1 has 31 verses")
+        maxima[0] = 30
+        tableBooks[0]["verseMax"] = maxima
+        root["books"] = tableBooks
+
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("psvers-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let copy = dir.appendingPathComponent("Versification-KJV.json")
+        try JSONSerialization.data(withJSONObject: root).write(to: copy)
+        let altered = try XCTUnwrap(PSBookOSISResolver(url: copy, reportFailures: false),
+                                    "the altered table must still load")
+
+        let perChapter = verseMaximaMismatches(altered, books)
+        XCTAssertEqual(perChapter.compared, 1189)
+        XCTAssertEqual(perChapter.mismatches, ["Genesis 1: 30 verses, the oracle has 31"])
+
+        // Genesis 1 is a chapter 1, so the member comparison's spot check sees it too.
+        let members = bookMemberMismatches(altered, books)
+        XCTAssertEqual(members.compared, 66)
+        XCTAssertEqual(members.mismatches,
+                       ["index 0 (Genesis): chapter 1 has 30 verses, the oracle has 31"])
+    }
 
 
     // MARK: - Fast tier: chapter navigation (the 2,376 transitions)
@@ -365,10 +532,14 @@ final class PSRefSemanticsTests: XCTestCase {
     /// parser's canonical form rather than persist the unrenderable "Gen. 1".
     ///
     /// Asserted over every spelling of every book in all three shapes the parser
-    /// accepts, reproducing `AppSession.open(_:)`'s choice of what to write.
+    /// accepts, through `URLRouter.route(for:)` itself. This test used to carry its
+    /// own copy of the router's choice of what to write, and the copy left out the
+    /// `createRefString` step the router finishes with — the step that turned a
+    /// resolvable "MALACHI 3" into "MALACH1 3". `URLRouterTests` sweeps the casings.
     func testEveryParseableRefPersistsSomethingTheReaderCanResolve() throws {
         let resolver = try resolver()
         let parser = try parser()
+        guard let router = URLRouter() else { throw XCTSkip("no router") }
 
         var checked = 0, fellBackToCanonical = 0
         for book in resolver.books {
@@ -379,17 +550,23 @@ final class PSRefSemanticsTests: XCTestCase {
                                   spelling + ".",
                                   spelling.replacingOccurrences(of: " ", with: "")] {
                     let asGiven = "\(candidate) 1"
-                    guard let parsed = parser.parse(asGiven) else { continue }
+                    guard parser.parse(asGiven) != nil else { continue }
                     checked += 1
 
-                    // `AppSession.open(_:)`'s rule, verbatim.
-                    let resolvesAsGiven = parsed.hadExplicitChapter
-                        && resolver.resolve(ref: asGiven) != nil
-                    let persisted = resolvesAsGiven ? asGiven : parsed.chapterRef
-                    if !resolvesAsGiven { fellBackToCanonical += 1 }
+                    // The URL `openLibraryReference` would build for it.
+                    var components = URLComponents()
+                    components.scheme = "sword"
+                    components.host = "Bible"
+                    components.path = "/\(asGiven)"
+                    guard let persisted = router.route(for: components.url)?.persistedChapterRef else {
+                        XCTFail("'\(asGiven)' parses but does not route")
+                        return
+                    }
+                    // The spelling as given is kept only where the reader resolves it.
+                    if persisted != PSRefHelper.createRefString(asGiven) { fellBackToCanonical += 1 }
 
                     XCTAssertNotNil(resolver.resolve(ref: persisted),
-                                    "'\(asGiven)' would persist '\(persisted)', which the reader cannot resolve")
+                                    "'\(asGiven)' persists '\(persisted)', which the reader cannot resolve")
                     guard resolver.resolve(ref: persisted) != nil else { return }
                 }
             }
@@ -510,6 +687,66 @@ final class PSRefSemanticsTests: XCTestCase {
         }
         print("[refsem/fast] book spellings resolved: \(resolved)")
         XCTAssertGreaterThan(resolved, 300)
+    }
+
+    /// Every book also resolves from every spelling **on its own**: the chapter is
+    /// optional in the grammar, and `sword://Bible/Jude` is a documented URL.
+    ///
+    /// The numbered books are the ones at risk. Their unspaced spellings ("1John",
+    /// "1Cor", "2Kgs" — 39 across the 17 books) start with a digit and hold no
+    /// space, which the parser used to read as a chapter-and-verse with no book in
+    /// front of it, and decline.
+    func testParserAcceptsEveryBareBookSpelling() throws {
+        let parser = try parser()
+        let resolver = try resolver()
+        // As in `testParserResolvesAllBooksFromEverySpelling`.
+        let intentionalCollisions: [String: String] = ["Jud": "Judges", "Phi": "Philippians"]
+
+        var accepted = 0
+        var rejected: [String] = []
+        for book in resolver.books {
+            let spellings = [book.name, book.longName, book.localisedName, book.osisName,
+                             book.shortName, book.preferredAbbreviation, book.abbreviation]
+            for spelling in spellings where !spelling.isEmpty {
+                guard let parsed = parser.parse(spelling) else {
+                    if !rejected.contains(spelling) { rejected.append(spelling) }
+                    continue
+                }
+                if let owner = intentionalCollisions[spelling] {
+                    XCTAssertEqual(parsed.book.name, owner,
+                                   "'\(spelling)' is an intentional collision and must keep resolving to \(owner)")
+                } else {
+                    XCTAssertEqual(parsed.book.osisName, book.osisName,
+                                   "bare spelling '\(spelling)' resolved to the wrong book")
+                }
+                XCTAssertFalse(parsed.hadExplicitChapter,
+                               "'\(spelling)' carries no chapter")
+                XCTAssertEqual(parsed.chapter, 1, "bare spelling '\(spelling)'")
+                XCTAssertEqual(parsed.verse, 1, "bare spelling '\(spelling)'")
+                accepted += 1
+            }
+        }
+        print("[refsem/fast] bare book spellings accepted: \(accepted),"
+              + " distinct spellings rejected: \(rejected.count)")
+        XCTAssertEqual(rejected, [], "the parser rejected \(rejected.count) bare book spelling(s)")
+        XCTAssertGreaterThan(accepted, 300)
+
+        // Digits, ":" and "-" alone are still a chapter-and-verse with no book,
+        // which needs a context to mean anything.
+        for input in ["3", "12", "3:16", "3:16-18"] {
+            XCTAssertNil(parser.parse(input), "'\(input)' names no book")
+        }
+        guard let john = resolver.book(named: "John") else { return }
+        XCTAssertEqual(parser.parse("3:16-18", relativeTo: john)?.displayRef, "John 3:16-18")
+        XCTAssertEqual(parser.parse("3", relativeTo: john)?.displayRef, "John 3:1")
+
+        // And a chapter run into the book name stays out of scope: the numbers
+        // start at a space.
+        for input in ["1John3:16", "John3:16", "1John3", "3:16a"] {
+            XCTAssertNil(parser.parse(input), "parser accepted '\(input)' but should not")
+            XCTAssertNil(parser.parse(input, relativeTo: john),
+                         "parser accepted '\(input)' against a context but should not")
+        }
     }
 
     // MARK: - Fast tier: the unreachability proof

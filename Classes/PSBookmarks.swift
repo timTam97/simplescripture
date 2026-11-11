@@ -94,10 +94,34 @@ class PSBookmarks: PSBookmarkFolder {
 
     // MARK: - Lookups
 
+    /// Resolves the `:::`-joined NAME path the bookmark editor's folder picker hands
+    /// to `addBookmark` (`BookmarkFolderPath`), walking down from the root.
+    ///
+    /// Two rules. Each filed bookmarks in the root, silently, when it was looser:
+    ///
+    ///  - **Only nil / "" mean the root.** The root's own title ("Bookmarks") is not
+    ///    compared: a top-level folder may be called that, and its path is then
+    ///    exactly the title. No caller passes the title to mean the root (the picker
+    ///    tags the root row nil), and with no such folder the walk falls back to the
+    ///    root anyway.
+    ///  - **A component matches a FOLDER of that name, never a bookmark.** Folders
+    ///    are appended, so a bookmark described "Prayer" sits before a folder
+    ///    "Prayer" created later; matched by name alone, the bookmark ended the walk
+    ///    without descending, and the rest of the path was looked up in the wrong
+    ///    parent.
+    ///
+    /// Pinned by `testBookmarkFolderPathResolvesToTheFolderItNames`.
+    ///
+    /// It is still a walk by name, so two paths resolve to the root that should not:
+    /// a top-level folder with an EMPTY name has the path "" (`BookmarkStore` refuses
+    /// a blank name, so that is only a folder already on disk), and a folder whose
+    /// name ends in ":" splits in the wrong place once it has a subfolder ("Notes:"
+    /// holding "Kid" is "Notes::::Kid"). Closing those means addressing the folder by
+    /// identity.
     @objc(getBookmarkFolderForFolderString:)
     class func getBookmarkFolder(forFolderString folderString: String?) -> PSBookmarkFolder {
         let bookmarks = PSBookmarks.default()
-        if folderString == nil || folderString == "" || folderString == NSLocalizedString("BookmarksTitle", comment: "") {
+        if folderString == nil || folderString == "" {
             return bookmarks
         }
         let folders = folderString!.components(separatedBy: AppConstants.folderSeparatorString)
@@ -106,10 +130,8 @@ class PSBookmarks: PSBookmarkFolder {
             var foundFolder = false
             let kids = parentFolder.children ?? []
             for kidNumber in 0..<kids.count {
-                if let kid = kids[kidNumber] as? PSBookmarkObject, kid.name == folders[folderCount] {
-                    if let folderKid = kids[kidNumber] as? PSBookmarkFolder {
-                        parentFolder = folderKid
-                    }
+                if let folderKid = kids[kidNumber] as? PSBookmarkFolder, folderKid.name == folders[folderCount] {
+                    parentFolder = folderKid
                     foundFolder = true
                     break
                 }

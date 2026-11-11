@@ -220,9 +220,25 @@ struct ChapterVerse: Identifiable, Equatable, Hashable {
     /// A bookmark highlight colour, as the `rgb(r,g,b)` string
     /// `PSBookmarks.getHighlightRGBColourString` returns. Kept as the persisted
     /// string form rather than a `Color` so the model stays free of SwiftUI.
+    /// Always nil on a commentary: the builder looks it up for a Bible only.
     var highlightColour: String?
     /// The intro slot (`i == 0`) has no verse number and renders without a label.
     var isIntro: Bool { number == 0 }
+
+    /// Whether any run has something to draw.
+    ///
+    /// False for an intro whose title was hoisted into `headings`, which has no
+    /// runs left, and for one that is only whitespace. The row views ask this
+    /// before laying out the text — an empty `Text` still takes a line — and the
+    /// builder asks it before giving a bible intro a row at all.
+    ///
+    /// Computed, so the synthesized `Equatable` and memberwise `init` the parity
+    /// tests build on are untouched.
+    var hasVisibleText: Bool {
+        runs.contains {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
 
     /// Whether this verse OPENS a paragraph.
     ///
@@ -372,7 +388,9 @@ enum PSChapterDocumentBuilder {
 
             // The assembler's leading-whitespace strip, over the expanded text.
             // Deliberate quirk: an entry that is ENTIRELY whitespace is left alone, so
-            // it then fails the isEmpty test and IS emitted.
+            // it then fails the isEmpty test and still counts as an entry. A numbered
+            // slot made of it IS emitted; a bible intro made of it is not given a row
+            // (see the drop rule below).
             stripLeadingWhitespace(&runs)
 
             let thisEntry = runs.map(\.text).joined()
@@ -411,7 +429,12 @@ enum PSChapterDocumentBuilder {
                 verse.headings.append(contentsOf: hoisted)
 
                 verse.runs = runs
-                verse.highlightColour = highlightColour(i)
+                // Bibles only, as in the assembler, whose lookup sits inside its
+                // `case .bible`. A commentary row's number is the loop counter of the
+                // first slot of a verse RANGE (MHCC Genesis 1 has rows 0, 1, 3, 6, …), so
+                // a Bible bookmark on 1:3 would paint the whole "3-5" section and one on
+                // 1:4 nothing.
+                verse.highlightColour = config.kind == .bible ? highlightColour(i) : nil
                 // The KJV's own paragraph marker. All 2,970 sit at the start of a verse's
                 // visible text, so a leading pilcrow is a reliable "new paragraph here".
                 // The glyph itself stays in the text.
@@ -422,11 +445,20 @@ enum PSChapterDocumentBuilder {
                 verse.startsParagraph = config.kind == .commentary
                     || Self.opensParagraph(runs)
 
-                // The assembler drops a bible intro slot whose whole content was a
-                // `<br />`; with no `br` in the corpus that reduces to dropping an
-                // entry that has no text at all.
-                let hasText = runs.contains { !$0.text.isEmpty }
-                if !(i == 0 && config.kind == .bible && !hasText && verse.headings.isEmpty) {
+                // A bible intro with nothing to show is not a row.
+                //
+                // The assembler drops one whose whole content was a `<br />` (none in
+                // the corpus), and emits a whitespace-only one as a space the HTML
+                // collapsed to nothing. That is 1,184 of the KJV's 1,189 chapters with
+                // headings off: slot 0 is `" " + <title>`, and the title token is
+                // skipped. Kept as a row, that space is a `Text(" ")` — a blank line
+                // above verse 1 in the verse-per-line layout (29.7 pt at the default
+                // size) and a leading space in prose.
+                //
+                // Only the row is withheld. `i` and `lastEntry` advance below as for
+                // any slot, so the loop counter and the duplicate test are untouched.
+                if !(i == 0 && config.kind == .bible
+                     && !verse.hasVisibleText && verse.headings.isEmpty) {
                     document.verses.append(verse)
                 }
             }
@@ -461,8 +493,11 @@ enum PSChapterDocumentBuilder {
     ///
     ///  * it removes the whole leading whitespace RUN, not one character;
     ///  * an entry that is *entirely* whitespace is left untouched, so it then
-    ///    fails the empty test and IS emitted — which is why a few chapters carry a
-    ///    blank row. Reproduced deliberately.
+    ///    fails the empty test and still counts as an entry. Reproduced
+    ///    deliberately: a numbered slot made of it keeps its row, as it keeps its
+    ///    `vv` anchor in the HTML. The bible INTRO made of it is the one that gets
+    ///    no row — the engine showed it as a space that collapsed to nothing, in
+    ///    all but five KJV chapters with headings off. See `build`'s drop rule.
     private static func stripLeadingWhitespace(_ runs: inout [InlineRun]) {
         // Nothing to cut back to → leave it exactly as it is.
         guard runs.contains(where: {
@@ -486,10 +521,25 @@ enum PSChapterDocumentBuilder {
     /// Moves title blocks that lead a record into headings, returning them.
     ///
     /// A title token expands to a block in both emitters; keeping it inline would
-    /// render a Psalm's interverse title as bold text mid-paragraph.
+    /// render a chapter's title as bold text run into its first verse.
+    ///
+    /// **"Leads" means after the runs `stripLeadingWhitespace` blanked.** That
+    /// strip empties a leading whitespace run and leaves it in the array, and every
+    /// title in the corpus follows one: all 1,184 are slot 0 of a KJV chapter,
+    /// shaped `" " + <title>`. Tested against `runs.first` alone, this hoisted
+    /// nothing at all.
+    ///
+    /// Also where `.titleMarker` ends: a title that does not lead stays inline,
+    /// bold, and loses the marker here, so none reaches the document.
     private static func hoistLeadingTitles(_ runs: inout [InlineRun]) -> [ChapterHeading] {
         var hoisted: [ChapterHeading] = []
-        while let first = runs.first, first.style.contains(.titleMarker) {
+        while true {
+            // Step over the blanked runs, but only on the way to a title: a verse
+            // with no title keeps exactly the runs it had. A zero-width run that
+            // carries a link (`scripRef`) is content, and is not stepped over.
+            let lead = runs.prefix { $0.text.isEmpty && $0.link == nil }.count
+            guard lead < runs.count, runs[lead].style.contains(.titleMarker) else { break }
+            runs.removeFirst(lead)
             // Collect the run span belonging to this title.
             var titleRuns: [InlineRun] = []
             while let run = runs.first, run.style.contains(.titleMarker) {
@@ -499,6 +549,9 @@ enum PSChapterDocumentBuilder {
                 runs.removeFirst()
             }
             hoisted.append(ChapterHeading(runs: titleRuns, isCanonical: false))
+        }
+        for index in runs.indices {
+            runs[index].style.remove(.titleMarker)
         }
         return hoisted
     }
@@ -628,16 +681,41 @@ enum PSChapterDocumentBuilder {
             case redLetterOpen:
                 guard let inner = runs(from: payload, options: options,
                                         reportFailures: reportFailures) else { return nil }
-                // The HTML carried a literal leading/trailing space inside the
-                // span (`<span class="WordOfChrist"> ` / `</span> `); those are
-                // part of the construct, so they are preserved as text.
-                out.append(InlineRun(text: " ", style: .wordOfChrist))
+                // The HTML carried a literal space after each of the span's tags
+                // (`<span class="WordOfChrist"> ` / `</span> `), and a browser folded
+                // each into any whitespace on the other side of its tag. `Text` folds
+                // nothing, so emitting both wherever the token sits doubled the space
+                // at 611 openings and 153 closings (`said unto him,  Verily`).
+                //
+                // Each is kept only where the record has no whitespace of its own
+                // there. MEASURED over the KJV's 2,038 spans. An opening leads its
+                // record 1,413 times (emitted, then blanked by the strip in `build`),
+                // follows a space 611 times (dropped), and 14 times sits mid-record
+                // straight after a morph marker — the only openings where it is the
+                // sole separator. A close ends its record 1,865 times (kept: the
+                // verse then ends in this space, which `ChapterTextRenderer` keeps a
+                // bookmark's colour off), is followed by a space 153 times (dropped)
+                // and by an untranslated word's Strong's marker 20 times (kept).
+                // Dropping them outright fails parity.
+                let precededBySpace = out.last(where: { !$0.text.isEmpty })?
+                    .text.last?.isWhitespace ?? false
+                if !precededBySpace {
+                    // Also the verse-leading case (`out` is empty), where the strip
+                    // in `build` blanks it, as it always has.
+                    out.append(InlineRun(text: " ", style: .wordOfChrist))
+                }
                 out += inner.map {
                     var run = $0
                     run.style.insert(.wordOfChrist)
                     return run
                 }
-                out.append(InlineRun(text: " ", style: .wordOfChrist))
+                // A literal space or newline, NOT `isWhitespace`: what follows may be
+                // another token's sentinel, and U+000B / U+000C (the title pair) are
+                // whitespace to Swift without putting any in the text.
+                let next: Character? = end + 1 < chars.count ? chars[end + 1] : nil
+                if !(next == " " || next == "\n") {
+                    out.append(InlineRun(text: " ", style: .wordOfChrist))
+                }
             default:
                 PSContentStore.fail("unhandled token", report: reportFailures)
                 return nil

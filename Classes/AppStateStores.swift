@@ -29,8 +29,14 @@ final class SettingsStore {
     func snapshot() -> SettingsSnapshot {
         let savedFontSize = defaults.integer(forKey: Defaults.fontSizePreference)
         return SettingsSnapshot(
-            fontName: defaults.string(forKey: Defaults.fontNamePreference)
-                ?? AppConstants.defaultFontName,
+            // The font in effect, which is not always the one saved: a name the
+            // system cannot supply draws as the default (`StudyFonts.resolved`),
+            // and Settings must name the font the reader is drawing with. Nothing
+            // writes this back; `SettingsModel` saves a font only when the user
+            // picks one.
+            fontName: StudyFonts.resolved(
+                defaults.string(forKey: Defaults.fontNamePreference)
+            ),
             fontSize: savedFontSize == 0
                 ? AppConstants.defaultFontSize
                 : savedFontSize,
@@ -237,7 +243,7 @@ final class BookmarkStore {
         color: BookmarkColor?,
         to parentID: UUID?
     ) throws {
-        guard !name.contains(AppConstants.folderSeparatorString) else {
+        guard Self.isValidFolderName(name) else {
             throw BookmarkMutationError.invalidFolderName
         }
         guard let parent = folder(id: parentID) else {
@@ -289,7 +295,7 @@ final class BookmarkStore {
             throw BookmarkMutationError.missingNode
         }
         if object is PSBookmarkFolder {
-            guard !name.contains(AppConstants.folderSeparatorString) else {
+            guard Self.isValidFolderName(name) else {
                 throw BookmarkMutationError.invalidFolderName
             }
             guard !containsFolder(named: name, excluding: id, in: parent) else {
@@ -302,6 +308,33 @@ final class BookmarkStore {
             object.name = name
         }
         object.dateLastAccessed = Date()
+    }
+
+    /// What a folder may be called: something the reader can see, without the
+    /// separator its path is joined with.
+    ///
+    /// A blank name (empty, or nothing but whitespace) is a folder icon with no
+    /// label and, when a second one is tried beside it, a "duplicate folder" alert
+    /// that names nothing. At the top level its path is "", which
+    /// `PSBookmarks.getBookmarkFolder` reads as the root, so the bookmark editor
+    /// could never file into it.
+    ///
+    /// The name is only TESTED trimmed. It is stored as typed, so nothing changes
+    /// for a name that was accepted before.
+    ///
+    /// The rule lives here, not in a `.disabled` on the two Save buttons: a
+    /// `TextField`'s binding lags the last keystroke until the field commits (the
+    /// XCUITests' `createFolder` measured it), so a button bound to the text would
+    /// refuse a one-character name tapped quickly. Both call sites already present
+    /// the thrown error, and both checks run before anything is mutated, which is
+    /// what `updateFolder` promises.
+    ///
+    /// One consequence: a blank-named folder already on disk cannot be recoloured
+    /// until it is given a name, because `updateFolder` validates the name it is
+    /// handed. Renaming it works.
+    private static func isValidFolderName(_ name: String) -> Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !name.contains(AppConstants.folderSeparatorString)
     }
 
     @discardableResult
@@ -576,9 +609,13 @@ final class DictionaryStore {
             rawDescription = "<span style=\"color:grey;text-align:center;"
                 + "font-style:italic;\">\(module) \(notInstalled)</span>"
         }
-        let body = "<div style=\"-webkit-text-size-adjust: none;\">"
-            + "<b>\(key)</b><br /><p>\(rawDescription)</p>"
-            + "<p>&nbsp;</p><p>&nbsp;</p><p>&nbsp;</p></div>"
+        // The entry as stored, with nothing around it. `PSEntryDocumentBuilder`
+        // drops an entry's own key anchor only when the anchor is the FIRST thing
+        // in its input, so the WebView page's shell (a bold key line in front,
+        // three `&nbsp;` paragraphs behind) made every Strong's entry show its
+        // number twice and end in three hard spaces. The key needs no line of its
+        // own in the body: it is the navigation title directly above.
+        let body = rawDescription
         return DictionaryEntryDocument(
             module: module,
             key: key,
@@ -617,6 +654,7 @@ protocol HistoryCloudStoring: AnyObject {
     func array(forKey defaultName: String) -> [Any]?
     func set(_ value: Any?, forKey defaultName: String)
     func removeObject(forKey defaultName: String)
+    @discardableResult func synchronize() -> Bool
 }
 
 extension NSUbiquitousKeyValueStore: HistoryCloudStoring {}
@@ -712,11 +750,18 @@ final class HistoryStore {
             history = NSMutableArray()
             // Seeding the persistent domain makes the key exist before the first
             // `set`. Kept: `setPersistentDomain` also flushes, and removing it
-            // changes when the file first appears.
-            let bundleId = Bundle.main.bundleIdentifier ?? ""
-            var preferences = defaults.persistentDomain(forName: bundleId) ?? [:]
-            preferences[AppConstants.historyName] = history
-            defaults.setPersistentDomain(preferences, forName: bundleId)
+            // changes when the file first appears. ONLY for the app's own
+            // store: these two calls address the domain by NAME whichever
+            // instance they are made on, so through an injected store they
+            // replaced the app's real `bibleHistory` with an empty array — a
+            // run of the unit tests emptied the history of the install hosting
+            // them. An injected store still gets its key from the `set` below.
+            if defaults === UserDefaults.standard {
+                let bundleId = Bundle.main.bundleIdentifier ?? ""
+                var preferences = defaults.persistentDomain(forName: bundleId) ?? [:]
+                preferences[AppConstants.historyName] = history
+                defaults.setPersistentDomain(preferences, forName: bundleId)
+            }
         } else if let history {
             for index in 0..<history.count {
                 guard let existing = history[index] as? [Any],
@@ -784,6 +829,13 @@ final class HistoryStore {
         ) { [weak self] notification in
             self?.handleExternalCloudChange(notification)
         }
+        // AFTER the observer is in place: this asks for the changes that arrived
+        // while the app was not running, and the system reports them through
+        // the notification above. Without it a launch keeps its stale local
+        // list, and the next `addEntry` writes that list over the entries the
+        // other device made. Returns false with no iCloud entitlement
+        // (Debug/Release), where it does nothing.
+        cloudStore.synchronize()
     }
 
     func stopCloudSync() {

@@ -402,7 +402,34 @@ struct SearchResultRow: Identifiable, Equatable {
 
     let reference: String
     let text: String?
+    /// The words of the verse a Strong's search matched: the ones tagged with
+    /// the number (`PSSearchEngine.runQuery`). Empty for a text search, and for
+    /// a row restored from the saved history.
     let strongsHighlightWords: [String]
+    /// Those words as the row marks them: whole words, like any other term,
+    /// and with no minimum length — `I` is one of them, and marks the word.
+    /// Made here, once, and not in the row's body.
+    let strongsHighlightTerms: [SearchHighlightTerm]
+
+    init(reference: String, text: String?, strongsHighlightWords: [String]) {
+        self.reference = reference
+        self.text = text
+        self.strongsHighlightWords = strongsHighlightWords
+        self.strongsHighlightTerms = strongsHighlightWords
+            .map { SearchHighlightTerm($0) }
+            .filter { !$0.tokens.isEmpty }
+    }
+
+    /// What this row marks: its own Strong's words when it has any, and the
+    /// query's terms otherwise.
+    ///
+    /// By what the row holds, not by the Strong's toggle as it stands. A row a
+    /// Strong's search found holds the words tagged with the number (the query
+    /// matched a lemma and has no terms of its own); a text search's row holds
+    /// none. Here and not in the list's body, so that a test can read it.
+    func highlightTerms(orQuery terms: [SearchHighlightTerm]) -> [SearchHighlightTerm] {
+        strongsHighlightTerms.isEmpty ? terms : strongsHighlightTerms
+    }
 }
 
 struct SearchModuleChoice: Identifiable, Equatable {
@@ -480,6 +507,14 @@ final class SearchIndexCoordinator {
         }
     }
 
+    /// Whether any index build is at work in this process right now — including
+    /// a background recovery build (`SearchIndexBackgroundManager`), which goes
+    /// through the same gate and reports nothing here. `isOperationActive` knows
+    /// only this coordinator's own.
+    var isAnyBuildRunning: Bool {
+        buildGate.isHeld
+    }
+
     func refresh(module: String?) {
         guard !isOperationActive else { return }
         guard let module else {
@@ -549,16 +584,28 @@ final class SearchIndexCoordinator {
         self.operationID = nil
         cancellation = nil
 
+        // A build that RETURNED has committed a complete index (and stamped it,
+        // short of the stamp itself failing — see `PSSearchEngine.build`), so
+        // the error decides first; the flag only tells a cancel from a failure.
+        // The engine sees a cancel at its 500-row progress poll and nowhere
+        // else, and the Cancel button is up for the whole build, so a tap after
+        // the last poll stops nothing. Tested flag-first, that ended
+        // `.cancelled` over a fresh index: no search ran, and the only action
+        // offered was "Build Index", which drops the index and spends ~30 s
+        // rebuilding it. Nothing re-reads freshness until a relaunch or a
+        // module switch.
+        guard let error else {
+            state = .ready
+            onCompletion?(true, false)
+            return
+        }
         if cancelled {
             state = .cancelled
             onCompletion?(false, true)
-        } else if let error {
+        } else {
             alog("SearchIndexCoordinator: build failed: \(error)")
             state = .failed
             onCompletion?(false, false)
-        } else {
-            state = .ready
-            onCompletion?(true, false)
         }
     }
 }
@@ -573,6 +620,14 @@ final class SearchModel {
         _ bookName: String?,
         _ strongsTokens: [String]?
     ) -> [PSSearchResult]
+
+    /// The most verses a search lists. The cap is deliberate and long-standing;
+    /// what the list must not do is pass the cap off as the number of matches
+    /// (see `resultsWereTruncated`).
+    ///
+    /// `nonisolated` because the default `queryOperation` reads it off the main
+    /// actor.
+    nonisolated static let resultLimit = 1000
 
     var query = "" {
         didSet {
@@ -614,11 +669,42 @@ final class SearchModel {
     }
     var bookName: String?
     var results: [SearchResultRow] = []
+    /// The search matched more verses than `results` lists: the list was cut at
+    /// `resultLimit`.
+    ///
+    /// Read by the result list's header, which otherwise gives the cap as the
+    /// count — a wrong number for any common word ("God" is in 3,892 verses),
+    /// with nothing to say that the end of the Bible is missing (rows come in
+    /// canonical order) or that a narrower scope would show it.
+    ///
+    /// It describes the rows in `results`, so whatever replaces them without
+    /// going through `setResults` clears it.
+    private(set) var resultsWereTruncated = false
     private(set) var modules: [SearchModuleChoice] = []
     private(set) var moduleKind: ReadingMode = .bible
     private(set) var strongsAvailable = false
     private(set) var isSearching = false
-    private(set) var highlightTerms: [String] = []
+    /// A search is owed for the text in the field and has not started: the
+    /// debounce is still running.
+    ///
+    /// Read only by the empty state. `isSearching` is raised when the query
+    /// starts, so through the debounce nothing said a search was coming, and with
+    /// no rows on screen the empty state read "No Results for …" about text that
+    /// had not been searched — on every keystroke of a search typed into an empty
+    /// list, and for the debounce after the last one.
+    ///
+    /// Deliberately not folded into `isSearching`: the result list's corner
+    /// spinner reads that, and raised at arming it would spin over the previous
+    /// query's rows on every keystroke.
+    private(set) var isSearchPending = false
+    /// What the rows mark, and what a result carries into the reader: the
+    /// terms of the query last run, as it matched them, with the options it
+    /// ran under.
+    ///
+    /// Set when the query STARTS (`runSearch`), with its rows still to come. In
+    /// between — the length of the query, a frame or so — the rows on screen
+    /// are the previous query's, drawn with these. As before; left alone.
+    private(set) var highlightTerms: [SearchHighlightTerm] = []
 
     @ObservationIgnored private let optionsStore: SearchOptionsStore
     @ObservationIgnored let indexCoordinator: SearchIndexCoordinator
@@ -627,7 +713,23 @@ final class SearchModel {
     @ObservationIgnored private let debounceInterval: TimeInterval
     @ObservationIgnored private let indexBuildStarted: (String) -> Void
     @ObservationIgnored private let indexBuildFinished: (String) -> Void
-    @ObservationIgnored private var debounceTimer: Timer?
+    /// `isSearchPending` is exactly "a debounce timer is armed", and is kept in
+    /// step here rather than at each call site, so that no way out of the wait —
+    /// an emptied field, cleared results, the Search key, the timer firing into
+    /// `runSearch` — can leave it set with no search owed.
+    ///
+    /// Written only on a change, so the `nil` that `runSearch` and `clearResults`
+    /// assign with no timer armed is not a mutation the view has to answer. A
+    /// keystroke clears the timer and re-arms it in one turn of the main thread
+    /// (`scheduleSearch`), so the view never renders the gap between the two.
+    @ObservationIgnored private var debounceTimer: Timer? {
+        didSet {
+            let pending = debounceTimer != nil
+            if isSearchPending != pending {
+                isSearchPending = pending
+            }
+        }
+    }
     @ObservationIgnored private var queryGeneration: UInt = 0
     @ObservationIgnored private var isApplyingInternalInputs = false
     @ObservationIgnored private var currentBookName: String?
@@ -659,7 +761,13 @@ final class SearchModel {
                 expression,
                 scope: range,
                 bookName: bookName,
-                limit: 1000,
+                // One row PAST the cap, on purpose: that row arriving is the
+                // only way `setResults` learns the search matched more than it
+                // lists. Asked for exactly `resultLimit`, the list can never be
+                // marked as cut — and no unit test fails, the header just goes
+                // back to giving the cap as the count. Only the XCUITest
+                // `testSearchHeaderSaysWhenTheListWasCut` sees it (measured).
+                limit: Int32(SearchModel.resultLimit + 1),
                 strongsTokens: strongsTokens
             )
         },
@@ -716,11 +824,33 @@ final class SearchModel {
     ///
     /// Deliberately does NOT read persisted match/fuzzy options: a Strong's lookup
     /// is an exact lemma query, and inheriting a stale "any word" or fuzzy setting
-    /// makes it return the wrong thing. It sets the three options the query needs
-    /// and leaves the rest alone.
+    /// makes it return the wrong thing. It sets what the lookup needs — the query,
+    /// Strong's mode, a module that carries Strong's numbers and the whole-Bible
+    /// scope — and leaves the rest alone.
+    ///
+    /// The module and the scope are the two things Search may NOT keep from its
+    /// last text search: either one turns a number with thousands of occurrences
+    /// into "No Results" (see the notes in the body).
     func startStrongsQuery(_ term: String, currentBookName: String?) {
         let trimmed = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+
+        // Only a module that carries Strong's numbers can answer the lookup, and
+        // Search may be on one that does not. Its module is sticky for the launch:
+        // the commentary if Search first appeared while the reader was on the
+        // commentary, or if it was picked in the menu. Left there, the mode below
+        // came out off and the commentary was searched for the literal text
+        // "H430" — and picking the Bible by hand afterwards did not turn the mode
+        // back on.
+        //
+        // `module != nil`: before `configure(...)` nothing is resolved, and
+        // `configure` prefers the reader's pane — the Bible, the only place this is
+        // offered from. `!isOperationActive` mirrors `selectModule`: the module
+        // must not change under a running index build.
+        if module != nil, !strongsAvailable, !indexCoordinator.isOperationActive,
+           let capable = modules.first(where: { moduleCarriesStrongs($0.id) }) {
+            applyModule(capable, clearExistingResults: true)
+        }
 
         withInternalInputMutation {
             query = trimmed
@@ -735,6 +865,17 @@ final class SearchModel {
             // `applyModule` clears the mode during `configure(...)` before the search
             // runs.
             strongsSearch = module == nil || strongsAvailable
+
+            // "Find ALL occurrences": the whole Bible, whatever scope the last text
+            // search left. The scope is saved across launches, so a saved New
+            // Testament scope listed nothing for a Hebrew number and a saved Book
+            // scope silently listed one book's share.
+            //
+            // Inside this block on purpose. As a model-originated write it moves
+            // the scope on screen without persisting it — the saved scope stays the
+            // one the user chose, until they next change an option — and it does
+            // not schedule a second search of its own.
+            range = .AllRange
         }
 
         self.currentBookName = currentBookName
@@ -744,6 +885,28 @@ final class SearchModel {
         // the coordinator says `.ready`.
         indexCoordinator.refresh(module: module)
         scheduleSearch(immediate: true)
+    }
+
+    /// The reader's book, handed over each time the Search workspace is entered
+    /// (`AppSession.selectedWorkspace`'s setter).
+    ///
+    /// `configure(...)` runs once per launch, so the copy it took is the book that
+    /// was open when Search first appeared. Without this the Book scope kept
+    /// meaning that book for the rest of the launch, however far the reader had
+    /// moved since.
+    ///
+    /// Deliberately runs NO search. The results on screen stay until the next one:
+    /// a re-run here would rebuild the list in the half-second after a tab change,
+    /// on the tab bar's selection animation, and replace results a tab change is
+    /// meant to preserve. The next search — a keystroke, an option, the Search
+    /// key — is scoped to this book.
+    ///
+    /// It also outranks the book a restored history item carried (`restore`):
+    /// that one scoped the results the item came with, and stops being the
+    /// "current book" as soon as Search is entered again.
+    func readerBookDidChange(_ name: String?) {
+        currentBookName = name
+        updateBookName(name)
     }
 
     func selectModule(_ choice: SearchModuleChoice) {
@@ -781,7 +944,10 @@ final class SearchModel {
     }
 
     func setResults(_ rawResults: [PSSearchResult]) {
-        results = rawResults.map {
+        // The query asks for one row past the cap (see the default
+        // `queryOperation`). A row past it is the signal, and is not listed.
+        resultsWereTruncated = rawResults.count > Self.resultLimit
+        results = rawResults.prefix(Self.resultLimit).map {
             SearchResultRow(
                 reference: $0.reference,
                 text: $0.fullText,
@@ -797,6 +963,7 @@ final class SearchModel {
         isSearching = false
         expression = nil
         results = []
+        resultsWereTruncated = false
         highlightTerms = []
     }
 
@@ -822,6 +989,68 @@ final class SearchModel {
         }
         if !indexCoordinator.build(module: module) {
             indexBuildFinished(module)
+        }
+    }
+
+    /// Re-checks the index when the app becomes active (the `.active` arm in
+    /// `SimpleScriptureApp`).
+    ///
+    /// The state is otherwise read once per module selection, and a background
+    /// recovery build (`SearchIndexBackgroundManager`) reports to no one: it can
+    /// finish an interrupted build inside this process while the app is
+    /// suspended. Search then kept showing "No Search Index Installed" over the
+    /// finished index, and its Build button — `PSSearchEngine.build` opens with
+    /// `dropIndex()` — threw that index away and spent tens of seconds building
+    /// it again. A background build that ends while the app is in the background
+    /// is followed by an activation, which finds it here; the manager has no
+    /// callback.
+    ///
+    /// **A build still running AT the activation is not covered.** The look is
+    /// skipped while a build holds the gate (below), and nothing repeats it when
+    /// the build ends. The system expires a background build as the user comes
+    /// back, and one the engine can still stop throws and drops its index, so
+    /// the build prompt is then right. But the engine sees a cancel only at its
+    /// 500-row poll. Past the last one — the final 102 rows of the KJV's 31,102,
+    /// 215 of MHCC's 27,715, then the COMMIT and the stamp — the build cannot be
+    /// stopped and finishes just after the activation that did not look. Search
+    /// then shows "No Search Index Installed" over a fresh index, and Build Index
+    /// there drops and rebuilds it, until the next look: the next activation, a
+    /// module switch, "Find all occurrences" from a Strong's popup
+    /// (`startStrongsQuery`) or a relaunch. Left as it is on purpose. Closing it
+    /// takes a callback from the manager or a thread parked at the gate, for a
+    /// build that must be in its last few hundred rows at the moment the user
+    /// returns, with Search already configured and sitting on the build prompt.
+    ///
+    /// The same look turns an index that has gone missing into the build prompt,
+    /// instead of a `.ready` that answers every query with nothing (`runQuery`
+    /// checks freshness for itself).
+    func indexMayHaveChanged() {
+        // Unconfigured: `configure(...)` looks for itself, and an activation may
+        // arrive before launch preparation has finished, when the engine must
+        // not be touched.
+        guard let module else { return }
+        let before = indexCoordinator.state
+        // Only the two settled answers. A running build owns the state, and a
+        // cancelled / failed message stays up until the user acts on it.
+        guard before == .unavailable || before == .ready else { return }
+        // Not while a build is still at work. Coming back to the app is exactly
+        // when the system expires a background build, so of every caller of
+        // `refresh` this is the one likely to arrive mid-build — and it would ask
+        // the engine, on the main thread, about a connection that build is
+        // writing through and is about to close (`dropIndex`, on the cancel). The
+        // answer is known without asking: a build stamps the index last, so
+        // while one is running there is no fresh index.
+        //
+        // Nothing is scheduled here. If the build does finish — a cancel raised
+        // after its last poll stops nothing — the state stays as it is until the
+        // next look, which for a user who stays on the build prompt is the next
+        // activation (see the doc comment).
+        guard !indexCoordinator.isAnyBuildRunning else { return }
+        indexCoordinator.refresh(module: module)
+        if before != .ready, indexCoordinator.state == .ready {
+            // As when a foreground build completes: run the query left waiting
+            // in the field.
+            scheduleSearch(immediate: true)
         }
     }
 
@@ -854,61 +1083,43 @@ final class SearchModel {
         return item
     }
 
+    /// The terms a query highlights, each with the way the query matched it.
+    ///
+    /// The query builder's own (`PSSearchQuery.highlightTerms(fromUserInput:…)`):
+    /// the list it renders into the MATCH expression, so the two cannot differ.
+    /// This used to be a second reading of the input, kept in step with the
+    /// builder by hand, and every rule it lacked was a search that found its
+    /// verses and marked nothing.
+    ///
+    /// No term is dropped for being short. One-character terms were, when a
+    /// term was looked for anywhere in the text: `a` would have marked every a
+    /// in the verse. A term is a whole word now (`PSSearchQuery.highlightRanges`),
+    /// and kept, the drop would only cost marks: an Any search for `I am`
+    /// finds 6,031 verses, and the 5,220 found on their `I` alone would have
+    /// none (MEASURED on the KJV index).
+    ///
+    /// Empty for a Strong's search: the match is a lemma, not text in the
+    /// verse. The rows mark the verse's tagged words instead.
     static func highlightTerms(
         query: String,
         matchType: PSSearchType,
+        fuzzy: Bool,
         strongs: Bool
-    ) -> [String] {
-        guard !strongs, !query.isEmpty else { return [] }
-        if matchType == .ExactSearch {
-            return query.count >= 2 ? [query] : []
-        }
+    ) -> [SearchHighlightTerm] {
+        PSSearchQuery.highlightTerms(
+            fromUserInput: query,
+            matchType: matchType,
+            fuzzy: fuzzy,
+            strongs: strongs
+        )
+    }
 
-        var terms: [String] = []
-        let characters = Array(query.utf16)
-        var index = 0
-        while index < characters.count {
-            let character = characters[index]
-            if character == 0x20 || character == 0x09 || character == 0x0A {
-                index += 1
-                continue
-            }
-            if character == 0x22 {
-                index += 1
-                let start = index
-                while index < characters.count, characters[index] != 0x22 {
-                    index += 1
-                }
-                let phrase = String(
-                    utf16CodeUnits: Array(characters[start..<index]),
-                    count: index - start
-                )
-                if index < characters.count {
-                    index += 1
-                }
-                if phrase.utf16.count >= 2 {
-                    terms.append(phrase)
-                }
-            } else {
-                let start = index
-                while index < characters.count {
-                    let value = characters[index]
-                    if value == 0x20 || value == 0x09
-                        || value == 0x0A || value == 0x22 {
-                        break
-                    }
-                    index += 1
-                }
-                let word = String(
-                    utf16CodeUnits: Array(characters[start..<index]),
-                    count: index - start
-                )
-                if word.utf16.count >= 2 {
-                    terms.append(word)
-                }
-            }
-        }
-        return terms
+    /// Whether a module carries Strong's numbers, so its index has lemmas for a
+    /// Strong's query to match. Either baked feature name counts; KJV advertises
+    /// both, MHCC neither.
+    private func moduleCarriesStrongs(_ name: String) -> Bool {
+        featureProvider(name, "Strongs")
+            || featureProvider(name, "StrongsNumbers")
     }
 
     private func applyModule(
@@ -917,8 +1128,7 @@ final class SearchModel {
     ) {
         module = choice.id
         moduleKind = choice.kind
-        strongsAvailable = featureProvider(choice.id, "Strongs")
-            || featureProvider(choice.id, "StrongsNumbers")
+        strongsAvailable = moduleCarriesStrongs(choice.id)
         if !strongsAvailable {
             withInternalInputMutation {
                 strongsSearch = false
@@ -958,6 +1168,8 @@ final class SearchModel {
             )
         } ?? []
         results = restoredRows
+        // A saved search holds its rows and no record of whether they were cut.
+        resultsWereTruncated = false
         expression = PSSearchQuery.fts5Expression(
             fromUserInput: query,
             matchType: matchType,
@@ -967,6 +1179,7 @@ final class SearchModel {
         highlightTerms = Self.highlightTerms(
             query: query,
             matchType: matchType,
+            fuzzy: fuzzySearch,
             strongs: strongsSearch
         )
         persistOptions()
@@ -1002,6 +1215,7 @@ final class SearchModel {
             isSearching = false
             expression = nil
             results = []
+            resultsWereTruncated = false
             highlightTerms = []
             onHistoryChange?(nil)
             return
@@ -1015,6 +1229,9 @@ final class SearchModel {
             return
         }
 
+        // A search is owed from here until the timer fires. Arming it raises
+        // `isSearchPending` (see `debounceTimer`), which is what keeps the empty
+        // state from saying "No Results" about text that has not been run.
         debounceTimer = Timer.scheduledTimer(
             withTimeInterval: debounceInterval,
             repeats: false
@@ -1033,9 +1250,10 @@ final class SearchModel {
             return
         }
 
-        // Sticky Strong's mode, cleared when the text stops looking like a lemma
-        // (a plain word searched with the mode on hits the lemmas column and
-        // returns zero rows). A model-originated write, marked as such.
+        // Sticky Strong's mode, cleared when the text stops looking like a lemma:
+        // when no token is a Strong's prefix letter followed by digits, or by
+        // nothing yet (a plain word searched with the mode on hits the lemmas
+        // column and returns zero rows). A model-originated write, marked as such.
         if strongsSearch && !Self.inputLooksLikeStrongs(query) {
             withInternalInputMutation {
                 strongsSearch = false
@@ -1055,6 +1273,7 @@ final class SearchModel {
         highlightTerms = Self.highlightTerms(
             query: query,
             matchType: matchType,
+            fuzzy: fuzzySearch,
             strongs: strongsSearch
         )
         let capturedRange = range
@@ -1087,14 +1306,29 @@ final class SearchModel {
         }
     }
 
+    /// Whether any token is an H/G prefix followed by digits only — INCLUDING no
+    /// digits yet.
+    ///
+    /// A lone "H" is a number still being typed, not a plain word, and it is
+    /// where every typed number starts. On an iPhone the first digit is two taps
+    /// away (123, then the digit), which ordinary typing does not fit inside the
+    /// 0.25 s debounce, so the search for the bare letter runs. Counted as a
+    /// plain word, it switched the mode off; nothing switches it back on, so the
+    /// finished "H430" was searched as literal text and found nothing, with the
+    /// toggle silently off.
+    ///
+    /// A word that merely starts with H or G still clears the mode, at its second
+    /// letter. Until then the bare letter runs as a lemma query, which matches no
+    /// rows.
     private static func inputLooksLikeStrongs(_ input: String) -> Bool {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
 
         for token in trimmed.components(separatedBy: .whitespaces) {
             let units = Array(token.utf16)
-            guard units.count >= 2 else { continue }
-            let prefix = units[0]
+            // No length floor: the digit check below passes vacuously for a lone
+            // prefix letter, which is the point.
+            guard let prefix = units.first else { continue }
             guard prefix == 0x48 || prefix == 0x47
                     || prefix == 0x68 || prefix == 0x67 else {
                 continue
@@ -1134,6 +1368,25 @@ final class AppSession {
             if workspaceSelection == .search, newValue != .search {
                 dismissKeyboard()
             }
+            // Entering Search hands it the reader's book, so the Book scope means
+            // the book being read NOW.
+            //
+            // `SearchView` configures the model once per launch, so the book it
+            // passes is only ever the one open when Search first appeared: open
+            // Search at Genesis, read on to John, come back, and Book still meant
+            // Genesis. Here is where it can be refreshed, because the reader only
+            // moves while another workspace is selected — its own navigation, a
+            // Library open, a `sword://` route and a search result all select
+            // `.read`. A name is handed over and nothing is searched (see
+            // `SearchModel.readerBookDidChange`).
+            //
+            // The `if let` keeps a session with no reading workspace inert.
+            if workspaceSelection != .search, newValue == .search,
+               let readingWorkspace {
+                search.readerBookDidChange(
+                    readingWorkspace.currentSearchBookName
+                )
+            }
             workspaceSelection = newValue
         }
     }
@@ -1159,9 +1412,13 @@ final class AppSession {
     /// from `replayPendingURL()`.
     ///
     /// `onOpenURL` can fire while `LaunchPhase` is still `.preparing`, and routing
-    /// then would render a chapter the `DefaultsLastRefValidated` migration is
-    /// about to rewrite.
+    /// then would render a chapter the launch `lastRef` check
+    /// (`LaunchCoordinator.prepare()`, at every launch) is about to rewrite.
     @ObservationIgnored private var pendingURL: URL?
+    /// Launch preparation has finished (`replayPendingURL()`). Until then an
+    /// inbound URL is parked (`open(_:)`) and an activation leaves the
+    /// Settings-bundle reset to `LaunchCoordinator.prepare()`
+    /// (`resetOnActivationIfRequested`).
     @ObservationIgnored private var isReady = false
     /// The `.appStateDidReset` observer. Held so it can be removed, and so a
     /// second `start()` cannot register a second handler.
@@ -1347,12 +1604,39 @@ final class AppSession {
     }
 
     /// Opens the launch URL held back during preparation, if there was one. Called
-    /// once, from the `.ready` transition.
+    /// once, from the `.ready` transition — which is also the point from which an
+    /// activation handles the Settings-bundle reset
+    /// (`resetOnActivationIfRequested`).
     func replayPendingURL() {
         isReady = true
         guard let url = pendingURL else { return }
         pendingURL = nil
         open(url)
+    }
+
+    /// The Settings-bundle reset, on activation — but only once launch preparation
+    /// has finished.
+    ///
+    /// `reset_PocketSword` is flipped in the Settings app, so it can be waiting at a
+    /// cold launch as well as on a return from the background. On a cold launch
+    /// `LaunchCoordinator.prepare()` owns it, off the main actor. Read here as well
+    /// with no readiness check, an activation arriving during preparation would
+    /// run the reset a second time alongside the first, on the main thread — the
+    /// one main-thread path that could first-touch `PSModuleController` (an
+    /// unsynchronised singleton) before `prepare()` had returned.
+    ///
+    /// Whether SwiftUI ever reports `.active` that early is not established: its
+    /// documentation does not say when the first change is delivered. Gated on
+    /// `isReady`, the answer stops mattering. A warm return is always after
+    /// `.ready`, so it resets exactly as before.
+    ///
+    /// `reset` is `LaunchCoordinator.resetPreferences()`, which clears the flag.
+    func resetOnActivationIfRequested(
+        defaults: UserDefaults = .standard,
+        reset: () -> Void
+    ) {
+        guard isReady, defaults.bool(forKey: "reset_PocketSword") else { return }
+        reset()
     }
 
     func apply(_ route: URLRoute) {

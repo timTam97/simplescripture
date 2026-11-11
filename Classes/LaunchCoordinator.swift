@@ -124,6 +124,16 @@ final class LaunchCoordinator {
         defaults.removeObject(forKey: Self.localesVersion)
         defaults.synchronize()
 
+        // The per-module keys ("<pref>_<module>"), which is where every row of the
+        // reader's display menu lives.
+        //
+        // `vplPreference` is the one entry the legacy list did not have. Verse Per
+        // Line has been per-module since 2010, but the reset went on removing only
+        // the unsuffixed key above, which nothing reads — so a reset put the other
+        // five KJV rows back to default and left this one as it was, although an
+        // absent key reads as ON (`UserDefaults.psDefaultOnPrefs`). Pinned by
+        // `testResetClearsEveryDisplayToggleTheReaderOffers`, which takes its keys
+        // from `ReaderDisplayToggle.toggles`: a new row has to be added here too.
         let modulePreferences = [
             Defaults.redLetterPreference,
             Defaults.strongsPreference,
@@ -135,6 +145,7 @@ final class LaunchCoordinator {
             Defaults.footnotesPreference,
             Defaults.headingsPreference,
             Defaults.glossesPreference,
+            Defaults.vplPreference,
             Defaults.fontSizePreference,
             Defaults.fontNamePreference,
         ]
@@ -189,11 +200,31 @@ final class LaunchCoordinator {
         defaults.synchronize()
     }
 
+    /// Resets a `lastRef` the reader cannot resolve to Genesis 1 — at EVERY
+    /// launch, unlike the migrations around it.
+    ///
+    /// It was one-shot, gated on `DefaultsLastRefValidated`, on the assumption
+    /// that nothing after it could persist such a ref. The `sword://` router then
+    /// did ("MALACH1 3", from a book in capitals) on installs whose flag was
+    /// already set, and nothing repaired it once the router was fixed: a blank
+    /// reader at every launch, and in Debug the store's assertion before a held
+    /// URL is replayed, until some other navigation overwrote the ref. Don't put
+    /// the guard back.
+    ///
+    /// It cannot reset a chapter the reader would have shown: this is the lookup
+    /// the launch render makes (`PSContentReader.chapterDocument`), on the same
+    /// string. A ref that resolves is not rewritten, whatever its spelling —
+    /// "Gen 3", which the router stores as the link wrote it, stays "Gen 3".
+    ///
+    /// The scroll offsets go with the verse positions. All four describe the
+    /// chapter read before the bad ref, and launch restores by offset
+    /// (`ReadingWorkspaceModel.start()`), so Genesis 1 would open at that
+    /// chapter's offset. The offset keys are raw literals; they have no
+    /// `Defaults` constant (see `ReaderPaneModel`).
+    ///
+    /// `DefaultsLastRefValidated` is still written. Nothing reads it; the key
+    /// stays declared so the name is not reused.
     private func validatePersistedReference() {
-        guard !defaults.bool(forKey: Defaults.lastRefValidated) else {
-            return
-        }
-
         let reference = currentReference()
         if !referenceResolves(reference) {
             alog(
@@ -203,6 +234,8 @@ final class LaunchCoordinator {
             defaults.set("Genesis 1", forKey: Defaults.lastRef)
             defaults.set("1", forKey: Defaults.bibleVersePosition)
             defaults.set("1", forKey: Defaults.commentaryVersePosition)
+            defaults.set("0", forKey: "bibleScrollPosition")
+            defaults.set("0", forKey: "commentaryScrollPosition")
         }
         defaults.set(true, forKey: Defaults.lastRefValidated)
         defaults.synchronize()

@@ -11,6 +11,15 @@ final class SearchIndexBuildGate: @unchecked Sendable {
         defer { lock.unlock() }
         try operation()
     }
+
+    /// Whether a build is inside the gate right now, a foreground or a background
+    /// one. Never waits: it is asked on the main thread, when the app becomes
+    /// active (`SearchModel.indexMayHaveChanged`).
+    var isHeld: Bool {
+        guard lock.try() else { return true }
+        lock.unlock()
+        return false
+    }
 }
 
 final class SearchIndexBackgroundManager {
@@ -252,22 +261,46 @@ final class SearchIndexBackgroundManager {
                 buildError = error
             }
 
-            let expired = cancellationRequested()
-
-            // Expiration is not a failure: the recovery record stays put and
-            // `handle` resubmits the request, which is the entire point of it. It
-            // must also come FIRST, because `PSSearchEngine.build` throws
-            // `.cancelled` on expiry — so an expired run arrives with both
-            // `buildError != nil` and `expired == true`, and testing the error first
-            // would bill an interruption as a failure and spend retry budget on it.
-            if expired {
-                completion(false, true)
+            // The order is success, then expiry, then failure.
+            //
+            // A build that RETURNED has committed a complete index (and stamped
+            // it, short of the stamp itself failing — see `PSSearchEngine.build`),
+            // whatever the flag says by now, so that is decided first.
+            // `PSSearchEngine.build` can only see a cancel at its 500-row progress
+            // poll: after the last one (row 31,000 of the KJV's 31,102) the
+            // remaining inserts, the COMMIT and the meta stamp cannot be stopped,
+            // and a flag raised there — the task expiring, or
+            // `beginForegroundBuild` cancelling — arrives with no error. Tested
+            // flag-first, that was reported as an interrupted run: the record
+            // stayed, `handle` resubmitted, and the next background slot opened
+            // with `dropIndex()` on the finished index.
+            guard let buildError else {
+                // The one record a finished build must not clear: that of a
+                // foreground build of the same module that began in that tail.
+                // `beginForegroundBuild` has just written it, the foreground build
+                // is waiting at the gate to drop and rebuild this index, and
+                // `finishForegroundBuild` clears the record when it is done.
+                //
+                // Read under `lock` and released before `clearPendingModule`,
+                // which takes the same lock — `NSLock` is not recursive.
+                self.lock.lock()
+                let foregroundOwnsRecord = self.foregroundModule == module
+                self.lock.unlock()
+                if !foregroundOwnsRecord {
+                    self.clearPendingModule(ifMatching: module)
+                }
+                completion(true, false)
                 return
             }
 
-            guard let buildError else {
-                self.clearPendingModule(ifMatching: module)
-                completion(true, false)
+            // Expiration is not a failure: the recovery record stays put and
+            // `handle` resubmits the request, which is the entire point of it. It
+            // must be tested BEFORE the failure arm, because `PSSearchEngine.build`
+            // throws `.cancelled` on expiry — so an expired run arrives with both
+            // an error and the flag set, and billing the error first would spend
+            // retry budget on an interruption.
+            if cancellationRequested() {
+                completion(false, true)
                 return
             }
 

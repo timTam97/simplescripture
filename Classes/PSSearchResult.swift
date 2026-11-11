@@ -19,7 +19,9 @@ final class PSSearchResult: NSObject {
 
     /// For Strong's searches, the English surface word(s) in this verse that mapped
     /// to the searched Strong's number(s). nil for text searches. Order-preserving
-    /// and de-duped.
+    /// and de-duped, as plain words: the markup the index stores around the
+    /// divine name is taken off (`PSSearchEngine.surfaceWords`). The result row
+    /// marks them as whole words.
     @objc var strongsHighlightWords: [String]?
 
     @objc(initWithReference:fullText:)

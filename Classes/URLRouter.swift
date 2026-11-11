@@ -47,7 +47,13 @@ struct URLRouter {
     func route(for url: URL?) -> URLRoute? {
         // Bundled study texts keep using sword:// internally, while the
         // development app registers sword-dev:// for links opened by iOS.
-        guard let url, url.scheme == "sword" || url.scheme == externalScheme else {
+        //
+        // Compared in lower case: a scheme is case-insensitive (RFC 3986 §3.1)
+        // and `URL.scheme` returns it as written, so `Sword://` was not
+        // `sword://` here and the link was dropped without a log line.
+        guard let url,
+              let scheme = url.scheme?.lowercased(),
+              scheme == "sword" || scheme == externalScheme.lowercased() else {
             return nil
         }
 
@@ -67,24 +73,48 @@ struct URLRouter {
             return nil
         }
 
+        // The link's own spelling is kept when the reader can resolve it ("Jn 3"
+        // stays "Jn 3"); anything else is stored as the parser's canonical ref.
+        //
+        // The munge comes BEFORE that test, because the munged string is the one
+        // stored and the munge can break a ref that resolved without it: the
+        // book lookup ignores case, `createRefString` does not, and it turns
+        // "MALACHI 3" into "MALACH1 3". Tested as given, that was persisted, and
+        // the reader came up blank (a trap in Debug) at every launch until some
+        // other navigation replaced it. `chapterRef` is the `name` form, which
+        // the munge leaves alone.
+        let mungedChapter = PSRefHelper.createRefString(chapter)
         let chapterResolvesAsGiven = reference.hadExplicitChapter
-            && resolver.resolve(ref: chapter) != nil
-        let chapterToShow = chapterResolvesAsGiven ? chapter : reference.chapterRef
-        let persistedChapterRef = PSRefHelper.createRefString(chapterToShow)
-        let versePosition = Int(firstNumericPrefix(in: verseRaw)).map(String.init) ?? "1"
+            && resolver.resolve(ref: mungedChapter) != nil
+        let persistedChapterRef = chapterResolvesAsGiven
+            ? mungedChapter
+            : reference.chapterRef
+        // The parser only saw the chapter, so this is the one place the verse is
+        // made into something the reader can scroll to: a number, and at least
+        // 1. A "0" written to the verse-position key is a restore the reader
+        // ignores, leaving the new chapter wherever the last one was scrolled to
+        // under a title reading "John 3:0". A verse past the end of the chapter
+        // is left alone: the reader falls back to the nearest row before it.
+        let versePosition = firstVerseNumber(in: verseRaw)
+            .map { String(max(1, $0)) } ?? "1"
         let type = queryValue(named: "type", in: url)
 
+        // The host names the module to open the reference in — if it is one a
+        // chapter can be read in. A lexicon is a bundled module too, but it has
+        // no chapters: taken for a commentary, as every module that was not a
+        // Bible used to be, `sword://StrongsRealGreek/John+3:16` made the lexicon
+        // the primary commentary and persisted it. Every chapter then read as
+        // empty, across relaunches, and there is no module picker to put MHCC
+        // back with. So a host of any other kind is ignored, exactly like one
+        // that is not installed, and the reference still opens.
         let destination: URLRoute.Destination
-        if let requestedModule = module, !requestedModule.isEmpty {
-            if let moduleType = moduleTypeProvider(requestedModule) {
-                destination = moduleType == PSRefLinkRouter.typeBible
-                    ? .bible(module: requestedModule)
-                    : .commentary(module: requestedModule)
-            } else {
-                destination = type == nil || type == "bible"
-                    ? .bible(module: nil)
-                    : .commentary(module: nil)
-            }
+        if let requestedModule = module, !requestedModule.isEmpty,
+           let moduleType = moduleTypeProvider(requestedModule),
+           moduleType == PSRefLinkRouter.typeBible
+            || moduleType == PSRefLinkRouter.typeCommentary {
+            destination = moduleType == PSRefLinkRouter.typeBible
+                ? .bible(module: requestedModule)
+                : .commentary(module: requestedModule)
         } else {
             destination = type == nil || type == "bible"
                 ? .bible(module: nil)
@@ -107,17 +137,16 @@ struct URLRouter {
             .value
     }
 
-    private func firstNumericPrefix(in value: String) -> String {
-        let scalars = Array(value.unicodeScalars)
-        guard !scalars.isEmpty else {
-            return ""
-        }
-
-        var end = 1
-        while end < scalars.count,
-              CharacterSet.decimalDigits.contains(scalars[end]) {
-            end += 1
-        }
-        return String(String.UnicodeScalarView(scalars[0..<end]))
+    /// The leading ASCII digits of the verse part ("28-30" -> 28, "1." -> 1,
+    /// " 16" -> 16), or nil when it does not start with one ("-5", "abc", "").
+    ///
+    /// The first character is tested like the rest: taken on trust, it let a
+    /// sign through, and "-5" came out as verse -5. `Int32` because that is the
+    /// width the reader formats a verse position through (`persistPosition`), and
+    /// the conversion there traps on anything wider — so a number that does not
+    /// fit is no verse here.
+    private func firstVerseNumber(in value: String) -> Int32? {
+        Int32(value.trimmingCharacters(in: .whitespaces)
+            .prefix { $0.isASCII && $0.isNumber })
     }
 }

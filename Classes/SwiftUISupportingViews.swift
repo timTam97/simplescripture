@@ -628,8 +628,52 @@ private enum ReferencePickerText {
     }
 }
 
+/// The fonts Settings offers, and the one rule for which font a saved name means.
 enum StudyFonts {
-    static let all = [
+    /// The fonts the picker offers: the catalogue, less what this system cannot
+    /// supply.
+    ///
+    /// MEASURED (iOS 27.2): seven of the 43 names have no font behind them —
+    /// Arial Unicode MS, Gurmukhi MN, Gujarati Sangam MN, Heiti J, Heiti K,
+    /// Kannada Sangam MN, Oriya Sangam MN. Picking one took the checkmark and was
+    /// named in Settings while the text drew in a substitute face, the same for
+    /// all seven (CoreText answers Helvetica for a name it does not know).
+    ///
+    /// Filtered when first read rather than by deleting those seven, so the list
+    /// is right on whatever system it runs on. A missing font file is not the
+    /// test either: Heiti SC, Heiti TC, Bangla Sangam MN and Telugu Sangam MN
+    /// have none, but the system answers for them with their successors (PingFang
+    /// SC / TC, Kohinoor Bangla / Telugu), so they work and stay offered.
+    static let all = catalogue.filter { isInstalled($0) }
+
+    /// Whether the system has a font for `name`.
+    ///
+    /// The catalogue names a font either way: by family ("Menlo") or by one
+    /// face's PostScript name ("HelveticaNeue-Light"). `UIFont(name:)` resolved
+    /// every offered name on iOS 27.2, families included, but a full font name is
+    /// all it is documented to take, so the family lookup is asked as well. A
+    /// wrong "no" here hides a working font and moves its user to the default.
+    static func isInstalled(_ name: String) -> Bool {
+        UIFont(name: name, size: 17) != nil
+            || !UIFont.fontNames(forFamilyName: name).isEmpty
+    }
+
+    /// The font to draw with for a saved preference.
+    ///
+    /// A name the system cannot supply is treated as an absent one and gives the
+    /// app default. Handed to `Font.custom` as it stands, it draws in a substitute
+    /// face that is neither the saved font nor the default. This only decides
+    /// what is drawn: the saved preference is not rewritten (saved fonts are not
+    /// migrated), so the font is back if the system supplies it again.
+    static func resolved(_ name: String?) -> String {
+        guard let name, !name.isEmpty, isInstalled(name) else {
+            return AppConstants.defaultFontName
+        }
+        return name
+    }
+
+    /// Every name the picker has listed, carried over from the old app.
+    private static let catalogue = [
         "American Typewriter",
         "Arial",
         "Courier",

@@ -190,10 +190,10 @@ private struct SearchWorkspaceContent: View {
                 SearchReadyContent(
                     query: search.query,
                     results: search.results,
+                    resultsWereTruncated: search.resultsWereTruncated,
                     highlightTerms: search.highlightTerms,
-                    fuzzy: search.fuzzySearch,
-                    strongs: search.strongsSearch,
                     isSearching: search.isSearching,
+                    isSearchPending: search.isSearchPending,
                     module: search.module,
                     openResult: openResult
                 )
@@ -280,10 +280,14 @@ private struct SearchIndexRetryView: View {
 private struct SearchReadyContent: View {
     let query: String
     let results: [SearchResultRow]
-    let highlightTerms: [String]
-    let fuzzy: Bool
-    let strongs: Bool
+    /// The search matched more than `results` lists. For the list's header
+    /// only.
+    let resultsWereTruncated: Bool
+    let highlightTerms: [SearchHighlightTerm]
     let isSearching: Bool
+    /// The debounce is running. For the empty arm only — the result list is
+    /// not given it, so typing over rows leaves them and their corner alone.
+    let isSearchPending: Bool
     let module: String?
     let openResult: (_ reference: String, _ module: String) -> Void
 
@@ -294,16 +298,18 @@ private struct SearchReadyContent: View {
                 systemImage: "magnifyingglass",
                 description: Text("SearchEmptyPromptMessage")
             )
-        } else if results.isEmpty, isSearching {
+        } else if results.isEmpty, isSearching || isSearchPending {
+            // Running, or owed and waiting out the debounce. "No Results" is a
+            // statement about a search that has finished, and until the timer
+            // fires the text in the field has not been searched.
             ProgressView()
         } else if results.isEmpty {
             ContentUnavailableView.search(text: query)
         } else {
             SearchResultList(
                 results: results,
+                resultsWereTruncated: resultsWereTruncated,
                 highlightTerms: highlightTerms,
-                fuzzy: fuzzy,
-                strongs: strongs,
                 isSearching: isSearching,
                 module: module,
                 openResult: openResult
@@ -314,9 +320,13 @@ private struct SearchReadyContent: View {
 
 private struct SearchResultList: View {
     let results: [SearchResultRow]
-    let highlightTerms: [String]
-    let fuzzy: Bool
-    let strongs: Bool
+    let resultsWereTruncated: Bool
+    /// The terms of the query last run, as it matched them
+    /// (`SearchModel.highlightTerms`). Not the options as they stand now: the
+    /// rows were told about Fuzzy and Strong's by the live toggles, and
+    /// re-marked the search on screen the moment one was flipped, before any
+    /// query had run with the new setting.
+    let highlightTerms: [SearchHighlightTerm]
     let isSearching: Bool
     let module: String?
     let openResult: (_ reference: String, _ module: String) -> Void
@@ -332,10 +342,11 @@ private struct SearchResultList: View {
                         SearchResultRowView(
                             reference: result.reference,
                             text: result.text ?? "",
-                            highlightTerms: strongs
-                                ? result.strongsHighlightWords
-                                : highlightTerms,
-                            fuzzy: strongs ? false : fuzzy
+                            // Its own Strong's words, or the query's terms:
+                            // the row's to say.
+                            highlightTerms: result.highlightTerms(
+                                orQuery: highlightTerms
+                            )
                         )
                         .contentShape(Rectangle())
                     }
@@ -359,10 +370,9 @@ private struct SearchResultList: View {
                 }
             } header: {
                 Text(
-                    LocalizedStringResource(
-                        "SearchResultCountFormat",
-                        defaultValue: "\(results.count) Results",
-                        comment: "Search result count; the variable is the count."
+                    SearchResultCountText.resource(
+                        count: results.count,
+                        truncated: resultsWereTruncated
                     )
                 )
             }
@@ -378,11 +388,43 @@ private struct SearchResultList: View {
     }
 }
 
+/// The result list's header: how many verses it lists.
+///
+/// Out of the list's body so that a test can read the words.
+enum SearchResultCountText {
+    static func resource(count: Int, truncated: Bool) -> LocalizedStringResource {
+        if truncated {
+            // A list cut at the cap is not a count of the matches, and the
+            // bare number passed the cap off as one. "First" says there are
+            // more, further on in the Bible than the list goes (the rows
+            // are in canonical order).
+            return LocalizedStringResource(
+                "SearchResultCountTruncatedFormat",
+                defaultValue: "First \(count) Results",
+                comment: "Search result count when the list was cut at the cap; the variable is the number of results listed."
+            )
+        }
+        if count == 1 {
+            // One verse found read "1 Results": an Exact phrase often finds
+            // exactly one.
+            return LocalizedStringResource(
+                "SearchResultCountOne",
+                defaultValue: "1 Result",
+                comment: "Search result count when exactly one result was found."
+            )
+        }
+        return LocalizedStringResource(
+            "SearchResultCountFormat",
+            defaultValue: "\(count) Results",
+            comment: "Search result count; the variable is the count."
+        )
+    }
+}
+
 private struct SearchResultRowView: View {
     let reference: String
     let text: String
-    let highlightTerms: [String]
-    let fuzzy: Bool
+    let highlightTerms: [SearchHighlightTerm]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -392,8 +434,7 @@ private struct SearchResultRowView: View {
             Text(
                 SearchHighlightedText.make(
                     text.replacingOccurrences(of: "\n", with: " "),
-                    terms: highlightTerms,
-                    fuzzy: fuzzy
+                    terms: highlightTerms
                 )
             )
             .font(.body)
@@ -427,11 +468,16 @@ enum SearchResultClipboardText {
     }
 }
 
-private enum SearchHighlightedText {
+/// A result row's verse text with the search terms marked.
+///
+/// Where a term is marked is `PSSearchQuery.highlightRanges(of:in:)`'s to say —
+/// whole words, as the query matched them — and the reader asks the same
+/// function for the chapter a row opens (`ChapterTextRenderer`), so a row and
+/// its verse mark the same words. Not `private`: the tests read the marks.
+enum SearchHighlightedText {
     static func make(
         _ text: String,
-        terms: [String],
-        fuzzy: Bool
+        terms: [SearchHighlightTerm]
     ) -> AttributedString {
         let baseFont = UIFont.preferredFont(forTextStyle: .body)
         let output = NSMutableAttributedString(
@@ -451,38 +497,8 @@ private enum SearchHighlightedText {
             .foregroundColor: UIColor.black,
             .font: highlightFont,
         ]
-        let source = text as NSString
-        let comparison: NSString.CompareOptions = [
-            .caseInsensitive,
-            .diacriticInsensitive,
-        ]
-        let wordCharacters = NSCharacterSet.alphanumerics as NSCharacterSet
-
-        for term in terms where !term.isEmpty {
-            var searchRange = NSRange(location: 0, length: source.length)
-            while searchRange.location < source.length {
-                let match = source.range(
-                    of: term,
-                    options: comparison,
-                    range: searchRange
-                )
-                guard match.location != NSNotFound else { break }
-
-                var highlightRange = match
-                if fuzzy {
-                    var end = NSMaxRange(match)
-                    while end < source.length,
-                          wordCharacters.characterIsMember(
-                            source.character(at: end)
-                          ) {
-                        end += 1
-                    }
-                    highlightRange.length = end - highlightRange.location
-                }
-                output.addAttributes(attributes, range: highlightRange)
-                searchRange.location = NSMaxRange(highlightRange)
-                searchRange.length = source.length - searchRange.location
-            }
+        for range in PSSearchQuery.highlightRanges(of: terms, in: text) {
+            output.addAttributes(attributes, range: NSRange(range, in: text))
         }
         return AttributedString(output)
     }

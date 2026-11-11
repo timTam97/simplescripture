@@ -285,7 +285,15 @@ final class PSContentStore: NSObject {
     /// `expected` comes from the row's own `raw_size`; a disagreement is a
     /// corrupt store, not something to paper over with a growing buffer.
     private static func inflate(_ data: Data, expected: Int) -> Data? {
-        if expected == 0 { return data.isEmpty ? Data() : nil }
+        if expected == 0 {
+            // The same disagreement as the size check below, so it is reported the
+            // same way rather than returned as a bare nil.
+            guard data.isEmpty else {
+                fail("raw_size is 0 but the blob holds \(data.count) bytes")
+                return nil
+            }
+            return Data()
+        }
         var out = Data(count: expected)
         var outLen = uLongf(expected)
         let rc: Int32 = out.withUnsafeMutableBytes { outBuf in
@@ -365,8 +373,11 @@ final class PSContentStore: NSObject {
             let blob = Data(bytes: bytes, count: Int(sqlite3_column_bytes(st, 3)))
             sqlite3_reset(st)
 
-            guard let raw = Self.inflate(blob, expected: rawSize),
-                  let joined = String(data: raw, encoding: .utf8) else { return nil }
+            guard let raw = Self.inflate(blob, expected: rawSize) else { return nil }
+            guard let joined = String(data: raw, encoding: .utf8) else {
+                Self.fail("chapters \(module) \(bookOsis) \(chapter): not UTF-8")
+                return nil
+            }
             var records = joined.components(separatedBy: "\u{0000}")
 
             if kind == "bodyref" {

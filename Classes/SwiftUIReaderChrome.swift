@@ -9,7 +9,8 @@
 //    `visibilityPriority(.high)`, so a constrained width sheds the study actions
 //    before it sheds the ability to move between chapters. This is the one
 //    control the reader cannot do without.
-//  - Per-module display toggles go in a `ToolbarOverflowMenu`.
+//  - Per-module display toggles go in a `ToolbarOverflowMenu`, declared only
+//    when the active module has some: a module with none gets no ••• button.
 //  - Navigation and workspace controls stay visible while reading.
 //
 //  The display toggles are PER-MODULE and gated on the BAKED feature set — see
@@ -347,15 +348,26 @@ struct ReaderScreen: View {
                     ToolbarItem(placement: .topBarLeading) {
                         ReadingModePicker(reading: reading)
                     }
-                }
-                .toolbarOverflowMenu {
+
+                    // The per-module display toggles, declared ONLY when the active
+                    // module has some.
+                    //
+                    // Not the `toolbarOverflowMenu` modifier with its content gated
+                    // instead: the modifier declares the menu whatever is in it, so
+                    // the system still drew the ••• button, and for the commentary
+                    // (MHCC advertises no features) it opened a menu with nothing in
+                    // it. Not a conditional modifier on `readerPanes` either: that
+                    // changes the panes' identity on every Bible/commentary switch and
+                    // drops their scroll state and deferred work.
                     if !chrome.displayToggles.isEmpty {
-                        Section {
-                            ForEach(chrome.displayToggles) { toggle in
-                                ReaderDisplayToggleButton(
-                                    chrome: chrome,
-                                    toggle: toggle
-                                )
+                        ToolbarOverflowMenu {
+                            Section {
+                                ForEach(chrome.displayToggles) { toggle in
+                                    ReaderDisplayToggleButton(
+                                        chrome: chrome,
+                                        toggle: toggle
+                                    )
+                                }
                             }
                         }
                     }
@@ -422,9 +434,15 @@ struct ReaderScreen: View {
             // The two calls are deliberately back to back: `restoreAfterSizeChange`
             // keeps the suppression alive until its own deferred scroll has landed.
             // Do not split them across separate callbacks.
+            //
+            // Whether the WIDTH changed goes with them, because it decides what a
+            // pane re-anchors on. This also fires for height alone — the bars
+            // settling at launch, a keyboard going — which re-wraps nothing, so the
+            // scroll offset is still right. After a width change the offset names
+            // different text, and the verse at the top is what to return to.
             guard old != .zero, old != new else { return }
             reading.prepareForSizeChange()
-            reading.restoreAfterSizeChange()
+            reading.restoreAfterSizeChange(widthChanged: old.width != new.width)
         }
         // On the ZStack, not in `ChapterTextView`: one recogniser for whichever pane
         // is showing.
