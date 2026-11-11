@@ -251,4 +251,77 @@ final class PSSearchIndexParityTests: XCTestCase {
             expression("God \"the world\" loved", .AndSearch),
             "text_norm:\"god\" AND text_norm:\"the world\" AND text_norm:\"loved\"")
     }
+
+    /// What FTS5 makes of `expression`: how many rows of a one-row, in-memory
+    /// table it matches — the index's tokenizer and its two searched columns —
+    /// or nil, with SQLite's message, when the MATCH is rejected. A rejected
+    /// MATCH is what the app shows as "No Results". Not the KJV index.
+    private func matchAgainstOneRow(_ expression: String?) -> (rows: Int?, error: String) {
+        guard let expression else { return (nil, "no expression was built") }
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(":memory:", &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE,
+                              nil) == SQLITE_OK, let db else {
+            return (nil, "cannot open an in-memory database")
+        }
+        defer { sqlite3_close(db) }
+        func lastError() -> String { String(cString: sqlite3_errmsg(db)) }
+
+        let setUp = "CREATE VIRTUAL TABLE verses USING fts5(text_norm, lemmas,"
+            + " tokenize='unicode61 remove_diacritics 2');"
+            + " INSERT INTO verses VALUES('and they say hi to god', 'H430 H0430');"
+        guard sqlite3_exec(db, setUp, nil, nil, nil) == SQLITE_OK else {
+            return (nil, "set-up failed: \(lastError())")
+        }
+        var st: OpaquePointer?
+        let sql = "SELECT count(*) FROM verses WHERE verses MATCH ?;"
+        guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else {
+            return (nil, "prepare failed: \(lastError())")
+        }
+        defer { sqlite3_finalize(st) }
+        // SQLITE_TRANSIENT, as in `PSSearchEngine`: the bridged C string is valid
+        // only for the duration of the call.
+        sqlite3_bind_text(st, 1, expression, -1,
+                          unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        guard sqlite3_step(st) == SQLITE_ROW else { return (nil, lastError()) }
+        return (Int(sqlite3_column_int(st, 0)), "")
+    }
+
+    /// A quote inside a phrase is doubled whatever scalar follows it.
+    ///
+    /// `quote()` escaped with a search that compares whole composed characters,
+    /// and a quote followed by a combining or variation-selector scalar is one
+    /// character that is not `"`. It went through undoubled and ended the FTS5
+    /// string early, so the MATCH was rejected and the user saw "No Results".
+    /// Reaching it takes a paste, or a keyboard with standalone combining marks.
+    ///
+    /// Counted in scalars on purpose: `String` equality works over whole
+    /// characters too, which is the comparison that hid the quote.
+    func testAnEmbeddedQuoteBeforeACombiningScalarIsEscaped() {
+        func quoteCount(_ expression: String?) -> Int? {
+            expression?.unicodeScalars.filter { $0 == "\"" }.count
+        }
+
+        // Exact mode hands the whole body to `quote()`. U+FE0F survives the fold.
+        let exact = PSSearchQuery.fts5Expression(
+            fromUserInput: "say \"\u{FE0F}hi", matchType: .ExactSearch,
+            fuzzy: false, strongs: false)
+        XCTAssertEqual(quoteCount(exact), 4, "the wrapping pair plus one doubled quote")
+        let exactMatch = matchAgainstOneRow(exact)
+        XCTAssertEqual(exactMatch.rows, 1, "FTS5: \(exactMatch.error)")
+
+        // Strong's mode does not fold its tokens, so a mark the fold would have
+        // stripped (U+0301) gets here as well.
+        let strongs = PSSearchQuery.fts5Expression(
+            fromUserInput: "H430\"\u{0301}", matchType: .AndSearch,
+            fuzzy: false, strongs: true)
+        XCTAssertEqual(quoteCount(strongs), 4, "the wrapping pair plus one doubled quote")
+        let strongsMatch = matchAgainstOneRow(strongs)
+        XCTAssertEqual(strongsMatch.rows, 1, "FTS5: \(strongsMatch.error)")
+
+        // A quote with nothing combining after it is escaped as it always was.
+        XCTAssertEqual(
+            PSSearchQuery.fts5Expression(fromUserInput: "God \"said", matchType: .ExactSearch,
+                                         fuzzy: false, strongs: false),
+            "text_norm:\"god \"\"said\"")
+    }
 }

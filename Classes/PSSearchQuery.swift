@@ -195,8 +195,17 @@ final class PSSearchQuery: NSObject {
     // Escape a token for use inside an FTS5 phrase: double any embedded quotes
     // and wrap in "…". Phrase syntax accepts any characters literally, which
     // side-steps the need to strip operator keywords like AND/OR/NEAR.
+    //
+    // `.literal` is load-bearing. Without it the replace compares whole composed
+    // characters, and a quote followed by a combining or variation-selector
+    // scalar (`"` + U+FE0F, `"` + U+0301) is one character that is not `"`. It
+    // went through undoubled and ended the FTS5 string early: the MATCH failed
+    // with "unterminated string", which the user sees as "No Results". Both arms
+    // that hand over unscanned text can carry one — Exact (its body is folded,
+    // but the fold leaves U+FE0F and others) and Strong's (tokens are not folded
+    // at all). All and Any cannot: `tokenise` removes every quote first.
     private static func quote(_ s: String) -> String {
-        let escaped = s.replacingOccurrences(of: "\"", with: "\"\"")
+        let escaped = s.replacingOccurrences(of: "\"", with: "\"\"", options: .literal)
         return "\"\(escaped)\""
     }
 
