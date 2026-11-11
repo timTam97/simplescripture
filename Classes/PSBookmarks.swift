@@ -113,9 +113,11 @@ class PSBookmarks: PSBookmarkFolder {
     /// Pinned by `testBookmarkFolderPathResolvesToTheFolderItNames`.
     ///
     /// It is still a walk by name, so two paths resolve to the root that should not:
-    /// a top-level folder with an EMPTY name has the path "", and a folder whose name
-    /// ends in ":" splits in the wrong place once it has a subfolder ("Notes:" holding
-    /// "Kid" is "Notes::::Kid"). Closing those means addressing the folder by identity.
+    /// a top-level folder with an EMPTY name has the path "" (`BookmarkStore` refuses
+    /// a blank name, so that is only a folder already on disk), and a folder whose
+    /// name ends in ":" splits in the wrong place once it has a subfolder ("Notes:"
+    /// holding "Kid" is "Notes::::Kid"). Closing those means addressing the folder by
+    /// identity.
     @objc(getBookmarkFolderForFolderString:)
     class func getBookmarkFolder(forFolderString folderString: String?) -> PSBookmarkFolder {
         let bookmarks = PSBookmarks.default()

@@ -243,7 +243,7 @@ final class BookmarkStore {
         color: BookmarkColor?,
         to parentID: UUID?
     ) throws {
-        guard !name.contains(AppConstants.folderSeparatorString) else {
+        guard Self.isValidFolderName(name) else {
             throw BookmarkMutationError.invalidFolderName
         }
         guard let parent = folder(id: parentID) else {
@@ -295,7 +295,7 @@ final class BookmarkStore {
             throw BookmarkMutationError.missingNode
         }
         if object is PSBookmarkFolder {
-            guard !name.contains(AppConstants.folderSeparatorString) else {
+            guard Self.isValidFolderName(name) else {
                 throw BookmarkMutationError.invalidFolderName
             }
             guard !containsFolder(named: name, excluding: id, in: parent) else {
@@ -308,6 +308,33 @@ final class BookmarkStore {
             object.name = name
         }
         object.dateLastAccessed = Date()
+    }
+
+    /// What a folder may be called: something the reader can see, without the
+    /// separator its path is joined with.
+    ///
+    /// A blank name (empty, or nothing but whitespace) is a folder icon with no
+    /// label and, when a second one is tried beside it, a "duplicate folder" alert
+    /// that names nothing. At the top level its path is "", which
+    /// `PSBookmarks.getBookmarkFolder` reads as the root, so the bookmark editor
+    /// could never file into it.
+    ///
+    /// The name is only TESTED trimmed. It is stored as typed, so nothing changes
+    /// for a name that was accepted before.
+    ///
+    /// The rule lives here, not in a `.disabled` on the two Save buttons: a
+    /// `TextField`'s binding lags the last keystroke until the field commits (the
+    /// XCUITests' `createFolder` measured it), so a button bound to the text would
+    /// refuse a one-character name tapped quickly. Both call sites already present
+    /// the thrown error, and both checks run before anything is mutated, which is
+    /// what `updateFolder` promises.
+    ///
+    /// One consequence: a blank-named folder already on disk cannot be recoloured
+    /// until it is given a name, because `updateFolder` validates the name it is
+    /// handed. Renaming it works.
+    private static func isValidFolderName(_ name: String) -> Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !name.contains(AppConstants.folderSeparatorString)
     }
 
     @discardableResult

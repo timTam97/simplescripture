@@ -738,6 +738,94 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// A folder needs a name the reader can see.
+    ///
+    /// A blank one is a folder icon with no label; a second one beside it is refused
+    /// as a "duplicate" of nothing visible; and at the top level its picker path is
+    /// "", which the bookmark editor reads as the root, so nothing can be filed in
+    /// it. Both Save buttons stay enabled — a `TextField` binding lags the last
+    /// keystroke, so a `.disabled` bound to it would refuse a name typed quickly —
+    /// which leaves the store as the place a blank name is turned away: with the
+    /// error the separator already gets, and having changed NOTHING.
+    ///
+    /// The name is stored as typed (no trimming), and a BOOKMARK renamed to "" still
+    /// falls back to its reference — that is a different rule, and it stays.
+    func testBookmarkStoreRejectsBlankFolderNames() throws {
+        let bookmark = PSBookmark(
+            name: "Hope",
+            dateAdded: nil,
+            dateLastAccessed: nil,
+            bibleReference: "Romans 5:5"
+        )
+        // The folder that is renamed sits one level below where the new one is
+        // added, so neither call can be refused as a duplicate of a blank name the
+        // other let through: each has to be refused for being blank.
+        let notes = PSBookmarkFolder(
+            name: "Notes",
+            dateAdded: nil,
+            dateLastAccessed: nil,
+            rgbHexString: "#12ABEF",
+            children: nil
+        )
+        let study = PSBookmarkFolder(
+            name: "Study",
+            dateAdded: nil,
+            dateLastAccessed: nil,
+            rgbHexString: nil,
+            children: [notes]
+        )
+        let root = PSBookmarkFolder(
+            name: "Bookmarks",
+            dateAdded: nil,
+            dateLastAccessed: nil,
+            rgbHexString: nil,
+            children: [study, bookmark]
+        )
+        var saveCount = 0
+        let store = BookmarkStore(
+            rootProvider: { root },
+            save: {
+                saveCount += 1
+                return true
+            },
+            notificationCenter: NotificationCenter()
+        )
+
+        for blank in ["", " ", "\n\t "] {
+            XCTAssertThrowsError(
+                try store.addFolder(name: blank, color: nil, to: nil),
+                "addFolder accepted \(blank.debugDescription)"
+            ) {
+                XCTAssertEqual($0 as? BookmarkMutationError, .invalidFolderName)
+            }
+            XCTAssertThrowsError(
+                try store.rename(id: notes.id, to: blank),
+                "rename accepted \(blank.debugDescription)"
+            ) {
+                XCTAssertEqual($0 as? BookmarkMutationError, .invalidFolderName)
+            }
+            XCTAssertThrowsError(
+                try store.updateFolder(id: notes.id, name: blank, color: nil),
+                "updateFolder accepted \(blank.debugDescription)"
+            ) {
+                XCTAssertEqual($0 as? BookmarkMutationError, .invalidFolderName)
+            }
+        }
+
+        XCTAssertEqual(root.children?.count, 2)
+        XCTAssertEqual(notes.name, "Notes")
+        XCTAssertEqual(notes.rgbHexString, "#12ABEF")
+        XCTAssertEqual(saveCount, 0, "nothing may be committed on the throwing path")
+
+        // Only an all-blank name is refused; one with whitespace around it is kept
+        // exactly as typed.
+        try store.rename(id: notes.id, to: " Study notes ")
+        XCTAssertEqual(notes.name, " Study notes ")
+
+        try store.rename(id: bookmark.id, to: "")
+        XCTAssertEqual(bookmark.name, "Romans 5:5")
+    }
+
     /// The bookmark editor's folder picker hands `PSBookmarks.addBookmark` a NAME
     /// path, and that path has to resolve to the folder it names.
     ///
