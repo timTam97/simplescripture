@@ -945,7 +945,22 @@ final class SearchModel {
     ) -> [String] {
         guard !strongs, !query.isEmpty else { return [] }
         if matchType == .ExactSearch {
-            return query.count >= 2 ? [query] : []
+            // The phrase the query ran, not the field text. The Exact arm of
+            // `PSSearchQuery.fts5Expression` trims the input and strips one pair
+            // of surrounding quotes before it builds the phrase, and both
+            // highlighters (the result row and the reader) match this term
+            // literally — so the raw text, with the trailing space the keyboard's
+            // predictive bar leaves or with the quotes still on it, found its
+            // verses and marked nothing. Keep the two rules in step.
+            //
+            // The second trim is for a space left inside the quotes: the
+            // tokenizer ignores it, so the phrase that matched does not have it.
+            var phrase = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if phrase.hasPrefix("\"") && phrase.hasSuffix("\"") && phrase.count >= 2 {
+                phrase = String(phrase.dropFirst().dropLast())
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return phrase.count >= 2 ? [phrase] : []
         }
 
         var terms: [String] = []

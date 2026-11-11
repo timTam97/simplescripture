@@ -2222,6 +2222,54 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertFalse(unbuilt.isSearching)
     }
 
+    /// An Exact search highlights the phrase the query ran, not the field text.
+    ///
+    /// `PSSearchQuery.fts5Expression` trims the input and strips one pair of
+    /// surrounding quotes before it builds the phrase. The highlight term was
+    /// the field text as typed, and both highlighters — the result row and the
+    /// reader — match it literally. So "Jesus wept " (the trailing space the
+    /// keyboard's predictive bar leaves) or a phrase typed in quotes found its
+    /// verses and marked nothing, in the row and in the opened chapter alike.
+    @MainActor
+    func testExactSearchHighlightsThePhraseTheQueryRan() {
+        func terms(_ query: String) -> [String] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: .ExactSearch,
+                strongs: false
+            )
+        }
+        func expression(_ query: String) -> String? {
+            PSSearchQuery.fts5Expression(
+                fromUserInput: query,
+                matchType: .ExactSearch,
+                fuzzy: false,
+                strongs: false
+            )
+        }
+
+        XCTAssertEqual(terms("Jesus wept"), ["Jesus wept"])
+        XCTAssertEqual(terms("Jesus wept "), ["Jesus wept"])
+        XCTAssertEqual(terms(" Jesus wept"), ["Jesus wept"])
+        XCTAssertEqual(terms("\"Jesus wept\""), ["Jesus wept"])
+        // A space left inside the quotes: the tokenizer ignores it, so the term
+        // must too.
+        XCTAssertEqual(terms(" \"in the beginning \" "), ["in the beginning"])
+        // Nothing left to mark.
+        XCTAssertEqual(terms("\"\""), [])
+        XCTAssertEqual(terms(" a "), [])
+
+        // The builder's side of the same rule, so the two cannot drift apart
+        // unnoticed: each of these inputs runs as the one phrase.
+        for query in ["Jesus wept", "Jesus wept ", " Jesus wept", "\"Jesus wept\""] {
+            XCTAssertEqual(
+                expression(query),
+                "text_norm:\"jesus wept\"",
+                "query \(query.debugDescription)"
+            )
+        }
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []
