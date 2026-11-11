@@ -944,6 +944,13 @@ final class SearchModel {
         strongs: Bool
     ) -> [String] {
         guard !strongs, !query.isEmpty else { return [] }
+        // Typographic quotes are phrase quotes, here as in the query: the mapping
+        // `PSSearchQuery.fts5Expression` applies, so the highlight and the query
+        // agree on what a phrase is. Left curly, they became part of the first
+        // and last words — terms that occur nowhere in the text — and stayed on
+        // both ends of an Exact phrase. A local copy: the field and the saved
+        // history keep what the user typed.
+        let text = PSSearchQuery.straighteningQuotes(query)
         if matchType == .ExactSearch {
             // The phrase the query ran, not the field text. The Exact arm of
             // `PSSearchQuery.fts5Expression` trims the input and strips one pair
@@ -955,7 +962,7 @@ final class SearchModel {
             //
             // The second trim is for a space left inside the quotes: the
             // tokenizer ignores it, so the phrase that matched does not have it.
-            var phrase = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            var phrase = text.trimmingCharacters(in: .whitespacesAndNewlines)
             if phrase.hasPrefix("\"") && phrase.hasSuffix("\"") && phrase.count >= 2 {
                 phrase = String(phrase.dropFirst().dropLast())
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -964,7 +971,7 @@ final class SearchModel {
         }
 
         var terms: [String] = []
-        let characters = Array(query.utf16)
+        let characters = Array(text.utf16)
         var index = 0
         while index < characters.count {
             let character = characters[index]

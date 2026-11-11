@@ -207,4 +207,48 @@ final class PSSearchIndexParityTests: XCTestCase {
         XCTAssertEqual(PSSearchQuery.foldForIndex("𝔊𝔯𝔢𝔢𝔨 text").hasSuffix(" text"), true)
         XCTAssertFalse(PSSearchQuery.foldForIndex("😀 emoji").isEmpty)
     }
+
+    // MARK: - Query building
+    //
+    // Plain tests of `PSSearchQuery`. Nothing from here down builds or opens the
+    // index.
+
+    /// Typographic quotes delimit a phrase, as straight ones do.
+    ///
+    /// Smart Punctuation turns a typed " into “ or ” wherever it is in effect,
+    /// and pasted text carries them regardless. The parser knew only U+0022, so
+    /// a phrase in curly quotes ran as its separate words in All and Any modes —
+    /// `"“in" AND "the" AND "beginning”"`, every verse with all three words, or
+    /// with any of them — and quoting is the only way to combine a phrase with
+    /// other words.
+    func testTypographicQuotesMakeAPhrase() {
+        func expression(
+            _ query: String,
+            _ matchType: PSSearchType,
+            fuzzy: Bool = false
+        ) -> String? {
+            PSSearchQuery.fts5Expression(fromUserInput: query, matchType: matchType,
+                                         fuzzy: fuzzy, strongs: false)
+        }
+        let curly = "\u{201C}in the beginning\u{201D}"
+        let phrase = "text_norm:\"in the beginning\""
+
+        XCTAssertEqual(expression(curly, .AndSearch), phrase)
+        XCTAssertEqual(expression(curly, .OrSearch), phrase)
+        XCTAssertEqual(expression(curly, .ExactSearch), phrase)
+        // A phrase stays a phrase under the fuzzy toggle.
+        XCTAssertEqual(expression(curly, .AndSearch, fuzzy: true), phrase)
+        XCTAssertEqual(
+            expression("God \u{201C}the world\u{201D} loved", .AndSearch),
+            "text_norm:\"god\" AND text_norm:\"the world\" AND text_norm:\"loved\"")
+        // The low and reversed forms other keyboards open a quotation with.
+        XCTAssertEqual(expression("\u{201E}the world\u{201F}", .OrSearch),
+                       "text_norm:\"the world\"")
+
+        // Straight quotes build what they always did: the same expressions.
+        XCTAssertEqual(expression("\"in the beginning\"", .AndSearch), phrase)
+        XCTAssertEqual(
+            expression("God \"the world\" loved", .AndSearch),
+            "text_norm:\"god\" AND text_norm:\"the world\" AND text_norm:\"loved\"")
+    }
 }

@@ -3,7 +3,7 @@
 //  PocketSword
 //
 //  Translates user-typed search input into an FTS5 MATCH expression. Handles:
-//    * quoted "phrases"
+//    * quoted "phrases", in straight or typographic (“…”) quotes
 //    * All (AND) / Any (OR) / Exact (whole-input phrase) match types
 //    * Fuzzy toggle (suffix '*' on each non-phrase term)
 //    * Strong's toggle (H0xxx / Hxxx equivalence under a lemmas: column filter)
@@ -119,6 +119,8 @@ final class PSSearchQuery: NSObject {
 
     // Tiny scanner: splits whitespace-separated tokens, keeping "quoted phrases"
     // as single atoms. Unterminated quotes are treated as running to end of input.
+    // Only U+0022 is a quote here: the caller straightens typographic ones first
+    // (`straighteningQuotes`).
     private static func tokenise(_ raw: String) -> [PSToken] {
         var tokens: [PSToken] = []
         let chars = Array(raw.utf16)
@@ -154,6 +156,38 @@ final class PSSearchQuery: NSObject {
             }
         }
         return tokens
+    }
+
+    /// `s` with the four typographic double quotes — U+201C “, U+201D ”,
+    /// U+201E „ and U+201F ‟ — replaced by the straight U+0022, the only quote
+    /// `tokenise` and the Exact arm recognise.
+    ///
+    /// Smart Punctuation turns a typed `"` into one of these wherever it is in
+    /// effect, and pasted text carries them regardless. Taken for word
+    /// characters, they made a quoted phrase in All or Any mode run as its
+    /// separate words, with the quotes stuck to the first and last of them.
+    ///
+    /// Straightening cannot lose a match: the index's tokenizer (`unicode61`)
+    /// treats all four as separators, so none is ever part of an indexed term.
+    /// Per scalar, as `tokenise` scans per unit: a curly quote is a quote
+    /// whatever follows it.
+    ///
+    /// Query-side only, and for a copy: never write the result back over what
+    /// the user typed. The search field is bound to that text and the saved
+    /// history stores it. `SearchModel.highlightTerms` applies the same mapping,
+    /// so the highlight and the query agree on what a phrase is.
+    class func straighteningQuotes(_ s: String) -> String {
+        let straight: Unicode.Scalar = "\""
+        var out = String.UnicodeScalarView()
+        for scalar in s.unicodeScalars {
+            switch scalar.value {
+            case 0x201C, 0x201D, 0x201E, 0x201F:
+                out.append(straight)
+            default:
+                out.append(scalar)
+            }
+        }
+        return String(out)
     }
 
     // MARK: - Escaping
@@ -237,10 +271,15 @@ final class PSSearchQuery: NSObject {
             return "lemmas:(\(joined))"
         }
 
+        // Typographic quotes are phrase quotes from here on (see
+        // `straighteningQuotes`). Below the Strong's arm on purpose: that arm
+        // takes no phrases and is left exactly as it was.
+        let text = straighteningQuotes(trimmed)
+
         // Exact mode: treat the whole raw input as a single phrase (strip any
         // surrounding quotes the user typed so we don't double-wrap).
         if matchType == .ExactSearch {
-            var body = trimmed
+            var body = text
             if body.hasPrefix("\"") && body.hasSuffix("\"") && body.count >= 2 {
                 body = String(body.dropFirst().dropLast())
             }
@@ -250,7 +289,7 @@ final class PSSearchQuery: NSObject {
         }
 
         // All / Any modes: tokenise, fold each non-phrase, apply fuzzy if set.
-        let tokens = tokenise(trimmed)
+        let tokens = tokenise(text)
         if tokens.isEmpty { return nil }
 
         var atoms: [String] = []

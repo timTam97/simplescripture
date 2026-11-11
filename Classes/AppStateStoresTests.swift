@@ -2270,6 +2270,66 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// A phrase in typographic quotes is highlighted as a phrase, and the quotes
+    /// stay in the field.
+    ///
+    /// Smart Punctuation turns a typed " into “ or ” wherever it is in effect,
+    /// and pasted text carries them regardless. The highlight scanner knew only
+    /// the straight quote, so the curly ones became part of the first and last
+    /// words — terms that occur nowhere in the text — and an Exact search's
+    /// term kept them at both ends.
+    ///
+    /// The straightening is local to the query and the highlight: what the user
+    /// typed is still what the field shows and what the history saves.
+    @MainActor
+    func testTypographicQuotesHighlightThePhrase() {
+        func terms(_ query: String, _ matchType: PSSearchType) -> [String] {
+            SearchModel.highlightTerms(
+                query: query,
+                matchType: matchType,
+                strongs: false
+            )
+        }
+        let curly = "\u{201C}in the beginning\u{201D}"
+
+        XCTAssertEqual(terms(curly, .AndSearch), ["in the beginning"])
+        XCTAssertEqual(terms(curly, .OrSearch), ["in the beginning"])
+        XCTAssertEqual(terms(curly, .ExactSearch), ["in the beginning"])
+        XCTAssertEqual(
+            terms("God \u{201C}the world\u{201D} loved", .AndSearch),
+            ["God", "the world", "loved"]
+        )
+        // The low and reversed forms other keyboards open a quotation with.
+        XCTAssertEqual(
+            terms("\u{201E}the world\u{201F}", .AndSearch),
+            ["the world"]
+        )
+
+        let model = SearchModel(
+            optionsStore: SearchOptionsStore(defaults: defaults),
+            indexCoordinator: SearchIndexCoordinator(
+                freshnessProvider: { _ in true },
+                buildOperation: { _, _ in }
+            ),
+            debounceInterval: 0,
+            featureProvider: { _, _ in true },
+            queryOperation: { _, _, _, _, _ in [] }
+        )
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        model.query = curly
+
+        XCTAssertEqual(model.expression, "text_norm:\"in the beginning\"")
+        XCTAssertEqual(model.highlightTerms, ["in the beginning"])
+        XCTAssertEqual(model.query, curly)
+        XCTAssertEqual(model.historyItem()?.searchTermToDisplay, curly)
+    }
+
     func testSearchIndexBackgroundManagerPersistsRecoveryRequest() {
         var submittedIdentifiers: [String] = []
         var cancelledIdentifiers: [String] = []
