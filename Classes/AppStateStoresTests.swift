@@ -4362,6 +4362,24 @@ final class AppStateStoresTests: XCTestCase {
             pane.scrollOffsetChanged(sample(1600), from: surface)
             XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "17",
                            "The saved verse came back after the view had reported one.")
+
+            // A report that CONFIRMS what the pane believes is the view's report
+            // too, once the restore has landed, though it persists nothing.
+            // Quit with verse 2 just at the top; the landing's own report is
+            // dropped (launch's size changes); the reader nudges back a point
+            // and row 1 reports — the verse a new pane already believes.
+            standard.set("64", forKey: scrollKey)
+            standard.set("2", forKey: Defaults.bibleVersePosition)
+            let nudged = ReaderPaneModel(mode: .bible)
+            nudged.pendingRestore = .offset(64)
+            nudged.applyPendingWork()
+            nudged.scrollOffsetChanged(sample(64), from: nudged.scrollSurface)
+            nudged.topmostVerseChanged(1, from: nudged.scrollSurface)
+            nudged.scrollOffsetChanged(sample(60), from: nudged.scrollSurface)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "60")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1",
+                           "The saved verse was written over the one the view "
+                               + "had just reported.")
         }
     }
 

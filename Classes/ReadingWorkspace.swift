@@ -283,6 +283,10 @@ final class ReaderPaneModel {
     /// the top BEFORE the scroll lands reports verse 1, and `topmostVerseChanged`
     /// drops it only because that is what the pane already believes. Seeded with
     /// the saved verse, it would take that report for a move and persist verse 1.
+    ///
+    /// Ended by any persist, by any newer restore, and by the view's first report
+    /// that counts as a measurement (`topmostVerseChanged`) — whether that report
+    /// changes the verse or confirms it.
     @ObservationIgnored private var offsetRestoreVerse: Int?
     /// Whether `currentShownVerse` says where the scroll view IS: the view
     /// reported it as the row at the top, or a restore that names a verse (or the
@@ -732,6 +736,12 @@ final class ReaderPaneModel {
         // report before the landing itself is published, and it does change it.
         if outstandingOffsetRestore == nil || clamped != currentShownVerse {
             shownVerseIsMeasured = true
+            // A measurement also ends the verse carried from the keys — see
+            // `offsetRestoreVerse`. A report that changes the verse ends it through
+            // the persist below. One that CONFIRMS what the pane believes persists
+            // nothing, and left the saved verse armed for the next scroll to write
+            // over the one the view had just reported.
+            offsetRestoreVerse = nil
         }
         guard clamped != currentShownVerse else { return }
         persistPosition(verse: clamped, scrollOffset: lastScrollOffset)
