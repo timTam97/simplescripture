@@ -741,10 +741,14 @@ final class PSChapterDocumentParityTests: XCTestCase {
         let reader = PSContentReader.shared
         // Genesis 4:1 carries KJV's first footnote; the passage arrives URL-encoded
         // off the anchor, which `noteBody` decodes itself.
-        let body = reader.noteBody(module: "KJV", osisRef: "Genesis+4%3A1", marker: "1")
-        guard let body else {
-            throw XCTSkip("KJV Genesis 4:1 note 1 is not in the store")
-        }
+        //
+        // Unwrapped, not skipped: the note is baked (`notes_index` has
+        // `KJV|Genesis 4:1|1`), so a nil here is the lookup or the passage decoding
+        // breaking, and a skip would report that as a green run.
+        let body = try XCTUnwrap(
+            reader.noteBody(module: "KJV", osisRef: "Genesis+4%3A1", marker: "1"),
+            "KJV Genesis 4:1 note 1 is in the store; a nil body is a lookup regression"
+        )
         let document = PSEntryDocumentBuilder.build(html: body)
         let text = document.blocks.map { $0.runs.map(\.text).joined() }.joined()
         XCTAssertFalse(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
