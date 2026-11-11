@@ -1460,4 +1460,93 @@ final class PSChapterDocumentParityTests: XCTestCase {
         // Control: a term inside one run is jacketed as it always was.
         XCTAssertEqual(jacketed(["God"]), ["God"])
     }
+
+    // MARK: - The flowed paragraph's join
+
+    /// Flowing verses have a space between them, and a verse number cannot be
+    /// parted from its verse.
+    ///
+    /// The prose layout ran each verse straight into the next number — `the
+    /// earth.²And the earth` — where the engine ended every entry with a newline,
+    /// which the browser showed as a space. And the one place a line could break
+    /// near a verse boundary was after the hair space that followed the number, so
+    /// a verse that began a new line left its number at the end of the line above:
+    /// 133 of 1,655 numbers over real KJV paragraphs, measured in CoreText.
+    ///
+    /// This pins the join as text: a space after every verse but the last, none
+    /// doubled after a verse that already ends in one (red-letter), none for an
+    /// intro that is only its heading, the space outside the verse's bookmark
+    /// colour, and a no-break gap after each number. Where the lines then break can
+    /// only be seen on a device.
+    @MainActor
+    func testFlowedVersesAreSpacedAndNumbersStayWithTheirVerse() throws {
+        let style = ChapterTextRenderer.Style(
+            fontName: "Georgia", fontSize: 20, lineSpacingMultiple: 1.4
+        )
+        XCTAssertEqual(
+            String(ChapterTextRenderer.verseLabel(2, style: style).characters),
+            "2\u{202F}",
+            "the gap after a verse number must be a no-break space"
+        )
+
+        // A chapter's first paragraph with Headings on: the intro's title is the
+        // paragraph's heading and the intro itself has nothing left to draw.
+        let paragraph = ChapterParagraph(
+            verses: [
+                ChapterVerse(number: 0),
+                ChapterVerse(number: 1, runs: [InlineRun(text: "In the beginning.")]),
+                ChapterVerse(number: 2, runs: [InlineRun(text: "And the earth.")]),
+                ChapterVerse(number: 3,
+                             runs: [InlineRun(text: "Verily. ", style: .wordOfChrist)]),
+                ChapterVerse(number: 4, runs: [InlineRun(text: "And God saw.")]),
+            ],
+            headings: [
+                ChapterHeading(runs: [InlineRun(text: "CHAPTER 1.", style: .bold)],
+                               isCanonical: false),
+            ]
+        )
+        let pieces = ChapterTextRenderer.flowedPieces(
+            for: paragraph, style: style, tappable: true
+        )
+        XCTAssertEqual(pieces.map { $0.verse }, [0, 1, 2, 3, 4])
+        XCTAssertEqual(
+            pieces.map { String($0.text.characters) },
+            [
+                "",
+                "1\u{202F}In the beginning. ",
+                "2\u{202F}And the earth. ",
+                "3\u{202F}Verily. ",
+                "4\u{202F}And God saw.",
+            ]
+        )
+
+        // An intro with text of its own is an entry like any other.
+        let withIntro = ChapterTextRenderer.flowedPieces(
+            for: ChapterParagraph(verses: [
+                ChapterVerse(number: 0, runs: [InlineRun(text: "A Song.")]),
+                ChapterVerse(number: 1, runs: [InlineRun(text: "Blessed.")]),
+            ]),
+            style: style, tappable: true
+        )
+        XCTAssertEqual(withIntro.map { String($0.text.characters) },
+                       ["A Song. ", "1\u{202F}Blessed."])
+
+        // The space is no part of the verse's highlight: the bookmark colour stops
+        // where the verse's text does.
+        let marked = ChapterTextRenderer.flowedPieces(
+            for: ChapterParagraph(verses: [
+                ChapterVerse(number: 1, runs: [InlineRun(text: "In the beginning.")],
+                             highlightColour: "rgba(255,204,0,0.8)"),
+                ChapterVerse(number: 2, runs: [InlineRun(text: "And the earth.")]),
+            ]),
+            style: style, tappable: true
+        )
+        let first = try XCTUnwrap(marked.first).text
+        var painted = ""
+        for run in first.runs where run.backgroundColor != nil {
+            painted += String(first[run.range].characters)
+        }
+        XCTAssertEqual(String(first.characters), "1\u{202F}In the beginning. ")
+        XCTAssertEqual(painted, "In the beginning.")
+    }
 }

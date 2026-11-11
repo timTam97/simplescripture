@@ -28,9 +28,10 @@
 //
 //  ── Prose vs verse-per-line ───────────────────────────────────────────────
 //
-//  With the per-module verse-per-line pref OFF (the default) verses flow
-//  together as prose with superscript numbers inline, breaking at the KJV's
-//  pilcrows. With it ON, each verse is its own row. See `ChapterParagraph`.
+//  With the per-module verse-per-line pref OFF verses flow together as prose
+//  with superscript numbers inline and a space between verses, breaking at the
+//  KJV's pilcrows. With it ON (the default: an absent pref reads as on), each
+//  verse is its own row. See `ChapterParagraph`.
 //
 //  ── Scroll position: identity, not pixels ─────────────────────────────────
 //
@@ -83,14 +84,25 @@ enum ChapterTextRenderer {
         }
     }
 
-    /// The verse number as a superscript label (70% size, body colour).
+    /// The verse number as a superscript label (75% size, semibold, body colour).
     ///
     /// `tappable` carries the verse-menu link. It is false on a commentary:
     /// tapping a commentary verse number has never done anything.
     static func verseLabel(_ number: Int, style: Style,
                            tappable: Bool = false) -> AttributedString {
-        // A trailing hair space so the number never touches the first word.
-        var label = AttributedString("\(number)\u{200A}")
+        // A trailing NARROW NO-BREAK SPACE (U+202F): the number never touches the
+        // first word, and never parts from it either.
+        //
+        // It was a hair space (U+200A), which a line may break after. In flowing
+        // prose that was the only place to break near a verse boundary, so a verse
+        // that began a new line left its number at the end of the line above: 133
+        // of 1,655 numbers over real KJV paragraphs (MEASURED, CoreText). With
+        // U+202F, and the space `flowedPieces` puts between verses to break at
+        // instead, none. A hair space plus a word joiner (U+2060) keeps the old
+        // width exactly but still stranded 2. U+202F is the wider gap: 3.0 pt
+        // against 1.25 pt at the default size, both from a fallback font (Georgia
+        // has neither glyph).
+        var label = AttributedString("\(number)\u{202F}")
         // 0.75 and SEMIBOLD (not 0.7 regular): at 12pt in flowing prose, colour
         // alone does not distinguish a verse number from a grey Strong's marker, and
         // the chapter reads as one run of superscripts. Weight separates them
@@ -126,6 +138,49 @@ enum ChapterTextRenderer {
             applyHighlights(terms, over: verse.runs, to: &out)
         }
         return out
+    }
+
+    /// A flowing paragraph's verses, one piece per verse: its number, its text, and
+    /// the space between it and the next.
+    ///
+    /// **The space is the engine's.** Its prose branch ended every entry with a
+    /// newline (`<a class="verse">2</a>And the earth…\n`), which a browser showed as
+    /// a space: `the earth. ²And the earth`. Joined with nothing between them, the
+    /// verses read `the earth.²And`.
+    ///
+    /// The space is appended to the verse it follows, where the engine had it, and
+    /// only after `text(for:style:)` has returned, so no bookmark colour and no
+    /// search jacket covers it. The gap after the number does not break (see
+    /// `verseLabel`), which leaves this space as the one place a line can break at a
+    /// verse boundary: a number goes to the next line with its verse.
+    ///
+    /// Here rather than in `ParagraphRow` so the join can be read without a view
+    /// host. Pinned by `testFlowedVersesAreSpacedAndNumbersStayWithTheirVerse`.
+    static func flowedPieces(
+        for paragraph: ChapterParagraph, style: Style, tappable: Bool
+    ) -> [(verse: Int, text: AttributedString)] {
+        var pieces: [(verse: Int, text: AttributedString)] = []
+        for verse in paragraph.verses {
+            var piece = AttributedString()
+            if !verse.isIntro {
+                piece += verseLabel(verse.number, style: style, tappable: tappable)
+            }
+            // The bookmark highlight is applied UNDER the search jacket — see
+            // `text(for:style:)`.
+            piece += text(for: verse, style: style)
+            pieces.append((verse: verse.number, text: piece))
+        }
+        var gap = AttributedString(" ")
+        gap.font = .custom(style.fontName, size: style.fontSize)
+        for index in pieces.indices.dropLast() {
+            // None after a piece with nothing in it (an intro that is only its
+            // heading), and no second one after a piece that already ends in a space
+            // (a red-letter verse ends with the span's own).
+            guard let last = pieces[index].text.characters.last,
+                  !last.isWhitespace else { continue }
+            pieces[index].text += gap
+        }
+        return pieces
     }
 
     /// Jacket every case-insensitive occurrence of each term in yellow (black text).
@@ -618,22 +673,17 @@ private struct ParagraphRow: View {
     }
 
     /// The verses of this paragraph, run together with their superscript numbers.
+    ///
+    /// What each verse contributes, and the space between two of them, is the
+    /// renderer's: `ChapterTextRenderer.flowedPieces`. This tags each piece with
+    /// its verse, for `VerseTrackingTextRenderer` to find it by.
     private var flowed: Text {
         var out = Text("")
-        for verse in paragraph.verses {
-            var attributed = AttributedString()
-            if !verse.isIntro {
-                attributed += ChapterTextRenderer.verseLabel(
-                    verse.number,
-                    style: style,
-                    tappable: pane.mode == .bible
-                )
-            }
-            // The bookmark highlight is applied by the renderer, UNDER the search
-            // jacket — see `ChapterTextRenderer.text(for:style:)`.
-            attributed += ChapterTextRenderer.text(for: verse, style: style)
-            let verseText = Text(attributed).customAttribute(
-                VerseTextAttribute(verse: verse.number)
+        for piece in ChapterTextRenderer.flowedPieces(
+            for: paragraph, style: style, tappable: pane.mode == .bible
+        ) {
+            let verseText = Text(piece.text).customAttribute(
+                VerseTextAttribute(verse: piece.verse)
             )
             out = Text("\(out)\(verseText)")
         }
