@@ -4277,8 +4277,9 @@ final class AppStateStoresTests: XCTestCase {
     /// setting. With Headings off (the default) that is true of every chapter: a
     /// Bible intro with nothing to show gets no row. With Headings on, 1,184 of
     /// the KJV's 1,189 chapters open with an intro row that is only its heading
-    /// (`CHAPTER n.`) above verse 1, which puts verse 1 a line down, where its
-    /// landing is seen; the five without one are the one-chapter books. With
+    /// (`CHAPTER n.`) above verse 1; the five without one are the one-chapter
+    /// books. That title is then the first row and where verse 1 lands, saved
+    /// the same way (`testALandingOnVerseOneLandsOnTheTitleRowAboveIt`). With
     /// Verse Per Line off the first PARAGRAPH is the first row in every chapter.
     @MainActor
     func testPickingTheTopOfTheOpenChapterPersistsIt() {
@@ -4313,6 +4314,199 @@ final class AppStateStoresTests: XCTestCase {
                            "A display toggle would jump back to the verse being left.")
             XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "0",
                            "A bookmark or a relaunch would restore the offset being left.")
+        }
+    }
+
+    /// A landing on verse 1 lands on the chapter's title when the title is the
+    /// row above it.
+    ///
+    /// With Headings on, a KJV chapter opens with a row that is only its title
+    /// (`CHAPTER 1.`, row 0) and verse 1 is the row under it. A scroll to verse 1
+    /// went to verse 1's own row and left the title above the reading area,
+    /// behind the navigation bar: after the reference picker, after a display
+    /// toggle (Headings itself, turned on at the top of a chapter, changed
+    /// nothing on screen), after a link or a search result opened at verse 1,
+    /// and at every launch at the top of a chapter, where the size hook
+    /// re-issues the row of the verse the pane believes. Only a page turn showed
+    /// it. In flowing prose the title heads verse 1's paragraph and was shown —
+    /// except in the 117 psalms whose own title starts a new paragraph at verse
+    /// 1, which leaves `PSALM n.` a row by itself.
+    ///
+    /// The row is the title OF the verse under it, so that is where verse 1
+    /// starts. Landing there is landing at offset 0, which the view reports as
+    /// no change, so it is saved on the spot like any landing on the first row.
+    ///
+    /// Only a row with no text of its own. A commentary's row 0 is the chapter
+    /// summary, a record in its own right, and verse 1 has a record of its own
+    /// under it: "Show in Commentary" on verse 1 opens on that one. And only
+    /// verse 1: every other verse lands where it did.
+    @MainActor
+    func testALandingOnVerseOneLandsOnTheTitleRowAboveIt() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        let headingsKey = standard.psModuleKey(
+            Defaults.headingsPreference, BundledModules.bible
+        )
+        let vplKey = standard.psModuleKey(Defaults.vplPreference, BundledModules.bible)
+        let keys = [Defaults.lastRef, verseKey, Defaults.commentaryVersePosition,
+                    scrollKey, "commentaryScrollPosition", headingsKey, vplKey]
+        // By hand: `withPreservedReadingKeys` takes a synchronous closure.
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+
+        let text = [InlineRun(text: "In the beginning")]
+        var verses = (1...31).map { ChapterVerse(number: $0, runs: text) }
+        verses[5].startsParagraph = true
+        let title = ChapterVerse(number: 0, headings: [
+            ChapterHeading(runs: [InlineRun(text: "CHAPTER 1.")], isCanonical: false),
+        ])
+        // Headings off: no row above verse 1.
+        let untitled = ChapterDocument(verses: verses)
+        // Headings on: the title's row, then verse 1. Flowing, the title heads
+        // the paragraph verse 1 is in (verses 1-5, then 6-31).
+        let titled = ChapterDocument(verses: [title] + verses)
+        // A psalm with a title of its own on verse 1, which starts a paragraph
+        // there: flowing, `PSALM n.` is a row by itself.
+        var psalmVerses = verses
+        psalmVerses[0].headings = [
+            ChapterHeading(runs: [InlineRun(text: "A Psalm of David.")], isCanonical: true),
+        ]
+        let psalm = ChapterDocument(verses: [title] + psalmVerses)
+        XCTAssertEqual(psalm.paragraphs.map(\.id), [0, 1, 6])
+        // A commentary: the chapter summary, then a record where each range of
+        // verses begins.
+        let commentary = ChapterDocument(verses: [
+            ChapterVerse(number: 0, runs: [InlineRun(text: "The chapter, in outline.")]),
+            ChapterVerse(number: 1, runs: text),
+            ChapterVerse(number: 3, runs: text),
+        ])
+
+        // Where a scroll to a verse lands, on a pane that has just been given
+        // the chapter.
+        let cases: [(document: ChapterDocument, name: String, mode: ReadingMode,
+                     versePerLine: Bool, verse: Int, row: Int)] = [
+            (titled, "a title, a row per verse", .bible, true, 1, 0),
+            (titled, "a title, a row per verse", .bible, true, 2, 2),
+            (titled, "a title, a row per verse", .bible, true, 31, 31),
+            (untitled, "no title, a row per verse", .bible, true, 1, 1),
+            (untitled, "no title, a row per verse", .bible, true, 2, 2),
+            (titled, "a title, flowing", .bible, false, 1, 0),
+            (titled, "a title, flowing", .bible, false, 7, 6),
+            (psalm, "a psalm, flowing", .bible, false, 1, 0),
+            (psalm, "a psalm, flowing", .bible, false, 2, 1),
+            (psalm, "a psalm, flowing", .bible, false, 7, 6),
+            (psalm, "a psalm, a row per verse", .bible, true, 1, 0),
+            (untitled, "no title, flowing", .bible, false, 1, 1),
+            (untitled, "no title, flowing", .bible, false, 7, 6),
+            (commentary, "a commentary", .commentary, true, 1, 1),
+            (commentary, "a commentary", .commentary, true, 2, 1),
+            (commentary, "a commentary", .commentary, true, 3, 3),
+        ]
+        for testCase in cases {
+            let pane = ReaderPaneModel(mode: testCase.mode)
+            pane.versePerLine = testCase.versePerLine
+            pane.document = testCase.document
+            pane.pendingRestore = .verse(testCase.verse)
+            pane.applyPendingWork()
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertEqual(
+                targetRow(of: pane), testCase.row,
+                "With \(testCase.name), a scroll to verse \(testCase.verse) went "
+                    + "to the wrong row."
+            )
+        }
+
+        // The landing is offset 0 under verse 1, and what the view reports from
+        // there — offset 0, and row 0, which is verse 1 to the pane — changes
+        // nothing. So it is saved when it is asked for.
+        let reader = ReaderPaneModel(mode: .bible)
+        reader.versePerLine = true
+        reader.document = titled
+        reader.scrollOffsetChanged(sample(1500), from: reader.scrollSurface)
+        reader.topmostVerseChanged(20, from: reader.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: verseKey), "20")
+        XCTAssertEqual(standard.string(forKey: scrollKey), "1500")
+        reader.scrollToVerse(1)
+        reader.scrollOffsetChanged(sample(0), from: reader.scrollSurface)
+        reader.topmostVerseChanged(0, from: reader.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: verseKey), "1",
+                       "A display toggle would jump back to the verse being left.")
+        XCTAssertEqual(standard.string(forKey: scrollKey), "0",
+                       "A bookmark or a relaunch would restore the offset being left.")
+
+        // At the top of a chapter the size hook re-issues the row of the verse
+        // the pane believes, by id: the bars settling at launch (height alone)
+        // and a rotation.
+        for widthChanged in [false, true] {
+            let resting = ReaderPaneModel(mode: .bible)
+            resting.versePerLine = true
+            resting.document = titled
+            await sizeChange(resting, widthChanged: widthChanged)
+            XCTAssertEqual(
+                targetRow(of: resting), 0,
+                "A size change at the top of the chapter (width changed: "
+                    + "\(widthChanged)) scrolled the title off."
+            )
+            // Any other verse is re-anchored on its own row, as it was.
+            resting.topmostVerseChanged(20, from: resting.scrollSurface)
+            await sizeChange(resting, widthChanged: true)
+            XCTAssertEqual(targetRow(of: resting), 20)
+        }
+        let flowing = ReaderPaneModel(mode: .bible)
+        flowing.versePerLine = false
+        flowing.document = psalm
+        await sizeChange(flowing, widthChanged: false)
+        XCTAssertEqual(targetRow(of: flowing), 0,
+                       "Launch's size changes scrolled a psalm's number off.")
+
+        // The store's own chapters, through the workspace: arriving at verse 1
+        // (the picker from another chapter, a display toggle, a link), and then
+        // the picker's own path for a verse of the chapter already open.
+        standard.set(true, forKey: headingsKey)
+        let chapters: [(book: String, chapter: Int, versePerLine: Bool)] = [
+            ("Genesis", 1, true), ("Psalms", 3, true), ("Psalms", 3, false),
+        ]
+        for chapter in chapters {
+            let ref = "\(chapter.book) \(chapter.chapter)"
+            let layout = chapter.versePerLine ? "a row per verse" : "flowing"
+            standard.set(chapter.versePerLine, forKey: vplKey)
+            standard.set(ref, forKey: Defaults.lastRef)
+            standard.set("1", forKey: verseKey)
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter(ref, polling: .bible, restore: .verse)
+            let bible = workspace.bible
+            XCTAssertEqual(bible.document.verses.first?.isIntro, true,
+                           "\(ref) has no title row with Headings on.")
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertEqual(targetRow(of: bible), 0,
+                           "\(ref), \(layout): arriving at verse 1 left the title "
+                               + "above the reading area.")
+
+            bible.scrollOffsetChanged(sample(700), from: bible.scrollSurface)
+            bible.topmostVerseChanged(5, from: bible.scrollSurface)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "700")
+            workspace.selectReference(
+                bookName: chapter.book, chapter: chapter.chapter, verse: 1
+            )
+            XCTAssertEqual(standard.string(forKey: scrollKey), "0",
+                           "\(ref), \(layout): picking verse 1 of the open chapter "
+                               + "did not save the top of it.")
+            for _ in 0..<10 { await Task.yield() }
+            XCTAssertEqual(targetRow(of: bible), 0,
+                           "\(ref), \(layout): picking verse 1 of the open chapter "
+                               + "left the title above the reading area.")
         }
     }
 

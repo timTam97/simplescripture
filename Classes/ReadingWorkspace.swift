@@ -431,8 +431,12 @@ final class ReaderPaneModel {
             // the one at its top, `topmostVerseChanged` sees no change either. The
             // keys then kept the position the reader had just LEFT, and a display
             // toggle, a bookmark or a relaunch went back there. So it is persisted
-            // here, as `.chapterStart` persists its own. (The first row's id is the
-            // first verse's number in either layout.)
+            // here, as `.chapterStart` persists its own. (`document.verses.first`
+            // is the first row in either layout: that row with a row per verse,
+            // the first paragraph's id in prose. With Headings on it is the title
+            // row, which is where verse 1 lands — see `rowID(containing:)`. With a
+            // row per verse that row reports itself as verse 0, which is verse 1
+            // to this pane; alone in a paragraph it reports nothing.)
             //
             // Only the first row. Any row below it lands past the threshold and is
             // persisted when it does; writing offset 0 for one of those would be
@@ -622,7 +626,31 @@ final class ReaderPaneModel {
     /// the middle of a paragraph has to resolve to that paragraph's id. This is the
     /// one place the prose layout costs something: the scroll lands at the top of
     /// the verse's paragraph rather than exactly on the verse.
+    ///
+    /// **Verse 1 starts at the chapter's title when the title is the row above
+    /// it.** With Headings on a KJV chapter opens with a row that is only its
+    /// title (`CHAPTER 1.`, row 0 — see `ChapterVerse.hasVisibleText`), and verse
+    /// 1's own row is the next one. Sent there, the reader rested with the title
+    /// above the reading area, behind the navigation bar. MEASURED (iOS 27.2,
+    /// 20 pt, a row per verse): "CHAPTER 1." at y 87–110 under a bar whose bottom
+    /// edge is at 116 — after the reference picker, after turning Headings on at
+    /// the top of the chapter, and at launch, where the size hook re-issues the
+    /// row of the verse the pane believes. Only a page turn showed it. Flowing,
+    /// the title heads verse 1's paragraph and that row was already the answer,
+    /// except in the 117 psalms whose own title starts a paragraph at verse 1 and
+    /// leaves `PSALM n.` a row by itself.
+    ///
+    /// Only a row with no text of its own, which is a title and nothing else. A
+    /// commentary's row 0 is the chapter summary, a record in its own right, and
+    /// verse 1 keeps the record under it: "Show in Commentary" on verse 1 opens
+    /// on that one. And only verse 1 — the title is not part of any other verse.
     private func rowID(containing verse: Int) -> Int {
+        if verse == 1, let first = document.verses.first,
+           first.isIntro, !first.hasVisibleText {
+            // The first row in either layout: its own row with a row per verse,
+            // and the first paragraph's id in prose.
+            return first.number
+        }
         if versePerLine {
             // Every verse is its own row — but only among rows the document actually
             // HAS, which is not the same thing on a commentary. See below.

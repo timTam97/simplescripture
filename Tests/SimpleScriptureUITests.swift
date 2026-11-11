@@ -610,36 +610,105 @@ final class SimpleScriptureUITests: XCTestCase {
         }
     }
 
+    /// With Headings on, a chapter picked at verse 1 opens on its title.
+    ///
+    /// The title is a row of its own above verse 1 with a row per verse, and
+    /// the head of verse 1's paragraph in flowing prose. A scroll to verse 1 used
+    /// to go to verse 1's own row, which with a row per verse left the title
+    /// above the reading area, behind the navigation bar. MEASURED (iOS 27.2,
+    /// 20 pt): after the reference picker, "CHAPTER 1." at y 87 to 110 with the
+    /// bar's bottom edge at 116; after a page turn, at y 130. Turning Headings
+    /// on at the top of a chapter changed nothing on screen. Verse 1 now lands
+    /// on the title's row (`ReaderPaneModel.rowID(containing:)`). The unit test
+    /// proves which row the model asks for; where the scroll view comes to rest
+    /// is only here.
+    ///
+    /// Both of the picker's paths: from another chapter, which loads this one,
+    /// and from further down the chapter already open, which only scrolls.
+    ///
+    /// Flowing prose showed Genesis 1's title before as well, so that layout is
+    /// here to stay right, not to prove the change. Where flowing prose lost a
+    /// title is a psalm with a title of its own on verse 1, which leaves
+    /// `PSALM n.` a paragraph by itself; that is pinned in the unit test.
+    @MainActor
+    func testPickingVerseOneShowsTheChapterTitleWithHeadingsOn() throws {
+        let arguments = app.launchArguments
+        for versePerLine in [true, false] {
+            let layout = versePerLine ? "a row per verse" : "flowing prose"
+            relaunchWithMarkersOff(
+                arguments, versePerLine: versePerLine, headings: true
+            )
+            let title = app.staticTexts["CHAPTER 1."]
+
+            // The title is the first thing in the reading area: below the bar's
+            // bottom edge, and by no more than the heading's own padding.
+            func assertTheTitleOpensTheReadingArea(after arrival: String) {
+                let readingAreaTop = app.navigationBars.firstMatch.frame.maxY
+                let rested = XCTNSPredicateExpectation(
+                    predicate: NSPredicate { _, _ in
+                        title.exists
+                            && title.frame.minY >= readingAreaTop - 1
+                            && title.frame.minY <= readingAreaTop + 20
+                    },
+                    object: nil
+                )
+                let outcome = XCTWaiter().wait(for: [rested], timeout: 5)
+                let rest = title.exists
+                    ? "is at y \(title.frame.minY) to \(title.frame.maxY)"
+                    : "is not in the hierarchy"
+                XCTAssertEqual(
+                    outcome, .completed,
+                    "With \(layout), after \(arrival), the title \(rest); the "
+                        + "reading area starts at y \(readingAreaTop)."
+                )
+            }
+
+            selectGenesisChapter(2)
+            XCTAssertTrue(
+                app.staticTexts.matching(
+                    NSPredicate(format: "label CONTAINS %@",
+                                "Thus the heavens and the earth")
+                ).firstMatch.waitForExistence(timeout: 5),
+                "The reference picker did not open Genesis 2."
+            )
+            selectGenesisChapter(1)
+            assertTheTitleOpensTheReadingArea(
+                after: "picking Genesis 1:1 from Genesis 2"
+            )
+
+            dragTheReaderUp(times: 2)
+            let readingAreaTop = app.navigationBars.firstMatch.frame.maxY
+            let scrolledAway = XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in
+                    !title.exists || title.frame.maxY < readingAreaTop
+                },
+                object: nil
+            )
+            XCTAssertEqual(
+                XCTWaiter().wait(for: [scrolledAway], timeout: 5), .completed,
+                "With \(layout), the drags did not take the title out of the "
+                    + "reading area, so there is nothing for the pick to bring back."
+            )
+            selectGenesisChapter(1)
+            assertTheTitleOpensTheReadingArea(
+                after: "picking Genesis 1:1 from further down Genesis 1"
+            )
+        }
+    }
+
     /// Relaunches with the KJV's markers off, in the given layout, and comes to
     /// Genesis 1 by paging back from Genesis 2.
     ///
-    /// By a page turn because it is the arrival that rests at the very top of
-    /// the chapter. Picking verse 1 scrolls to verse 1's own row, and so does a
-    /// launch and a display toggle: with Headings on and a row per verse, the
-    /// title is then above the reading area. MEASURED (iOS 27.2, 20 pt): after
-    /// the picker, "CHAPTER 1." at y 87 with the bar's bottom edge at 116; after
-    /// a page turn, at y 130.
-    ///
-    /// The layout and the toggles are launch arguments: nothing here changes
-    /// them, and an argument writes nothing.
+    /// By a page turn because that arrival does not depend on where a scroll to
+    /// a verse lands: the chapter opens on a new scroll view, at its very top.
+    /// The arrival that is a scroll to verse 1 has a test of its own,
+    /// `testPickingVerseOneShowsTheChapterTitleWithHeadingsOn`.
     @MainActor
     private func openGenesis1ByPaging(
         _ arguments: [String], versePerLine: Bool, headings: Bool
     ) {
-        app.terminate()
-        app.launchArguments = arguments + [
-            "-strongsPreference_KJV", "NO",
-            "-morphPreference_KJV", "NO",
-            "-footnotesPreference_KJV", "NO",
-            "-headingsPreference_KJV", headings ? "YES" : "NO",
-            "-vplPreference_KJV", versePerLine ? "YES" : "NO",
-            "-fontSizePreference", "18",
-        ]
-        app.launch()
-        // A launch always starts in the Read workspace, in the Bible.
-        XCTAssertTrue(
-            app.buttons["reading.reference-picker"].waitForExistence(timeout: 20),
-            "SimpleScripture did not finish initialization."
+        relaunchWithMarkersOff(
+            arguments, versePerLine: versePerLine, headings: headings
         )
         selectGenesisChapter(2)
         let genesis2 = app.staticTexts.matching(
@@ -658,6 +727,32 @@ final class SimpleScriptureUITests: XCTestCase {
         XCTAssertTrue(
             genesis2.waitForNonExistence(timeout: 5),
             "Genesis 2 is still showing after paging back to Genesis 1."
+        )
+    }
+
+    /// Relaunches into the Bible with the KJV's markers off, at 18 pt, in the
+    /// given layout and with Headings on or off.
+    ///
+    /// The layout and the toggles are launch arguments: nothing that uses this
+    /// changes them, and an argument writes nothing.
+    @MainActor
+    private func relaunchWithMarkersOff(
+        _ arguments: [String], versePerLine: Bool, headings: Bool
+    ) {
+        app.terminate()
+        app.launchArguments = arguments + [
+            "-strongsPreference_KJV", "NO",
+            "-morphPreference_KJV", "NO",
+            "-footnotesPreference_KJV", "NO",
+            "-headingsPreference_KJV", headings ? "YES" : "NO",
+            "-vplPreference_KJV", versePerLine ? "YES" : "NO",
+            "-fontSizePreference", "18",
+        ]
+        app.launch()
+        // A launch always starts in the Read workspace, in the Bible.
+        XCTAssertTrue(
+            app.buttons["reading.reference-picker"].waitForExistence(timeout: 20),
+            "SimpleScripture did not finish initialization."
         )
     }
 
