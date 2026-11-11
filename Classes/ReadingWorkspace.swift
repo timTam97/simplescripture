@@ -488,12 +488,23 @@ final class ReaderPaneModel {
     /// The order is load-bearing: a pending ref wins over a pending restore, which
     /// wins over a pending verse scroll. Collapsing these into "do whatever is set"
     /// would re-render a chapter that was only meant to scroll.
+    ///
+    /// **The first two branches disarm the third.** A `.verse` load arms
+    /// `verseToShow` on both panes, and anything this pane is owed was handed to
+    /// it by that load or by a later one, so draining it supersedes the armed
+    /// verse. `.verse` and `.chapterStart` spend it themselves; an offset does
+    /// not, and one drained over it left it armed for the pane's NEXT appearance
+    /// with nothing owed — a Bible ⇄ commentary round trip, nothing navigated —
+    /// which scrolled to a verse from an earlier chapter and persisted it over
+    /// the reader's place.
     func applyPendingWork() {
         if let ref = refToShow {
+            verseToShow = 0
             render(ref: ref, restore: pendingRestore ?? .none)
             refToShow = nil
             pendingRestore = nil
         } else if let restore = pendingRestore {
+            verseToShow = 0
             apply(restore)
             pendingRestore = nil
         } else if verseToShow > 0 {
@@ -1268,7 +1279,13 @@ final class ReadingWorkspaceModel {
         // Paging away from a search result's chapter ends that result's highlight;
         // otherwise it follows the reader through every later chapter.
         activePane.searchHighlightTerms = []
-        activePane.setVerseToShow(0)
+        // No position is restored on EITHER pane, so a verse scroll armed before
+        // the page turn is spent on both. The pane that is not on screen spends
+        // its own when it drains the chapter start it is handed below — but a
+        // load that polls it first renders it where it stands, and at an offset
+        // the armed verse survived to fire when the pane was next shown.
+        bible.setVerseToShow(0)
+        commentary.setVerseToShow(0)
         let current = PSModuleController.getCurrentBibleRef()
         let boundary = forward
             ? PSModuleController.getLastRefAvailable()

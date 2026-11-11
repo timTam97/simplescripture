@@ -2658,6 +2658,128 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// A verse a pane was sent to does not outlive the load that sent it there.
+    ///
+    /// A `.verse` load arms a scroll to that verse on BOTH panes, and the pane
+    /// that is not on screen spent it only by draining as that verse. Pick
+    /// Romans 8:16, page on, and the commentary opened Romans 9 at the top with
+    /// verse 16 still armed: the next Bible → commentary switch, with nothing
+    /// navigated in between, scrolled it there and saved verse 16 over the one
+    /// the reader had read down to. The same the other way round.
+    ///
+    /// The stale scroll shows in the persisted verse. It resets where the pane
+    /// believes it is, so the next scroll report is saved against that verse.
+    @MainActor
+    func testASupersededVerseRestoreDoesNotFireOnALaterPaneSwitch() {
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4000, containerHeight: 675)
+        }
+        // Picked and paged in one pane, read in the other — both ways round.
+        for reading in [ReadingMode.commentary, .bible] {
+            let picking: ReadingMode = reading == .bible ? .commentary : .bible
+            let verseKey = reading == .bible
+                ? Defaults.bibleVersePosition
+                : Defaults.commentaryVersePosition
+            withPreservedReadingKeys { standard in
+                standard.set("Romans 7", forKey: Defaults.lastRef)
+                let workspace = ReadingWorkspaceModel()
+                workspace.mode = picking
+                workspace.selectReference(bookName: "Romans", chapter: 8, verse: 16)
+                workspace.nextChapter()
+                XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Romans 9")
+
+                workspace.mode = reading
+                let pane = workspace.activePane
+                pane.topmostVerseChanged(25, from: pane.scrollSurface)
+                pane.scrollOffsetChanged(sample(1900), from: pane.scrollSurface)
+                XCTAssertEqual(standard.string(forKey: verseKey), "25")
+
+                // A look at the other pane and straight back; then the rows settle.
+                workspace.mode = picking
+                workspace.mode = reading
+                pane.scrollOffsetChanged(sample(1903), from: pane.scrollSurface)
+                XCTAssertEqual(standard.string(forKey: verseKey), "25",
+                               "Coming back to the \(reading) pane scrolled it to the "
+                                   + "verse picked a chapter ago.")
+            }
+        }
+    }
+
+    /// Whatever a pane drains supersedes a verse scroll armed before it — an
+    /// offset as much as a verse or a chapter start, and with a chapter owed or
+    /// without.
+    ///
+    /// Only `.verse` and `.chapterStart` spend the armed verse themselves. An
+    /// offset drained over it left it armed, and the next time the pane appeared
+    /// with nothing owed it scrolled there. `deferRender` no longer hands a pane
+    /// an offset over a verse it was sent to, so no load builds this pair today;
+    /// the drain is where the rule belongs all the same, or the next producer
+    /// of one brings the jump back.
+    @MainActor
+    func testADrainedOffsetDisarmsAVerseScrollArmedBeforeIt() {
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4000, containerHeight: 675)
+        }
+        for owedChapter in [nil, "John 3"] as [String?] {
+            withPreservedReadingKeys { standard in
+                let pane = ReaderPaneModel(mode: .bible)
+                pane.setVerseToShow(5)
+                pane.refToShow = owedChapter
+                pane.pendingRestore = .offset(400)
+                pane.applyPendingWork()
+                pane.scrollOffsetChanged(sample(400), from: pane.scrollSurface)
+
+                // The reader scrolls on into the chapter...
+                pane.topmostVerseChanged(30, from: pane.scrollSurface)
+                pane.scrollOffsetChanged(sample(2600), from: pane.scrollSurface)
+                // ...and the pane appears again with nothing owed.
+                pane.applyPendingWork()
+
+                pane.scrollOffsetChanged(sample(2603), from: pane.scrollSurface)
+                XCTAssertEqual(
+                    standard.string(forKey: Defaults.bibleVersePosition), "30",
+                    "A verse scroll armed before the drain ran after it "
+                        + "(chapter owed: \(owedChapter ?? "none"))."
+                )
+                XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "2603")
+            }
+        }
+    }
+
+    /// Paging restores no position on EITHER pane, so it disarms a verse scroll
+    /// on both — not only on the pane that is on screen.
+    ///
+    /// The other pane usually spends its own by draining the chapter start it is
+    /// handed. It does not have to drain: a load that polls it renders it where
+    /// it stands, at its offset, and an offset leaves an armed verse alone. Here
+    /// the Bible was sent to Romans 8:16 while the commentary showed, the reader
+    /// paged on, and the Bible was then rendered in place — after which showing
+    /// it scrolled Romans 9 to verse 16. (A bookmark edit was that load. It now
+    /// leaves a Bible that owes a render alone, so nothing polls one today.)
+    @MainActor
+    func testPagingDisarmsAPendingVerseOnBothPanes() {
+        withPreservedReadingKeys { standard in
+            standard.set("Romans 7", forKey: Defaults.lastRef)
+            standard.set("0", forKey: "bibleScrollPosition")
+            let workspace = ReadingWorkspaceModel()
+            workspace.displayChapter("Romans 7", polling: .bible, restore: .scroll)
+            workspace.mode = .commentary
+
+            workspace.selectReference(bookName: "Romans", chapter: 8, verse: 16)
+            workspace.nextChapter()
+            workspace.displayChapter("Romans 9", polling: .bible, restore: .scroll)
+
+            workspace.mode = .bible
+            workspace.bible.scrollOffsetChanged(
+                ReaderScrollSample(offset: 300, contentHeight: 4000, containerHeight: 675),
+                from: workspace.bible.scrollSurface
+            )
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1",
+                           "Showing the Bible scrolled the chapter paged to back to "
+                               + "the verse picked in the one before it.")
+        }
+    }
+
     // MARK: Page-turn slide
 
     /// The scroll view a page turn leaves stays on screen until its slide ends,
