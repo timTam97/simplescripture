@@ -738,6 +738,71 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// The bookmark editor's folder picker hands `PSBookmarks.addBookmark` a NAME
+    /// path, and that path has to resolve to the folder it names.
+    ///
+    /// The walk used to match ANY child by name. Folders are appended, so a bookmark
+    /// described "Prayer" always sits before a folder "Prayer" created later: the
+    /// bookmark matched, the walk stopped without descending, and every bookmark
+    /// filed under "Prayer" — or under anything inside it — landed in the root, with
+    /// no error and without the folder's highlight colour. A top-level folder called
+    /// "Bookmarks" went the same way: its path is the root's own title, which was
+    /// read as the root.
+    ///
+    /// `getBookmarkFolder` resolves against the singleton, so its children are
+    /// swapped for the test and put back. Nothing here saves or posts.
+    func testBookmarkFolderPathResolvesToTheFolderItNames() {
+        func bookmark(_ name: String) -> PSBookmark {
+            PSBookmark(
+                name: name,
+                dateAdded: nil,
+                dateLastAccessed: nil,
+                bibleReference: "Romans 5:5"
+            )
+        }
+        func folder(_ name: String, _ children: [Any]? = nil) -> PSBookmarkFolder {
+            PSBookmarkFolder(
+                name: name,
+                dateAdded: nil,
+                dateLastAccessed: nil,
+                rgbHexString: nil,
+                children: children
+            )
+        }
+        func resolve(_ path: String?) -> PSBookmarkFolder {
+            PSBookmarks.getBookmarkFolder(forFolderString: path)
+        }
+        let bookmarks = PSBookmarks.default()
+        let saved = bookmarks.children
+        defer { bookmarks.children = saved }
+
+        // A bookmark and a folder of the same name, in the order the app leaves them.
+        let inner = folder("Inner")
+        let prayer = folder("Prayer", [inner])
+        bookmarks.children = [bookmark("Prayer"), prayer]
+        let innerPath = "Prayer\(AppConstants.folderSeparatorString)Inner"
+
+        XCTAssertEqual(
+            BookmarkFolderPath.all(root: bookmarks).map(\.path),
+            ["Prayer", innerPath],
+            "the paths the picker offers"
+        )
+        XCTAssertIdentical(resolve("Prayer"), prayer)
+        XCTAssertIdentical(resolve(innerPath), inner)
+
+        // A top-level folder that shares the root's title.
+        let title = NSLocalizedString("BookmarksTitle", comment: "")
+        let titled = folder(title)
+        bookmarks.children = [titled]
+
+        XCTAssertIdentical(resolve(title), titled)
+
+        // No path, and a path naming no folder, still mean the root.
+        XCTAssertIdentical(resolve(nil), bookmarks)
+        XCTAssertIdentical(resolve(""), bookmarks)
+        XCTAssertIdentical(resolve("Nope"), bookmarks)
+    }
+
     @MainActor
     func testLibraryBookmarkChildrenParticipateInObservation() throws {
         let root = PSBookmarkFolder(
