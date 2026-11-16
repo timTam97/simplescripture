@@ -649,6 +649,15 @@ private struct ReaderReferenceControl: View {
             .accessibilityLabel(Text("VoiceOverNextChapterButton"))
             .accessibilityIdentifier("reading.next-chapter")
         }
+        // A Liquid Glass pill around ‹ reference ›, sized to the bar's own glass
+        // buttons (44 pt). Drawn here because the `.principal` slot gets no shared
+        // background: `sharedBackgroundVisibility(.visible)` on its `ToolbarItem`
+        // drew nothing (observed on device, iOS 27). Not `.interactive()`: the
+        // pill holds three buttons, each with its own press state, and an
+        // interactive glass would answer a tap on any of them as one.
+        .padding(.horizontal, 10)
+        .frame(height: 44)
+        .glassEffect(.regular, in: .capsule)
     }
 }
 
