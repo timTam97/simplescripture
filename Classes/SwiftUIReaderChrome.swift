@@ -717,7 +717,9 @@ struct ReaderScreen: View {
             currentReference: PSModuleController.getCurrentBibleRef(),
             // iPhone presents as a sheet, which needs an explicit Cancel; an iPad
             // popover is dismissed by tapping outside it.
-            showsCancel: UIDevice.current.userInterfaceIdiom == .phone
+            showsCancel: UIDevice.current.userInterfaceIdiom == .phone,
+            // Tiles in the iPad popover; the iPhone sheet keeps its rows and index.
+            layout: UIDevice.current.userInterfaceIdiom == .pad ? .grid : .list
         )
         let chrome = reading.activePane.chrome
         model.onCancel = {
@@ -819,12 +821,17 @@ private struct ReaderReferenceControl: View {
             // NO `presentationCompactAdaptation(.popover)`: iPhone adapts to a sheet
             // (the system default, and intended); iPad gets a popover.
             .popover(isPresented: $chrome.isPresentingReferencePicker) {
-                makeReferencePicker()
-                    .frame(
-                        minWidth: 320,
-                        minHeight: UIDevice.current.userInterfaceIdiom == .pad
-                            ? 480 : nil
-                    )
+                if UIDevice.current.userInterfaceIdiom == .pad {
+                    // Three book columns and seven chapter columns. An ideal size,
+                    // not a minimum: a minimum would hold the grid at this size in
+                    // a popover the window makes smaller. Measured (iOS 27.2, iPad
+                    // Pro 11-inch): 440 x 636 in portrait and in landscape.
+                    makeReferencePicker()
+                        .frame(idealWidth: 440, idealHeight: 640)
+                } else {
+                    makeReferencePicker()
+                        .frame(minWidth: 320)
+                }
             }
 
             Button {

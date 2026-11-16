@@ -455,6 +455,32 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(selection?.chapter, 3)
     }
 
+    /// The iPad grid heads its books "Old Testament" and "New Testament": the
+    /// versification's own testament numbers, each group in canonical order.
+    @MainActor
+    func testReferencePickerGroupsTheBooksByTestament() throws {
+        let resolver = try XCTUnwrap(PSBookOSISResolver.shared)
+        let model = ReferencePickerModel(
+            books: resolver.books.map(ReferencePickerBook.init),
+            layout: .grid
+        )
+
+        let testaments = model.testaments
+        XCTAssertEqual(testaments.map(\.id), [1, 2])
+        XCTAssertEqual(testaments.map(\.books.count), [39, 27])
+        XCTAssertEqual(testaments.first?.books.first?.id, "Gen")
+        XCTAssertEqual(testaments.first?.books.last?.id, "Mal")
+        XCTAssertEqual(testaments.last?.books.first?.id, "Matt")
+        XCTAssertEqual(testaments.last?.books.last?.id, "Rev")
+        XCTAssertEqual(
+            testaments.flatMap(\.books),
+            model.books,
+            "every book in exactly one group, in versification order"
+        )
+        // The iPhone sheet keeps its list unless asked otherwise.
+        XCTAssertEqual(ReferencePickerModel().layout, .list)
+    }
+
     func testReadingStateStoreLoadsLegacyPositionAndModules() throws {
         defaults.set("John 3", forKey: Defaults.lastRef)
         defaults.set("KJV-Test", forKey: Defaults.lastBible)
