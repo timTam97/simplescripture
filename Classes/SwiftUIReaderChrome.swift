@@ -447,14 +447,6 @@ struct ReaderScreen: View {
                     Button("Cancel", role: .cancel) {}
                 }
         }
-        // A SLIGHT fade over the status bar, so its icons stay legible over the
-        // chapter text now that the reader draws no top scroll edge effect. On the
-        // NavigationStack, whose top safe area is the status bar and nothing more,
-        // so the fade ends above the toolbar's buttons on every device. The status
-        // bar draws above the app, so it is never itself faded.
-        .overlay(alignment: .top) {
-            StatusBarFade()
-        }
         // Whether the window fills the screen, re-read whenever the reader's size
         // changes (a window resized, entered or left full screen, rotated).
         .onGeometryChange(for: CGSize.self, of: \.size) { _ in
@@ -566,37 +558,6 @@ struct ReaderScreen: View {
             )
         }
         return ReferencePickerView(model: model)
-    }
-}
-
-/// The gradient behind the status bar: the page's own background, part-way
-/// opaque at the screen's top edge and clear at the status bar's foot.
-///
-/// Sized from the overlay's top safe-area inset and drawn above its own frame
-/// (the geometry's origin is the safe area's top). Not a zero-height view with
-/// `ignoresSafeArea(edges: .top)`: that drew nothing (MEASURED, iOS 27.2 — text
-/// at full brightness from y 0).
-private struct StatusBarFade: View {
-    var body: some View {
-        GeometryReader { proxy in
-            gradient
-                .frame(height: proxy.safeAreaInsets.top)
-                .offset(y: -proxy.safeAreaInsets.top)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private var gradient: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Color(.systemBackground).opacity(0.7), location: 0),
-                .init(color: Color(.systemBackground).opacity(0.45), location: 0.5),
-                .init(color: Color(.systemBackground).opacity(0), location: 1),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
     }
 }
 
