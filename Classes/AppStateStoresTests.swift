@@ -6262,6 +6262,82 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    // MARK: Reader bar
+
+    /// Where ‹ reference › goes on an iPad: the tab bar's row only where the bar
+    /// keeps it there. Getting it wrong one way costs a row of the screen; the
+    /// other way the bar drops the control AND the Bible/commentary switch, with
+    /// nothing logged and no way left to change chapter (issue #32).
+    ///
+    /// Every case is a layout MEASURED on iOS 27.2 (2026-11-16), with the first
+    /// tab's x read from the hierarchy, and the outcome the bar chose with the
+    /// control forced into the leading slot. The test can only hold the arithmetic
+    /// to those layouts; that the bar still lays out this way on a later iOS is a
+    /// device check.
+    func testTheReferenceGoesLeadingOnlyWhereTheBarHasRoomForIt() {
+        let clear = RectangleCornerInsets()
+        // The window controls, still in the corner after a switch from Windowed
+        // Apps to Full-Screen Apps with the app running.
+        let windowControls = RectangleCornerInsets(
+            topLeading: CGSize(width: 66, height: 75), topTrailing: .zero,
+            bottomLeading: .zero, bottomTrailing: .zero
+        )
+        // The display's own rounding, as an iPad mini reports it: in every corner,
+        // and no reason to move anything.
+        let rounded = RectangleCornerInsets(
+            topLeading: CGSize(width: 15, height: 15),
+            topTrailing: CGSize(width: 15, height: 15),
+            bottomLeading: CGSize(width: 27, height: 27),
+            bottomTrailing: CGSize(width: 27, height: 27)
+        )
+        func fits(_ width: CGFloat, before tab: CGFloat,
+                  _ corners: RectangleCornerInsets) -> Bool {
+            ReaderReferenceFit.fitsLeading(
+                referenceWidth: width, firstTabMinX: tab, cornerInsets: corners
+            )
+        }
+
+        XCTAssertEqual(ReaderReferenceFit.leadingStart(cornerInsets: clear), 14)
+        XCTAssertEqual(ReaderReferenceFit.leadingStart(cornerInsets: windowControls), 82,
+                       "The bar starts its items 16 pt after the window controls.")
+        XCTAssertEqual(ReaderReferenceFit.leadingStart(cornerInsets: rounded), 14,
+                       "The display's rounding moved the leading items.")
+
+        // iPad Pro 11-inch, 834 pt portrait, first tab at 264.75: the control
+        // (180 pt) fits with nothing in the corner, and still did 2 pt wider; 4 pt
+        // wider, the bar dropped it.
+        XCTAssertTrue(fits(180, before: 264.75, clear))
+        XCTAssertTrue(fits(182, before: 264.75, clear))
+        XCTAssertFalse(fits(184, before: 264.75, clear))
+        // The issue: the same screen with the window controls in the corner.
+        XCTAssertFalse(fits(180, before: 264.75, windowControls),
+                       "Portrait with the window controls lost both leading items.")
+        // ...and in landscape (1210 pt, first tab at 452.75), where it fits after
+        // them, at x 134.
+        XCTAssertTrue(fits(180, before: 452.75, windowControls))
+        // iPad (A16), 820 pt portrait, first tab at 257.75.
+        XCTAssertFalse(fits(180, before: 257.75, clear))
+        // iPad mini (A20 Pro), 756 pt portrait (first tab at 225.75) and 1158 pt
+        // landscape (at 426.75).
+        XCTAssertFalse(fits(180, before: 225.75, rounded))
+        XCTAssertTrue(fits(180, before: 426.75, rounded))
+        // The largest text size: the tab bar grows to 350 pt and the control to
+        // 187. iPad Pro portrait (first tab at 246) loses it; landscape (434) keeps it.
+        XCTAssertFalse(fits(187, before: 246, clear))
+        XCTAssertTrue(fits(187, before: 434, clear))
+    }
+
+    /// The bar pads the control's chevrons more in the leading slot than at
+    /// `.principal`, so a width measured on the second row is not what the
+    /// leading slot would have to hold. MEASURED, iOS 27.2: 156 and 180 pt at the
+    /// default text size, 163 and 187 at the largest.
+    func testTheReferencesSecondRowWidthIsConvertedToItsLeadingSlotWidth() {
+        XCTAssertEqual(ReaderReferenceFit.leadingSlotWidth(measured: 156, inLeadingSlot: false), 180)
+        XCTAssertEqual(ReaderReferenceFit.leadingSlotWidth(measured: 163, inLeadingSlot: false), 187)
+        XCTAssertEqual(ReaderReferenceFit.leadingSlotWidth(measured: 180, inLeadingSlot: true), 180)
+        XCTAssertEqual(ReaderReferenceFit.defaultLeadingWidth, 180)
+    }
+
     // MARK: Chapter swipe
 
     /// The swipe-versus-scroll decision. The reader is a vertical scroll view, so

@@ -8,7 +8,9 @@
 //  - Reference and chapter navigation sit at `.principal` with
 //    `visibilityPriority(.high)`, so a constrained width sheds the study actions
 //    before it sheds the ability to move between chapters. This is the one
-//    control the reader cannot do without.
+//    control the reader cannot do without. On an iPad, where the tab bar takes
+//    the bar's centre, they move to the leading slot only where they fit there
+//    (`ReaderReferenceFit`); otherwise they keep `.principal`, on a second row.
 //  - Per-module display toggles go in a `ToolbarOverflowMenu`, declared only
 //    when the active module has some: a module with none gets no ••• button.
 //  - Navigation and workspace controls stay visible while reading.
@@ -312,6 +314,113 @@ struct ChapterPageTransition: Transition {
     }
 }
 
+/// Whether ‹ reference › fits on the tab bar's row, in the bar's leading slot
+/// after the Bible/commentary switch. At a regular width the tab bar floats in
+/// the navigation bar's centre; if the leading items do not fit beside it the
+/// bar drops BOTH of them: no book button and no chapter navigation, and nothing
+/// logged. So the reader decides from what it can measure, and sends the control
+/// to the second row (`.principal`) wherever the leading slot would not hold it.
+///
+/// The constants are the bar's own geometry, MEASURED on iOS 27.2 (iPad Pro
+/// 11-inch (M5), iPad mini (A20 Pro), iPad (A16); 2026-11-16), not ours to choose.
+/// `testTheReferenceGoesLeadingOnlyWhereTheBarHasRoomForIt` pins each measured
+/// case.
+enum ReaderReferenceFit {
+    /// Where the bar starts its leading items with nothing in the corner.
+    static let leadingMargin: CGFloat = 14
+    /// The bar's spacing: between two items, after the system's window controls,
+    /// and before the first tab. Measured as the last: a pill that ended 16.75 pt
+    /// short of the first tab stayed, one that ended 14.75 pt short was dropped.
+    static let itemSpacing: CGFloat = 16
+    /// The switch's glass circle, at every Dynamic Type size (its frame; it draws
+    /// wider, see CLAUDE.md).
+    static let modeSwitchWidth: CGFloat = 36
+    /// How much wider the control is in the leading slot than at `.principal`:
+    /// the bar gives each chevron button 6 pt more padding on both sides there
+    /// (180 pt against 156 at the default text size, 187 against 163 at the
+    /// largest).
+    static let leadingSlotAllowance: CGFloat = 24
+    /// The control's leading-slot width at the default text size. Measured with
+    /// "Gen 1:11" and with "Psa 119:156", one of the longest titles: both sit
+    /// inside the title's 95 pt floor.
+    static let defaultLeadingWidth: CGFloat = 180
+
+    /// The x of the bar's first leading item.
+    ///
+    /// The system's window controls take the window's top-leading corner, where
+    /// `containerCornerInsets` reports them (MEASURED: 66 × 75 pt), and the bar
+    /// starts its items 16 pt after them (x 82). They show in a window, and in
+    /// full screen too after a switch from Windowed Apps to Full-Screen Apps with
+    /// the app running, where the window still covers the screen. Counted only
+    /// where the leading corner's inset exceeds the trailing one's: the display's
+    /// own rounding is reported in all four corners alike (15 pt on an iPad mini)
+    /// and moves nothing.
+    static func leadingStart(cornerInsets: RectangleCornerInsets) -> CGFloat {
+        let controls = cornerInsets.topLeading.width
+        guard controls > cornerInsets.topTrailing.width else { return leadingMargin }
+        return max(leadingMargin, controls + itemSpacing)
+    }
+
+    /// - Parameters:
+    ///   - referenceWidth: the control's width in the leading slot.
+    ///   - firstTabMinX: the first tab's leading edge, in the same space as the
+    ///     bar (the window).
+    static func fitsLeading(
+        referenceWidth: CGFloat,
+        firstTabMinX: CGFloat,
+        cornerInsets: RectangleCornerInsets
+    ) -> Bool {
+        let leadingEnd = leadingStart(cornerInsets: cornerInsets)
+            + modeSwitchWidth + itemSpacing + referenceWidth
+        return leadingEnd + itemSpacing <= firstTabMinX
+    }
+
+    /// The control's leading-slot width, from a measurement taken in either slot.
+    static func leadingSlotWidth(measured width: CGFloat, inLeadingSlot: Bool) -> CGFloat {
+        inLeadingSlot ? width : width + leadingSlotAllowance
+    }
+
+    /// The leading edge of the first tab in the tab bar floating at the top of the
+    /// app's window, in window coordinates; nil when there is none there (an
+    /// iPhone, and an iPad at a compact width, put the tab bar at the bottom) or
+    /// it cannot be found.
+    ///
+    /// `UITab` is a popover source item, so `frame(in:)` is public API; SwiftUI's
+    /// `TabView` does not expose the tab bar's frame. The tab bar is centred and its
+    /// width follows Dynamic Type (312.5 pt at the default size, 350 at the
+    /// largest), so it has to be read, not assumed. nil sends the control to the
+    /// second row, where it always shows.
+    @MainActor
+    static func floatingTabBarLeadingEdge() -> CGFloat? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive })
+                ?? scenes.first,
+              let window = scene.keyWindow ?? scene.windows.first,
+              let tabBarController = tabBarController(in: window.rootViewController)
+        else { return nil }
+        let frames = tabBarController.tabs
+            .filter { !$0.isHidden }
+            .compactMap { $0.frame(in: window) }
+            .filter { !$0.isEmpty }
+        guard !frames.isEmpty,
+              frames.allSatisfy({ $0.midY < window.bounds.midY })
+        else { return nil }
+        return frames.map(\.minX).min()
+    }
+
+    @MainActor
+    private static func tabBarController(in controller: UIViewController?) -> UITabBarController? {
+        guard let controller else { return nil }
+        if let tabBarController = controller as? UITabBarController {
+            return tabBarController
+        }
+        for child in controller.children {
+            if let found = tabBarController(in: child) { return found }
+        }
+        return nil
+    }
+}
+
 /// The Read workspace: the active pane, its chrome, the Bible/commentary
 /// switch, and the study surfaces the reader raises (study popup, verse menu,
 /// bookmark editor).
@@ -322,42 +431,91 @@ struct ReaderScreen: View {
     @State private var swipePageTurns = 0
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.layoutDirection) private var layoutDirection
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var chrome: ReaderChromeModel { reading.activePane.chrome }
 
-    @State private var windowFillsScreen = true
+    /// What `ReaderReferenceFit` decides from.
+    ///
+    /// The control's leading-slot width, from its own last layout in whichever
+    /// slot it was in. Until then, its width at the default text size, so that a
+    /// launch lays it out in the right slot the first time: started on the second
+    /// row, it showed there for a second of every launch before moving up (MEASURED,
+    /// iOS 27.2, iPad Pro 11-inch). A wrong guess corrects itself, because the
+    /// control reports its width from the leading slot even when the bar drops it
+    /// there (MEASURED: a pill too wide to fit, every control gone, reported 190 pt).
+    @State private var referenceWidth = ReaderReferenceFit.defaultLeadingWidth
+    /// The first tab's leading edge, read from UIKit whenever the tab bar can have
+    /// moved. nil keeps the control on the second row, where it always shows.
+    @State private var firstTabMinX: CGFloat?
+    /// The reader's corners: where the system's window controls show.
+    @State private var cornerInsets = RectangleCornerInsets()
 
     /// Where ‹ reference › goes. At a regular width the tab bar floats at the
     /// TOP, in the navigation bar's centre, and pushes a `.principal` item down to
-    /// a row of its own under it (MEASURED, iOS 27.2: the bar 112 pt tall). Full
-    /// screen, the control goes LEADING instead, beside the Bible/commentary
-    /// switch, on the tab bar's row.
+    /// a row of its own under it (MEASURED, iOS 27.2: the bar 112 pt tall). Where
+    /// it fits, the control goes LEADING instead, beside the Bible/commentary
+    /// switch, on the tab bar's row; where it does not, it stays on the second
+    /// row, because the bar would drop both leading items rather than either
+    /// (`ReaderReferenceFit`). Where the tab bar is at the bottom — a compact
+    /// width, and an iPhone at any width — the centre of the top row is free.
     ///
-    /// Only full screen. In a window the leading slot also holds the system's
-    /// window controls, and the tab bar stays centred on the SCREEN, not the
-    /// window: in windows 708–904 pt wide (still regular, measured) the switch
-    /// and the control did not fit beside it, and the bar dropped BOTH — no book
-    /// button, no chapter navigation. A window keeps `.principal` and its second
-    /// row, where everything shows. At a compact width the tab bar is at the
-    /// bottom and the centre is free.
-    private var referencePlacement: ToolbarItemPlacement {
-        horizontalSizeClass == .regular && windowFillsScreen
-            ? .topBarLeading : .principal
+    /// Fit, not full screen, because neither implies the other (MEASURED, iOS
+    /// 27.2): full screen, an iPad mini (756 pt) and an iPad (A16) (820 pt) in
+    /// portrait, and an iPad Pro 11-inch (834 pt) at the largest text size, or in
+    /// portrait with the window controls still in the corner after a switch from
+    /// Windowed Apps, all lost both items.
+    private var referenceGoesLeading: Bool {
+        guard horizontalSizeClass == .regular,
+              // The arithmetic is left to right; the app is English only.
+              layoutDirection == .leftToRight,
+              let firstTabMinX
+        else { return false }
+        return ReaderReferenceFit.fitsLeading(
+            referenceWidth: referenceWidth,
+            firstTabMinX: firstTabMinX,
+            cornerInsets: cornerInsets
+        )
     }
 
-    /// Whether the app's window covers its whole screen: an iPhone always, an
-    /// iPad full screen, not an iPad window of any size.
-    static func windowFillsScreen() -> Bool {
-        let scenes = UIApplication.shared.connectedScenes
-            .compactMap { $0 as? UIWindowScene }
-        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive })
-                ?? scenes.first,
-              let window = scene.keyWindow ?? scene.windows.first
-        else { return true }
-        let windowSize = window.bounds.size
-        let screenSize = scene.screen.bounds.size
-        return abs(windowSize.width - screenSize.width) < 1
-            && abs(windowSize.height - screenSize.height) < 1
+    private var referencePlacement: ToolbarItemPlacement {
+        referenceGoesLeading ? .topBarLeading : .principal
+    }
+
+    /// Reads the tab bar's edge now, and again on the next turn of the run loop.
+    ///
+    /// Now, because at launch it is already laid out when the reader's first
+    /// geometry arrives, and the main thread can be busy for a while after
+    /// (MEASURED: a deferred read alone landed 164 ms later, with the control on
+    /// the second row meanwhile). Again, because a rotation reports the reader's
+    /// new size before the tab bar has moved.
+    private func refreshTabBarEdge() {
+        readTabBarEdge()
+        DispatchQueue.main.async {
+            readTabBarEdge()
+        }
+    }
+
+    private func readTabBarEdge() {
+        let edge = ReaderReferenceFit.floatingTabBarLeadingEdge()
+        if edge != firstTabMinX {
+            firstTabMinX = edge
+        }
+    }
+
+    /// A width the control reported from its own slot. A report from the slot it
+    /// is leaving is dropped: converted as though from the other one, it could
+    /// flip the placement back.
+    private func referenceWidthChanged(_ width: CGFloat, inLeadingSlot: Bool) {
+        guard inLeadingSlot == referenceGoesLeading else { return }
+        let leadingWidth = ReaderReferenceFit.leadingSlotWidth(
+            measured: width,
+            inLeadingSlot: inLeadingSlot
+        )
+        if leadingWidth != referenceWidth {
+            referenceWidth = leadingWidth
+        }
     }
 
     var body: some View {
@@ -383,7 +541,9 @@ struct ReaderScreen: View {
                             chrome: chrome,
                             makeReferencePicker: {
                                 makeReferencePicker(reading: reading)
-                            }
+                            },
+                            inLeadingSlot: referenceGoesLeading,
+                            widthChanged: referenceWidthChanged
                         )
                     }
                     .visibilityPriority(.high)
@@ -447,18 +607,24 @@ struct ReaderScreen: View {
                     Button("Cancel", role: .cancel) {}
                 }
         }
-        // A SLIGHT fade over the status bar, so its icons stay legible over the
-        // chapter text now that the reader draws no top scroll edge effect. On the
-        // NavigationStack, whose top safe area is the status bar and nothing more,
-        // so the fade ends above the toolbar's buttons on every device. The status
-        // bar draws above the app, so it is never itself faded.
-        .overlay(alignment: .top) {
-            StatusBarFade()
-        }
-        // Whether the window fills the screen, re-read whenever the reader's size
-        // changes (a window resized, entered or left full screen, rotated).
+        // The inputs `referenceGoesLeading` decides from, other than the control's
+        // own width. The tab bar is re-read after anything that can move it: a
+        // rotation or window resize, the window controls coming or going (a
+        // multitasking mode switch can bring them with no change of size), a text
+        // size change (the tab bar grows with it), and a return to the Read tab,
+        // which may have missed any of those while it was away.
         .onGeometryChange(for: CGSize.self, of: \.size) { _ in
-            windowFillsScreen = ReaderScreen.windowFillsScreen()
+            refreshTabBarEdge()
+        }
+        .onGeometryChange(for: RectangleCornerInsets.self, of: \.containerCornerInsets) { insets in
+            cornerInsets = insets
+            refreshTabBarEdge()
+        }
+        .onChange(of: dynamicTypeSize) {
+            refreshTabBarEdge()
+        }
+        .onAppear {
+            refreshTabBarEdge()
         }
     }
 
@@ -569,37 +735,6 @@ struct ReaderScreen: View {
     }
 }
 
-/// The gradient behind the status bar: the page's own background, part-way
-/// opaque at the screen's top edge and clear at the status bar's foot.
-///
-/// Sized from the overlay's top safe-area inset and drawn above its own frame
-/// (the geometry's origin is the safe area's top). Not a zero-height view with
-/// `ignoresSafeArea(edges: .top)`: that drew nothing (MEASURED, iOS 27.2 — text
-/// at full brightness from y 0).
-private struct StatusBarFade: View {
-    var body: some View {
-        GeometryReader { proxy in
-            gradient
-                .frame(height: proxy.safeAreaInsets.top)
-                .offset(y: -proxy.safeAreaInsets.top)
-        }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-
-    private var gradient: some View {
-        LinearGradient(
-            stops: [
-                .init(color: Color(.systemBackground).opacity(0.7), location: 0),
-                .init(color: Color(.systemBackground).opacity(0.45), location: 0.5),
-                .init(color: Color(.systemBackground).opacity(0), location: 1),
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
-}
-
 /// The Bible/commentary switch: two views of the same reference, so switching
 /// is a display choice rather than navigation.
 ///
@@ -644,6 +779,10 @@ private struct ReadingModePicker: View {
 private struct ReaderReferenceControl: View {
     let chrome: ReaderChromeModel
     let makeReferencePicker: () -> ReferencePickerView
+    /// The slot this instance was placed in, carried with each width it reports:
+    /// the bar pads the chevrons differently in the two (`ReaderReferenceFit`).
+    let inLeadingSlot: Bool
+    let widthChanged: (_ width: CGFloat, _ inLeadingSlot: Bool) -> Void
 
     var body: some View {
         @Bindable var chrome = chrome
@@ -706,6 +845,11 @@ private struct ReaderReferenceControl: View {
         .padding(.horizontal, 10)
         .frame(height: 44)
         .glassEffect(.regular, in: .capsule)
+        // Its width as laid out, the pill included: what the leading slot has to
+        // find room for. The title and the text size both change it.
+        .onGeometryChange(for: CGFloat.self, of: \.size.width) { width in
+            widthChanged(width, inLeadingSlot)
+        }
     }
 }
 

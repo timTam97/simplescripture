@@ -467,15 +467,25 @@ struct ChapterTextView: View {
                 .id(pane.versePerLine)
             }
             .scrollPosition($pane.scrollPosition)
-            // NO scroll edge effect at either end: the text runs crisp under the
-            // floating tab bar's glass and under the navigation bar. Both styles
-            // were tried and rejected by the owner (MEASURED, iOS 27.2): `.soft`
-            // blurs the last lines beside a bar progressively, and `.hard` lays a
-            // backing a shade off the page behind the bar (visible in dark mode)
-            // and slices the line on its edge in half, crisp on one side and
-            // ghosted on the other. The status bar keeps its legibility from
-            // `StatusBarFade` on `ReaderScreen` instead.
-            .scrollEdgeEffectHidden(true, for: [.top, .bottom])
+            // NO scroll edge effect at the BOTTOM: the text runs crisp under the
+            // floating tab bar's glass. Both styles were tried there and rejected
+            // by the owner (MEASURED, iOS 27.2): `.soft` blurs the last lines
+            // beside the bar progressively, and `.hard` lays a backing a shade off
+            // the page behind the bar (visible in dark mode) and slices the line on
+            // its edge in half, crisp on one side and ghosted on the other.
+            .scrollEdgeEffectHidden(true, for: .bottom)
+            // A SOFT edge effect at the TOP: the text going up under the status
+            // bar and the navigation bar is blurred, most at the screen's edge and
+            // tapering to none at the bar's foot, so the status bar stays legible
+            // without the page being darkened (the owner's ask, after a Slack
+            // reference). It replaces a gradient of the page's background over the
+            // status bar, which dimmed the text and left it sharp. Not a material
+            // masked to the status bar either (MEASURED, iOS 27.2): a material's
+            // blur radius is fixed, so where its mask fades a crisp copy of the
+            // text shows through, and the line on the fade is cut in two, blurred
+            // above and sharp below. Stacked materials do not blur one another,
+            // and the only variable blur in the SDK is private.
+            .scrollEdgeEffectStyle(.soft, for: .top)
             // Edge-to-edge (see the file header): the scroll view fills the window
             // (`ignoresSafeArea`) and the CONTENT carries the safe-area insets
             // (`contentMargins`), so no line is obscured at rest.
