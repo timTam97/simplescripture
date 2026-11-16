@@ -742,6 +742,57 @@ final class PSContentStore: NSObject {
         }
     }
 
+    /// Every verse's `word_map` in one chapter, keyed by verse: one line per
+    /// tagged word or run of words, `surface TAB lemma lemma …`, in the verse's
+    /// order. The Strong's highlight in the reader reads it
+    /// (`PSSearchQuery.strongsHighlightRanges`).
+    ///
+    /// Keyed like `headings`, by the module's own key text ("Psalms 3:1"), so it
+    /// takes the LONG book name. A verse with no row, or with no word map (every
+    /// verse of a module without Strong's), is absent. A chunk that fails to
+    /// inflate has already been reported by `chunkRows`; its verses are absent.
+    func wordMaps(module: String, bookName: String, chapter: Int) -> [Int: String] {
+        queue.sync {
+            guard let st = statement(
+                "SELECT osis_ref, text_id FROM verses_plain"
+                + " WHERE module=? AND osis_ref LIKE ?;") else { return [:] }
+            bind(st, 1, module)
+            bind(st, 2, "\(bookName) \(chapter):%")
+            var textIDs: [(verse: Int, textID: Int)] = []
+            while sqlite3_step(st) == SQLITE_ROW {
+                let ref = Self.text(st, 0)
+                // As in `headings`: the prefix pins the chapter, so only the
+                // verse tail is parsed, and a ref of any other shape is skipped.
+                guard let colon = ref.lastIndex(of: ":"),
+                      let verse = Int(ref[ref.index(after: colon)...]) else { continue }
+                textIDs.append((verse, Int(sqlite3_column_int64(st, 1))))
+            }
+            sqlite3_reset(st)
+
+            // A chapter is one or two chunks: each is inflated once. One that
+            // will not is cached as nil, so it is not retried for every verse.
+            var chunks: [Int: [[String]]?] = [:]
+            var out: [Int: String] = [:]
+            for (verse, textID) in textIDs {
+                let chunk = textID / chunkRowsPlain
+                let slot = textID % chunkRowsPlain
+                if chunks[chunk] == nil {
+                    chunks[chunk] = .some(chunkRows(table: "plain_texts_chunks",
+                                                    module: module, chunkID: chunk))
+                }
+                // `chunkRows` has already reported a chunk that failed.
+                guard let fields = chunks[chunk] ?? nil else { continue }
+                guard slot < fields.count, fields[slot].count == 3 else {
+                    Self.fail("plain_texts \(module): text_id \(textID) is not a 3-field row")
+                    continue
+                }
+                let map = fields[slot][2]
+                if !map.isEmpty { out[verse] = map }
+            }
+            return out
+        }
+    }
+
     // MARK: - Module metadata
 
     /// `content_meta`'s per-module values (`module.<name>.type` / `.version` /

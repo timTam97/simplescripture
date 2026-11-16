@@ -189,6 +189,77 @@ final class ReaderPaneModel {
         }
     }
 
+    /// The Strong's numbers to highlight: a Strong's search result's, in both of
+    /// an H number's forms (`PSSearchQuery.strongsTokens`). Every word in the
+    /// chapter that the number tags is marked, where it stands — the Psalm
+    /// titles included — whether or not the numbers are shown.
+    ///
+    /// The other half of `searchHighlightTerms`, and ended with it
+    /// (`ReadingWorkspaceModel.clearSearchHighlight`). Unlike the terms, the
+    /// marks are not a style: where a number's words are depends on the
+    /// chapter's word maps, so they are put on the document
+    /// (`ChapterTextRenderer.markingStrongs`), here for the chapter showing and
+    /// by `render` for every chapter drawn while they last. Clear it by
+    /// assigning `[]`.
+    var searchHighlightStrongs: [String] = [] {
+        didSet {
+            guard searchHighlightStrongs != oldValue else { return }
+            // Not assigned when nothing changed (numbers taken off a chapter
+            // that had no marks): an assignment rebuilds the paragraphs and
+            // redraws every row.
+            let marked = markingStrongs(document)
+            if marked != document { document = marked }
+        }
+    }
+
+    /// `document` with `searchHighlightStrongs`' words marked, or with its marks
+    /// taken off when there are no numbers.
+    ///
+    /// The store is read only to mark: a chapter drawn with no numbers set
+    /// costs nothing here, and one with no marks on it is returned as it is.
+    private func markingStrongs(_ document: ChapterDocument) -> ChapterDocument {
+        guard !searchHighlightStrongs.isEmpty else {
+            let isMarked = document.verses.contains {
+                !$0.strongsMarks.isEmpty
+                    || $0.headings.contains { !$0.strongsMarks.isEmpty }
+            }
+            guard isMarked else { return document }
+            return ChapterTextRenderer.markingStrongs(
+                [], wordMaps: [:], taggedIn: document, in: document
+            )
+        }
+        guard let ref = renderedRef, let module = moduleName,
+              !document.verses.isEmpty else { return document }
+        let reader = PSContentReader.shared
+        let wordMaps = reader.wordMaps(module: module, ref: ref)
+        // A word is found by the chapter's own Strong's markers, so the chapter
+        // is read with the numbers on: `document` itself when it has them, and
+        // otherwise the same chapter built again with them. Not for a chapter
+        // with no word maps (a commentary's), which has nothing to mark.
+        let tagged: ChapterDocument
+        if wordMaps.isEmpty
+            || document.verses.contains(where: \.carriesStrongsMarkers) {
+            tagged = document
+        } else {
+            var options = reader.options(forModule: module)
+            options.strongs = true
+            guard let built = reader.chapterDocument(
+                module: module,
+                ref: ref,
+                kind: mode == .bible ? .bible : .commentary,
+                options: options,
+                applyBookmarkHighlights: false
+            ) else { return document }
+            tagged = built
+        }
+        return ChapterTextRenderer.markingStrongs(
+            Set(searchHighlightStrongs),
+            wordMaps: wordMaps,
+            taggedIn: tagged,
+            in: document
+        )
+    }
+
     /// A chapter this pane should render the next time it appears, with the
     /// position to restore. Set by `displayChapter` for the pane it did NOT poll,
     /// through `deferRender(of:restore:)`; `selectReference` re-aims the restore
@@ -404,11 +475,15 @@ final class ReaderPaneModel {
         var style = ChapterTextRenderer.Style.current()
         style.highlightTerms = searchHighlightTerms
         textStyle = style
-        document = PSContentReader.shared.chapterDocument(
-            module: module,
-            ref: ref,
-            kind: mode == .bible ? .bible : .commentary
-        ) ?? ChapterDocument()
+        // And the Strong's marks, made again for the runs this render built: a
+        // display toggle (the numbers shown, say) moves every word's place.
+        document = markingStrongs(
+            PSContentReader.shared.chapterDocument(
+                module: module,
+                ref: ref,
+                kind: mode == .bible ? .bible : .commentary
+            ) ?? ChapterDocument()
+        )
         apply(restore)
     }
 
@@ -1757,13 +1832,19 @@ final class ReadingWorkspaceModel {
     /// terms: an all/any-words query's words, a quoted phrase whole, the words
     /// Fuzzy ran as prefixes marked as such — which is **empty** for a Strong's
     /// search (the matched text is a lemma, not text present in the verse).
+    /// A Strong's search hands over its numbers instead
+    /// (`SearchModel.highlightStrongsNumbers`), and the pane marks the words
+    /// each one tags (`ReaderPaneModel.searchHighlightStrongs`).
     ///
     /// **Not the way to open a result** — that is `openSearchResult`, which owns
     /// the order. A routed open ends the highlight in both panes, so terms set
     /// before one are wiped by it.
-    func highlightSearchTerms(_ terms: [SearchHighlightTerm], mode: ReadingMode) {
+    func highlightSearchTerms(_ terms: [SearchHighlightTerm],
+                              strongsNumbers: [String] = [],
+                              mode: ReadingMode) {
         let pane = mode == .bible ? bible : commentary
         pane.searchHighlightTerms = terms.filter { !$0.tokens.isEmpty }
+        pane.searchHighlightStrongs = strongsNumbers
     }
 
     /// Ends the search highlight in both panes.
@@ -1777,9 +1858,14 @@ final class ReadingWorkspaceModel {
     ///
     /// BOTH panes, because the pane that is not showing follows to the new chapter
     /// through its deferral, and would draw it with its own terms when next shown.
+    ///
+    /// A Strong's result's numbers end with the terms, by every one of the same
+    /// ways out: they are the same highlight.
     func clearSearchHighlight() {
         bible.searchHighlightTerms = []
         commentary.searchHighlightTerms = []
+        bible.searchHighlightStrongs = []
+        commentary.searchHighlightStrongs = []
     }
 
     // MARK: Search hand-off
@@ -1797,14 +1883,21 @@ final class ReadingWorkspaceModel {
     ///
     /// A reference the router rejects opens nothing, and its terms still land on
     /// the chapter showing, as they always have.
+    ///
+    /// `strongsNumbers` is a Strong's search's half of the same thing
+    /// (`SearchModel.highlightStrongsNumbers`): no terms, and the numbers whose
+    /// words the result's row marked, which the chapter then marks wherever
+    /// they stand. Empty for a text search. Pinned, with its order, by
+    /// `testAStrongsResultMarksTheWordsItsNumberTagsInTheChapterItOpens`.
     func openSearchResult(
         _ reference: String,
         module: String,
         terms: [SearchHighlightTerm],
+        strongsNumbers: [String],
         mode: ReadingMode
     ) {
         openLibraryReference(reference, module: module)
-        highlightSearchTerms(terms, mode: mode)
+        highlightSearchTerms(terms, strongsNumbers: strongsNumbers, mode: mode)
     }
 
     /// The module choices the search workspace offers — the two readable modules,

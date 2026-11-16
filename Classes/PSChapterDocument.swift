@@ -203,6 +203,9 @@ struct ChapterHeading: Equatable, Hashable {
     /// Canonical headings (Psalm titles) render as scripture rather than as
     /// editorial furniture, and are emitted even with headings off.
     var isCanonical: Bool
+    /// The words a Strong's search result marks in this heading — a Psalm's
+    /// title is tagged like its verses. See `ChapterVerse.strongsMarks`.
+    var strongsMarks: [Range<Int>] = []
 }
 
 /// One verse row: the unit the `LazyVStack` renders and scrolls to.
@@ -240,6 +243,16 @@ struct ChapterVerse: Identifiable, Equatable, Hashable {
         }
     }
 
+    /// Whether the verse was built with its Strong's numbers on and has one:
+    /// what a Strong's highlight finds its words by. Computed, like
+    /// `hasVisibleText`.
+    var carriesStrongsMarkers: Bool {
+        runs.contains {
+            guard case .strongs? = $0.link else { return false }
+            return true
+        }
+    }
+
     /// Whether this verse OPENS a paragraph.
     ///
     /// The KJV marks paragraph starts with a pilcrow (`&#182;`), and it does so
@@ -252,6 +265,17 @@ struct ChapterVerse: Identifiable, Equatable, Hashable {
     /// Verse 1 of every chapter also opens a paragraph, whether or not it carries a
     /// pilcrow.
     var startsParagraph: Bool = false
+
+    /// The words a Strong's search result marks in this verse: the ones its
+    /// word map tags with the number, as unicode-scalar offsets in
+    /// `ChapterTextRenderer.attributed(runs:)` of `runs`.
+    ///
+    /// **Never set by the builder**, so the parity tests' documents leave it
+    /// empty. The reader puts it on the document it shows
+    /// (`ChapterTextRenderer.markingStrongs`) for as long as the result's
+    /// highlight lasts, because the marks depend on the chapter's word maps,
+    /// which a style cannot carry the way it carries a text search's terms.
+    var strongsMarks: [Range<Int>] = []
 }
 
 /// A run of verses that render as one flowing paragraph.

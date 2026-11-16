@@ -745,6 +745,212 @@ final class PSSearchQuery: NSObject {
         }
         return ranges
     }
+
+    /// Where a Strong's search marks a verse: the words its `word_map` tags
+    /// with any of `numbers`, each where it stands, as ranges of each of
+    /// `texts`.
+    ///
+    /// **Each tagged word is marked at its own place, not wherever its spelling
+    /// recurs.** A word map is the verse's tagged words in the order the verse
+    /// has them, one line per original-language word (`of God TAB H0430 H430`),
+    /// and the words no original stands behind — the translators' supplied
+    /// italics, a word a phrase's rendering left over — are simply not in it.
+    /// So every line is found in turn, each from where the one before it
+    /// ended, and only the lines tagged with the number are marked. John 3:16
+    /// has "that" under G5620 and again under G2443, and a search for either
+    /// marks the one it tagged; the result row, which has only the surface
+    /// words, marks both (`PSSearchEngine.surfaceWords`).
+    ///
+    /// **A line is found only where the chapter's own Strong's marker for one of
+    /// its numbers follows it** (`tagged`, the same texts read with the numbers
+    /// on). In order alone, a line takes the first place its words fit, and an
+    /// untagged copy of them can stand there: Psalm 10:4 reads "will not
+    /// seek *after God*: God<0430>", and the supplied "God" was marked for
+    /// H0430; Job 30:14 "breaking in of waters: in<08478>", where the first
+    /// "in" was. MEASURED over the whole KJV, every line with a number in it —
+    /// 349,513 of the 349,514 — is found that way (`I Corinthians 15:35`'s
+    /// "dead" carries only its Greek word). Between the last word and the
+    /// marker there may be punctuation and no space: `sons’<01121>`, `us?<05921>`.
+    ///
+    /// `tagged` and `texts` are what the reader draws, in order: the verse's
+    /// canonical headings, then the verse itself. A Psalm's title is in its
+    /// first verse's word map, ahead of the verse's own words, so a search for
+    /// H4210 marks "A Psalm" in the title. A line is found inside one text,
+    /// never across two. The lines are found in `tagged` and marked in `texts`
+    /// by their place among its words, which are the same words with or without
+    /// the numbers shown; a text whose words are not `tagged`'s is not marked.
+    ///
+    /// A line found nowhere after the cursor is skipped and the cursor stays.
+    /// Words are matched as the index's tokens (`highlightTokens`), so case and
+    /// punctuation do not part a surface from its verse: the divine name is
+    /// `Lord` in the column and `LORD` in the text, and `me! many` is one line.
+    class func strongsHighlightRanges(
+        taggedWithAnyOf numbers: Set<String>,
+        wordMap: String,
+        taggedIn tagged: [PSStrongsTaggedWords],
+        in texts: [String]
+    ) -> [[Range<String.Index>]] {
+        var marks = Array(repeating: [Range<String.Index>](), count: texts.count)
+        guard tagged.count == texts.count else { return marks }
+        let lines = PSWordMapLine.lines(in: wordMap)
+        // Nothing after the last tagged line can be marked, so the walk stops
+        // there.
+        guard let lastTagged = lines.lastIndex(where: {
+            $0.isTagged(withAnyOf: numbers)
+        }) else { return marks }
+
+        // Every word of every text, in reading order: the text it is in, its
+        // place among that text's words, its token, and whether one of the
+        // chapter's markers follows it, with the numbers in that marker.
+        struct Word {
+            let text: Int
+            let place: Int
+            let folded: String
+            let numbersAfter: Set<String>
+        }
+        let taggedTokens = tagged.map { highlightTokens(in: $0.words) }
+        var words: [Word] = []
+        for (index, text) in tagged.enumerated() {
+            let scalars = text.words.unicodeScalars
+            var counted = scalars.startIndex
+            var offset = 0
+            for (place, token) in taggedTokens[index].enumerated() {
+                offset += scalars.distance(from: counted, to: token.range.upperBound)
+                counted = token.range.upperBound
+                words.append(Word(
+                    text: index,
+                    place: place,
+                    folded: token.folded,
+                    numbersAfter: markerNumbers(
+                        after: counted, at: offset, in: text
+                    )
+                ))
+            }
+        }
+
+        var found: [[Range<Int>]] = Array(repeating: [], count: texts.count)
+        var cursor = 0
+        for line in lines[...lastTagged] {
+            let surface = highlightTokens(in: line.surface).map(\.folded)
+            guard !surface.isEmpty, words.count - cursor >= surface.count else {
+                continue
+            }
+            let lemmas = Set(line.lemmas)
+            var match: Int?
+            for first in cursor...(words.count - surface.count) {
+                let text = words[first].text
+                var fits = true
+                for offset in surface.indices
+                where words[first + offset].text != text
+                    || words[first + offset].folded != surface[offset] {
+                    fits = false
+                    break
+                }
+                if fits, !words[first + surface.count - 1].numbersAfter
+                    .isDisjoint(with: lemmas) {
+                    match = first
+                    break
+                }
+            }
+            guard let first = match else { continue }
+            let last = first + surface.count - 1
+            if line.isTagged(withAnyOf: numbers) {
+                found[words[first].text].append(
+                    words[first].place..<(words[last].place + 1)
+                )
+            }
+            cursor = last + 1
+        }
+
+        // From places among the words to ranges of the text drawn.
+        for (index, text) in texts.enumerated() where !found[index].isEmpty {
+            let drawn = highlightTokens(in: text)
+            guard drawn.map(\.folded) == taggedTokens[index].map(\.folded) else {
+                continue
+            }
+            marks[index] = found[index].map {
+                drawn[$0.lowerBound].range.lowerBound
+                    ..< drawn[$0.upperBound - 1].range.upperBound
+            }
+        }
+        return marks
+    }
+
+    /// The numbers in the Strong's marker that follows the word ending at
+    /// `end` (unicode-scalar offset `offset`) of `text`, past any punctuation
+    /// and no space, or none.
+    private static func markerNumbers(
+        after end: String.Index,
+        at offset: Int,
+        in text: PSStrongsTaggedWords
+    ) -> Set<String> {
+        let scalars = text.words.unicodeScalars
+        var index = end
+        var offset = offset
+        while true {
+            if let numbers = text.markers[offset] { return numbers }
+            guard index != scalars.endIndex else { return [] }
+            let scalar = scalars[index]
+            if scalar.properties.isWhitespace || isTokenScalar(scalar) { return [] }
+            index = scalars.index(after: index)
+            offset += 1
+        }
+    }
+}
+
+/// A text a Strong's highlight finds its words in: the words, and where the
+/// chapter's Strong's markers stand among them.
+///
+/// Made by the reader from a verse's runs with the numbers on
+/// (`ChapterTextRenderer.strongsTaggedWords(of:)`).
+struct PSStrongsTaggedWords: Equatable {
+    /// The text's words: its runs that are not markers, joined with nothing
+    /// between (`ChapterTextRenderer.searchableWords(of:)`).
+    let words: String
+    /// The places in `words`, as unicode-scalar offsets, that a marker group
+    /// with a Strong's number in it follows, with its numbers as a word map
+    /// writes them (`H0430`, `G2316`).
+    let markers: [Int: Set<String>]
+}
+
+/// One line of a verse's `word_map`: the word or words that render one
+/// original-language word, and the lemmas it carries.
+///
+/// The column is `surface TAB lemma lemma …`, a line per tagged word or run of
+/// words, in the verse's order. The lemmas are a Strong's number in both of its
+/// forms (`H0430 H430`) and, in the New Testament, the Greek word as well
+/// (`G2316 θεος`).
+struct PSWordMapLine: Equatable {
+    /// As the verse prints it, with the column's markup taken off. The column
+    /// carries one tag, around the divine name (`that the
+    /// <divineName>Lord</divineName>`), and with it on the surface is in no
+    /// verse — see `PSSearchEngine.surfaceWords`.
+    let surface: String
+    let lemmas: [String]
+
+    /// Whether this line carries any of `numbers` — `PSSearchQuery.strongsTokens`,
+    /// which holds an H number in both forms.
+    func isTagged(withAnyOf numbers: Set<String>) -> Bool {
+        lemmas.contains { numbers.contains($0) }
+    }
+
+    /// The lines of a `word_map`, in order. A line with no tab, no surface once
+    /// its markup is off, or no lemmas is not one.
+    static func lines(in map: String) -> [PSWordMapLine] {
+        var lines: [PSWordMapLine] = []
+        for line in map.components(separatedBy: "\n") {
+            guard let tab = line.range(of: "\t") else { continue }
+            let lemmas = line[tab.upperBound...]
+                .components(separatedBy: " ")
+                .filter { !$0.isEmpty }
+            let surface = String(line[line.startIndex..<tab.lowerBound])
+                .replacingOccurrences(of: "<[^>]*>", with: "",
+                                      options: .regularExpression)
+            if surface.isEmpty || lemmas.isEmpty { continue }
+            lines.append(PSWordMapLine(surface: surface, lemmas: lemmas))
+        }
+        return lines
+    }
 }
 
 /// One thing a search highlights: a word or a phrase, as the index's tokens,

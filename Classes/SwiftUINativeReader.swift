@@ -60,7 +60,8 @@ enum ChapterTextRenderer {
 
         /// The search terms to highlight, each marked where the query matched it
         /// (`PSSearchQuery.highlightRanges(of:in:)`). Empty for a Strong's search,
-        /// where the match is a lemma rather than text present in the verse.
+        /// where the match is a lemma rather than text present in the verse: its
+        /// words are marked on the document instead (`ChapterVerse.strongsMarks`).
         var highlightTerms: [SearchHighlightTerm] = []
 
         /// Resolve from the same defaults keys the HTML shell used, so a font
@@ -172,6 +173,9 @@ enum ChapterTextRenderer {
         if !terms.isEmpty {
             applyHighlights(terms, over: verse.runs, to: &out)
         }
+        // A Strong's result's words: the same jacket, over the bookmark colour
+        // for the same reason.
+        jacket(verse.strongsMarks, in: &out)
         return out
     }
 
@@ -290,16 +294,30 @@ enum ChapterTextRenderer {
             assertionFailure("applyHighlights is out of step with attributed(runs:)")
             return
         }
+        jacket(
+            renderedRanges(of: PSSearchQuery.highlightRanges(of: terms, in: words),
+                           in: words, stretches: stretches),
+            in: &text
+        )
+    }
 
-        let jacket = AttributeContainer()
-            .backgroundColor(.yellow)
-            .foregroundColor(.black)
+    /// Ranges of a verse's `words` (`searchableWords(of:)`) moved to where
+    /// they are in the rendered text, as unicode-scalar offsets: one range per
+    /// stretch a range covers, so a marker inside a match is left out of it.
+    ///
+    /// `found` must be in reading order, which both of the highlighters'
+    /// ranges are: each one's place is counted on from the one before, not
+    /// from the start of the verse again.
+    static func renderedRanges(
+        of found: [Range<String.Index>],
+        in words: String,
+        stretches: [(inWords: Range<Int>, inText: Int)]
+    ) -> [Range<Int>] {
         let scalars = words.unicodeScalars
-        // The ranges come in reading order, so each one's place is counted on
-        // from the one before and not from the start of the verse again.
+        var ranges: [Range<Int>] = []
         var counted = scalars.startIndex
         var lower = 0
-        for found in PSSearchQuery.highlightRanges(of: terms, in: words) {
+        for found in found {
             lower += scalars.distance(from: counted, to: found.lowerBound)
             counted = found.lowerBound
             let upper = lower + scalars.distance(from: found.lowerBound,
@@ -311,15 +329,130 @@ enum ChapterTextRenderer {
                 // place in the words to its place in the text.
                 let first = max(lower, stretch.inWords.lowerBound)
                 let last = min(upper, stretch.inWords.upperBound)
-                let start = text.index(
-                    text.startIndex,
-                    offsetByUnicodeScalars:
-                        stretch.inText + first - stretch.inWords.lowerBound
-                )
-                let end = text.index(start, offsetByUnicodeScalars: last - first)
-                text[start..<end].mergeAttributes(jacket)
+                let start = stretch.inText + first - stretch.inWords.lowerBound
+                ranges.append(start..<(start + last - first))
             }
         }
+        return ranges
+    }
+
+    /// Jacket `ranges` of `text` (unicode-scalar offsets) in yellow, black text.
+    ///
+    /// Indices are made at the point of use, one range at a time, and none is
+    /// carried across a jacket: each jacket mutates the string, and an
+    /// `AttributedString.Index` taken before a mutation is not promised to be
+    /// valid after it. A range that runs off the end is a renderer out of step
+    /// with the document, and nothing is jacketed.
+    static func jacket(_ ranges: [Range<Int>], in text: inout AttributedString) {
+        guard !ranges.isEmpty else { return }
+        guard ranges.allSatisfy({ $0.lowerBound >= 0 }),
+              let end = ranges.map(\.upperBound).max(),
+              end <= text.unicodeScalars.count else {
+            assertionFailure("a search jacket runs off the end of its text")
+            return
+        }
+        let jacket = AttributeContainer()
+            .backgroundColor(.yellow)
+            .foregroundColor(.black)
+        for range in ranges where !range.isEmpty {
+            let start = text.index(text.startIndex,
+                                   offsetByUnicodeScalars: range.lowerBound)
+            let end = text.index(start, offsetByUnicodeScalars: range.count)
+            text[start..<end].mergeAttributes(jacket)
+        }
+    }
+
+    /// A text's words as `searchableWords(of:)` reads them, with where its
+    /// Strong's markers stand among them: what a Strong's highlight finds a
+    /// verse's tagged words by (`PSSearchQuery.strongsHighlightRanges`).
+    ///
+    /// The runs must have the numbers on, or there are no markers to find: the
+    /// reader reads them from the chapter built that way, whatever it shows.
+    static func strongsTaggedWords(of runs: [InlineRun]) -> PSStrongsTaggedWords {
+        var markers: [Int: Set<String>] = [:]
+        var wordsCount = 0
+        for run in runs where !run.text.isEmpty {
+            guard run.isMarker else {
+                wordsCount += run.text.unicodeScalars.count
+                continue
+            }
+            // As a word map writes the number: `H0430`, `G2316`.
+            guard case .strongs(let type, let value)? = run.link else { continue }
+            let prefix = type == "Hebrew" ? "H" : type == "Greek" ? "G" : nil
+            if let prefix {
+                markers[wordsCount, default: []].insert(prefix + value)
+            }
+        }
+        return PSStrongsTaggedWords(words: searchableWords(of: runs).words,
+                                    markers: markers)
+    }
+
+    /// `document` with the words a Strong's search result marks put on it
+    /// (`ChapterVerse.strongsMarks`, `ChapterHeading.strongsMarks`) — every
+    /// word in the chapter that its verse's word map tags with one of
+    /// `numbers`, each at its own place (`PSSearchQuery.strongsHighlightRanges`).
+    /// With no `numbers`, the marks come off.
+    ///
+    /// `tagged` is the same chapter built with the Strong's numbers on, which is
+    /// `document` itself when they are shown: the markers are what a word is
+    /// found by, and with the numbers hidden `document` has none. Its verses
+    /// are matched to `document`'s by number, and a word by its place among a
+    /// text's words, which showing the numbers does not move.
+    ///
+    /// A verse's canonical headings are read ahead of it, because that is where
+    /// a Psalm's title is in its first verse's word map. They are its own until
+    /// the prose layout hoists them onto the paragraph
+    /// (`ChapterDocument.paragraphs`), which copies their marks with them.
+    ///
+    /// `wordMaps` is keyed by verse (`PSContentReader.wordMaps`), and a verse's
+    /// `number` is its slot in the chapter, which in a Bible is the verse: slot
+    /// 0 is the intro, which has no word map.
+    static func markingStrongs(_ numbers: Set<String>,
+                               wordMaps: [Int: String],
+                               taggedIn tagged: ChapterDocument,
+                               in document: ChapterDocument) -> ChapterDocument {
+        var taggedVerses: [Int: ChapterVerse] = [:]
+        if !numbers.isEmpty {
+            for verse in tagged.verses { taggedVerses[verse.number] = verse }
+        }
+        // The texts of a verse a word map covers, in its order.
+        func texts(of verse: ChapterVerse) -> [[InlineRun]] {
+            verse.headings.filter(\.isCanonical).map(\.runs) + [verse.runs]
+        }
+
+        var marked = document
+        for index in marked.verses.indices {
+            var verse = marked.verses[index]
+            verse.strongsMarks = []
+            for heading in verse.headings.indices {
+                verse.headings[heading].strongsMarks = []
+            }
+            if !verse.isIntro, let map = wordMaps[verse.number],
+               let source = taggedVerses[verse.number] {
+                let drawn = texts(of: verse).map { searchableWords(of: $0) }
+                let found = PSSearchQuery.strongsHighlightRanges(
+                    taggedWithAnyOf: numbers,
+                    wordMap: map,
+                    taggedIn: texts(of: source).map { strongsTaggedWords(of: $0) },
+                    in: drawn.map(\.words)
+                )
+                if found.count == drawn.count {
+                    let marks = zip(found, drawn).map { found, drawn in
+                        renderedRanges(of: found, in: drawn.words,
+                                       stretches: drawn.stretches)
+                    }
+                    var segment = 0
+                    for heading in verse.headings.indices
+                    where verse.headings[heading].isCanonical {
+                        verse.headings[heading].strongsMarks = marks[segment]
+                        segment += 1
+                    }
+                    verse.strongsMarks = marks[segment]
+                }
+            }
+            marked.verses[index] = verse
+        }
+        return marked
     }
 
     /// A heading's text — `<p><b>` in the HTML.
@@ -334,11 +467,16 @@ enum ChapterTextRenderer {
     /// All the heading text in the corpus already arrives bold from its title token;
     /// inserting it here is what stops a heading depending on that.
     static func text(for heading: ChapterHeading, style: Style) -> AttributedString {
-        attributed(runs: heading.runs.map { run in
+        var out = attributed(runs: heading.runs.map { run in
             var run = run
             run.style.insert(.bold)
             return run
         }, style: style)
+        // A Psalm's title is tagged like its verses, and a Strong's result
+        // marks it too. A text search never matches it: the index has no
+        // title text.
+        jacket(heading.strongsMarks, in: &out)
+        return out
     }
 
     /// Map runs to an `AttributedString`, carrying links as `AttributeContainer`

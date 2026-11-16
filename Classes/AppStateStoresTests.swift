@@ -2499,6 +2499,43 @@ final class AppStateStoresTests: XCTestCase {
         )
     }
 
+    /// A Strong's search hands the reader its numbers, as a text search hands it
+    /// its terms: what a tapped result marks in the chapter it opens
+    /// (`ReadingWorkspaceModel.openSearchResult`). Each search hands over one or
+    /// the other, set when it runs, and both go when the field is emptied.
+    @MainActor
+    func testAStrongsSearchHandsTheReaderItsNumbers() async {
+        let collector = ExpressionCollector()
+        let model = strongsLookupModel(recordingInto: collector)
+        model.configure(
+            modules: [SearchModuleChoice(id: "KJV", kind: .bible)],
+            preferredModule: "KJV",
+            currentBookName: "Genesis",
+            restoring: nil
+        )
+
+        model.startStrongsQuery("H430", currentBookName: "Genesis")
+        await collector.wait(forCount: 1, in: self)
+        // Both forms, as the rows' words were picked out with.
+        XCTAssertEqual(model.highlightStrongsNumbers, ["H430", "H0430"])
+        XCTAssertEqual(model.highlightTerms, [])
+
+        // A plain word ends Strong's mode: terms, and no numbers.
+        model.query = "God"
+        XCTAssertFalse(model.strongsSearch)
+        XCTAssertEqual(model.highlightTerms, ["God"])
+        XCTAssertEqual(model.highlightStrongsNumbers, [])
+
+        model.query = "G2316"
+        model.strongsSearch = true
+        XCTAssertEqual(model.highlightStrongsNumbers, ["G2316"])
+        XCTAssertEqual(model.highlightTerms, [])
+
+        model.query = ""
+        XCTAssertEqual(model.highlightStrongsNumbers, [])
+        XCTAssertEqual(model.highlightTerms, [])
+    }
+
     /// "Find ALL occurrences" searches the whole Bible, whatever scope the last
     /// text search left.
     ///
@@ -5562,6 +5599,13 @@ final class AppStateStoresTests: XCTestCase {
     /// Everything a page turn through the workspace writes: the reference and
     /// both panes' positions.
     private func withPreservedReadingKeys(_ body: (UserDefaults) -> Void) {
+        withPreservedReadingKeysRethrowing(body)
+    }
+
+    /// `withPreservedReadingKeys`, for a body that throws.
+    private func withPreservedReadingKeysRethrowing(
+        _ body: (UserDefaults) throws -> Void
+    ) rethrows {
         let standard = UserDefaults.standard
         let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
                     Defaults.commentaryVersePosition,
@@ -5576,7 +5620,7 @@ final class AppStateStoresTests: XCTestCase {
                 }
             }
         }
-        body(standard)
+        try body(standard)
     }
 
     /// The chapter the commentary pane renders for `ref`, built the way the pane
@@ -6080,8 +6124,55 @@ final class AppStateStoresTests: XCTestCase {
     /// did for every release in which the highlighter had no caller at all.
     @MainActor
     func testASearchResultsTermsGoOnAfterTheOpenThatEndsThePreviousHighlight() {
-        withPreservedReadingKeys { standard in
-            // The route loads the module it names, which writes this key.
+        withSearchResultRoute { standard, workspace in
+            // An older result, opened in the commentary.
+            workspace.highlightSearchTerms(["grace"], mode: .commentary)
+            // A whole word and a word Fuzzy ran as a prefix: how a term was
+            // matched has to arrive with it.
+            let terms: [SearchHighlightTerm] = [
+                "Noah", SearchHighlightTerm("comf", matchesPrefix: true),
+            ]
+            workspace.openSearchResult(
+                "Genesis 5:29",
+                module: BundledModules.bible,
+                terms: terms,
+                strongsNumbers: [],
+                mode: .bible
+            )
+
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 5")
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, terms,
+                           "The open wiped the terms of the result it was opening.")
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, terms,
+                           "The result's chapter is drawn without its terms.")
+            XCTAssertNotEqual(workspace.bible.textStyle.highlightTerms, ["Noah", "comf"],
+                              "A fuzzy term reached the reader as a whole word.")
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
+                           "An older result's terms outlived the open of a new one.")
+
+            // The same route without terms — a bookmark — ends it again.
+            workspace.openLibraryReference("Romans 8:28", module: nil)
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Romans 8")
+            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
+                           "The highlight followed a bookmark into another chapter.")
+        }
+    }
+
+    /// A workspace whose routes open, as a search result's do: a session marked
+    /// ready, with a library that records no history, and `John 3` as the place
+    /// it starts from. The reading keys and `lastBible` (the route loads the
+    /// module it names) are put back afterwards.
+    ///
+    /// A route posts `redisplayPrimaryBible` on the shared centre, so the host
+    /// app's own reader follows every one of them. With the keys back, this
+    /// returns it to the chapter they name: left where the routes went, it goes
+    /// on saving its scroll position from there, against a `lastRef` that says
+    /// otherwise.
+    @MainActor
+    private func withSearchResultRoute(
+        _ body: (UserDefaults, ReadingWorkspaceModel) throws -> Void
+    ) rethrows {
+        try withPreservedReadingKeysRethrowing { standard in
             let lastBible = standard.object(forKey: Defaults.lastBible)
             defer {
                 if let lastBible {
@@ -6118,42 +6209,100 @@ final class AppStateStoresTests: XCTestCase {
             let workspace = ReadingWorkspaceModel(session: session)
             // Marks the session ready. Until then `open` only parks the URL.
             session.replayPendingURL()
+            try body(standard, workspace)
+        }
+        NotificationCenter.default.post(name: .redisplayPrimaryBible, object: nil)
+    }
 
-            // An older result, opened in the commentary.
+    /// A Strong's search result opens with the words its number tags marked,
+    /// throughout the chapter it opens, each where it stands — and the chapter
+    /// it opens is the only one.
+    ///
+    /// A Strong's search has no terms (the match is a lemma), so the result's
+    /// chapter used to open with nothing marked at all, while its row in Search
+    /// had the word marked (issue #13). The numbers go on after the open, as a
+    /// text search's terms do, and end by the same ways out.
+    @MainActor
+    func testAStrongsResultMarksTheWordsItsNumberTagsInTheChapterItOpens() throws {
+        try withSearchResultRoute { standard, workspace in
+            let numbers = PSSearchQuery.strongsTokens(fromUserInput: "H430")
+            // A text result's terms showing in the commentary, ended by the open.
             workspace.highlightSearchTerms(["grace"], mode: .commentary)
-            // A whole word and a word Fuzzy ran as a prefix: how a term was
-            // matched has to arrive with it.
-            let terms: [SearchHighlightTerm] = [
-                "Noah", SearchHighlightTerm("comf", matchesPrefix: true),
-            ]
             workspace.openSearchResult(
-                "Genesis 5:29",
+                "Psalms 10:4",
                 module: BundledModules.bible,
-                terms: terms,
+                terms: [],
+                strongsNumbers: numbers,
                 mode: .bible
             )
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Psalms 10")
+            XCTAssertEqual(workspace.bible.searchHighlightStrongs, numbers,
+                           "The open wiped the numbers of the result it was opening.")
+            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [])
 
-            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Genesis 5")
-            XCTAssertEqual(workspace.bible.searchHighlightTerms, terms,
-                           "The open wiped the terms of the result it was opening.")
-            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, terms,
-                           "The result's chapter is drawn without its terms.")
-            XCTAssertNotEqual(workspace.bible.textStyle.highlightTerms, ["Noah", "comf"],
-                              "A fuzzy term reached the reader as a whole word.")
-            XCTAssertEqual(workspace.commentary.searchHighlightTerms, [],
-                           "An older result's terms outlived the open of a new one.")
+            /// The verses with a mark, and what verse 4 draws, with what is
+            /// jacketed in brackets.
+            @MainActor func marks() -> (verses: [Int], verse4: String) {
+                let document = workspace.bible.document
+                let verse4 = document.verses.first { $0.number == 4 }.map { verse in
+                    let text = ChapterTextRenderer.text(
+                        for: verse, style: workspace.bible.textStyle)
+                    return text.runs.map { run in
+                        let piece = String(text[run.range].characters)
+                        return run.backgroundColor == .yellow ? "[\(piece)]" : piece
+                    }.joined()
+                } ?? ""
+                return (document.verses.filter { !$0.strongsMarks.isEmpty }.map(\.number),
+                        verse4)
+            }
 
-            // The same route without terms — a bookmark — ends it again.
-            workspace.openLibraryReference("Romans 8:28", module: nil)
-            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Romans 8")
-            XCTAssertEqual(workspace.bible.searchHighlightTerms, [],
-                           "The highlight followed a bookmark into another chapter.")
+            // Every verse of Psalm 10 whose words the number tags, and no other.
+            let maps = PSContentReader.shared.wordMaps(module: BundledModules.bible,
+                                                       ref: "Psalms 10")
+            let tagged = maps.filter { _, map in
+                PSWordMapLine.lines(in: map).contains {
+                    $0.isTagged(withAnyOf: Set(numbers))
+                }
+            }.keys.sorted()
+            XCTAssertTrue(tagged.contains(4))
+            XCTAssertGreaterThan(tagged.count, 1)
+            XCTAssertEqual(marks().verses, tagged)
+            // In the verse opened, the God the number tags — not the supplied
+            // one before it — whether or not Strong's numbers are shown.
+            XCTAssertTrue(marks().verse4.contains("God: [God]"), marks().verse4)
+            XCTAssertFalse(marks().verse4.contains("[God]:"), marks().verse4)
+
+            // The same chapter drawn again keeps them.
+            workspace.redisplay(pane: .bible, restore: .verse)
+            XCTAssertEqual(marks().verses, tagged,
+                           "A redisplay of the result's chapter lost its marks.")
+
+            // A page turn ends them, in the pane and in the chapter it draws.
+            workspace.nextChapter()
+            XCTAssertEqual(standard.string(forKey: Defaults.lastRef), "Psalms 11")
+            XCTAssertEqual(workspace.bible.searchHighlightStrongs, [])
+            XCTAssertEqual(marks().verses, [],
+                           "The marks followed a page turn into another chapter.")
+
+            // Opened from another chapter, the route renders the result's
+            // chapter by its `redisplayPrimaryBible` post, which this
+            // workspace (never started) does not observe: as its observer
+            // would. That render comes after the numbers, and marks with them.
+            workspace.openSearchResult(
+                "Psalms 10:4", module: BundledModules.bible,
+                terms: [], strongsNumbers: numbers, mode: .bible)
+            workspace.redisplay(pane: .bible, restore: .verse)
+            XCTAssertEqual(marks().verses, tagged,
+                           "The chapter rendered after the numbers went on is unmarked.")
+
+            // A text result opened after a Strong's one carries no numbers.
+            workspace.openSearchResult(
+                "Genesis 1:1", module: BundledModules.bible,
+                terms: ["God"], strongsNumbers: [], mode: .bible)
+            XCTAssertEqual(workspace.bible.searchHighlightStrongs, [])
+            XCTAssertEqual(marks().verses, [])
+            XCTAssertEqual(workspace.bible.textStyle.highlightTerms, ["God"])
         }
-        // A route posts `redisplayPrimaryBible` on the shared centre, so the host
-        // app's own reader followed both of them. With the keys back, return it
-        // to the chapter they name: left on Romans 8, it goes on saving its
-        // scroll position from there, against a `lastRef` that says otherwise.
-        NotificationCenter.default.post(name: .redisplayPrimaryBible, object: nil)
     }
 
     /// A reset leaves the result's chapter too, by the one path that is not a

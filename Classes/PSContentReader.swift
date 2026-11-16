@@ -273,6 +273,20 @@ final class PSContentReader: NSObject {
             reportFailures: reportFailures)
     }
 
+    /// The `word_map` of every verse in `ref`'s chapter, keyed by verse: which
+    /// of its words carry which Strong's numbers, in order. What the search
+    /// index holds for the same verses (it is built from these rows).
+    ///
+    /// Empty for a ref that does not resolve, and for a module without Strong's
+    /// numbers. Not a render input: the reader asks for it only while a
+    /// Strong's search result is highlighted (`ReaderPaneModel`).
+    func wordMaps(module: String, ref: String) -> [Int: String] {
+        guard let store, let resolver,
+              let (book, chapter) = resolver.resolve(ref: ref) else { return [:] }
+        // Keyed by the module's own key text, the LONG book name, as `headings`.
+        return store.wordMaps(module: module, bookName: book.longName, chapter: chapter)
+    }
+
     /// The empty-chapter fallback, byte-identical to the engine's. The
     /// parenthesised ref is the chapter part of the key text, e.g. "Genesis 1".
     private func emptyChapterBody(bookName: String, chapter: Int) -> String {
