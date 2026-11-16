@@ -57,17 +57,21 @@ struct ReferencePickerBook: Identifiable, Equatable, Hashable {
     let name: String
     let shortName: String
     let verseCounts: [Int]
+    /// 1 for the Old Testament, 2 for the New (the versification's numbering).
+    let testament: Int
 
     init(
         id: String,
         name: String,
         shortName: String,
-        verseCounts: [Int]
+        verseCounts: [Int],
+        testament: Int = 1
     ) {
         self.id = id
         self.name = name
         self.shortName = shortName
         self.verseCounts = verseCounts
+        self.testament = testament
     }
 
     init(_ book: PSVersificationBook) {
@@ -75,7 +79,8 @@ struct ReferencePickerBook: Identifiable, Equatable, Hashable {
             id: book.osisName,
             name: book.name,
             shortName: book.shortName,
-            verseCounts: book.verseMax
+            verseCounts: book.verseMax,
+            testament: book.testament
         )
     }
 
@@ -107,6 +112,27 @@ enum ReferencePickerDestination: Hashable {
     case verses(bookID: String, chapter: Int)
 }
 
+/// How the picker lays out its three pages (books, chapters, verses).
+enum ReferencePickerLayout {
+    /// A row each, with an index along the trailing edge: the iPhone sheet.
+    case list
+    /// Tiles in a grid: the iPad popover. As a list it showed seven books at a
+    /// time, a "1:1" button on every row, and an index of 66 labels squeezed
+    /// down the popover's edge. As tiles, a testament takes a screen or so,
+    /// Psalms' 150 chapters take about two, and no page needs an index.
+    case grid
+}
+
+/// The books of one testament, for the grid's section headers.
+struct ReferencePickerTestament: Identifiable, Equatable {
+    let id: Int
+    let books: [ReferencePickerBook]
+
+    var title: LocalizedStringKey {
+        id == 2 ? "RefSelectorNewTestament" : "RefSelectorOldTestament"
+    }
+}
+
 @MainActor
 @Observable
 final class ReferencePickerModel {
@@ -116,6 +142,7 @@ final class ReferencePickerModel {
     var currentChapter: Int?
     var path: [ReferencePickerDestination] = []
     var showsCancel: Bool
+    let layout: ReferencePickerLayout
 
     @ObservationIgnored var onSelection: ((ReferencePickerSelection) -> Void)?
     @ObservationIgnored var onCancel: (() -> Void)?
@@ -123,12 +150,29 @@ final class ReferencePickerModel {
     init(
         books: [ReferencePickerBook] = [],
         currentReference: String? = nil,
-        showsCancel: Bool = false
+        showsCancel: Bool = false,
+        layout: ReferencePickerLayout = .list
     ) {
         self.books = books
         self.indexEntries = Self.makeIndexEntries(books: books)
         self.showsCancel = showsCancel
+        self.layout = layout
         updateCurrentReference(currentReference)
+    }
+
+    /// The books grouped by testament, each group in versification order and
+    /// the groups in the order their first book appears.
+    var testaments: [ReferencePickerTestament] {
+        var ids: [Int] = []
+        for book in books where !ids.contains(book.testament) {
+            ids.append(book.testament)
+        }
+        return ids.map { id in
+            ReferencePickerTestament(
+                id: id,
+                books: books.filter { $0.testament == id }
+            )
+        }
     }
 
     func updateCurrentReference(_ reference: String?) {
@@ -222,26 +266,73 @@ struct ReferencePickerView: View {
         @Bindable var model = model
 
         NavigationStack(path: $model.path) {
-            ReferenceBookList(model: model)
+            bookPage
                 .navigationDestination(
                     for: ReferencePickerDestination.self
                 ) { destination in
                     switch destination {
                     case .chapters(let bookID):
                         if let book = model.book(id: bookID) {
-                            ReferenceChapterList(model: model, book: book)
+                            chapterPage(book: book)
                         }
                     case .verses(let bookID, let chapter):
                         if let book = model.book(id: bookID) {
-                            ReferenceVerseList(
-                                model: model,
-                                book: book,
-                                chapter: chapter
-                            )
+                            versePage(book: book, chapter: chapter)
                         }
                     }
                 }
         }
+    }
+
+    @ViewBuilder private var bookPage: some View {
+        switch model.layout {
+        case .list: ReferenceBookList(model: model)
+        case .grid: ReferenceBookGrid(model: model)
+        }
+    }
+
+    @ViewBuilder private func chapterPage(book: ReferencePickerBook) -> some View {
+        switch model.layout {
+        case .list: ReferenceChapterList(model: model, book: book)
+        case .grid: ReferenceChapterGrid(model: model, book: book)
+        }
+    }
+
+    @ViewBuilder private func versePage(
+        book: ReferencePickerBook,
+        chapter: Int
+    ) -> some View {
+        switch model.layout {
+        case .list:
+            ReferenceVerseList(model: model, book: book, chapter: chapter)
+        case .grid:
+            ReferenceVerseGrid(model: model, book: book, chapter: chapter)
+        }
+    }
+}
+
+/// The book page's title and, in a sheet, its Cancel button: the same for both
+/// layouts.
+private struct ReferenceBookPageChrome: ViewModifier {
+    let model: ReferencePickerModel
+
+    func body(content: Content) -> some View {
+        content
+            .navigationTitle("RefSelectorBookTitle")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if model.showsCancel {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button {
+                            model.cancel()
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .accessibilityLabel(Text("Cancel"))
+                        .help("Cancel")
+                    }
+                }
+            }
     }
 }
 
@@ -275,21 +366,7 @@ private struct ReferenceBookList: View {
                 }
             }
         }
-        .navigationTitle("RefSelectorBookTitle")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if model.showsCancel {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button {
-                        model.cancel()
-                    } label: {
-                        Image(systemName: "xmark")
-                    }
-                    .accessibilityLabel(Text("Cancel"))
-                    .help("Cancel")
-                }
-            }
-        }
+        .modifier(ReferenceBookPageChrome(model: model))
     }
 }
 
@@ -612,6 +689,229 @@ private struct ReferenceNumberIndex: View {
     }
 }
 
+// MARK: - Grid layout (iPad)
+
+private struct ReferenceBookGrid: View {
+    let model: ReferencePickerModel
+
+    /// Three columns in the popover at the default text size; fewer as the text
+    /// grows, so "Song of Solomon" and "1 Thessalonians" keep their full names.
+    @ScaledMetric(relativeTo: .callout) private var minimumTileWidth = 120
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    ForEach(model.testaments) { testament in
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(testament.title)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 4)
+                                .accessibilityAddTraits(.isHeader)
+                            LazyVGrid(
+                                columns: [
+                                    GridItem(
+                                        .adaptive(minimum: minimumTileWidth),
+                                        spacing: ReferenceTile.spacing
+                                    ),
+                                ],
+                                spacing: ReferenceTile.spacing
+                            ) {
+                                ForEach(testament.books) { book in
+                                    tile(for: book)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(ReferenceTile.margin)
+            }
+            .task(id: model.currentBookID) {
+                await Task.yield()
+                if let currentBookID = model.currentBookID {
+                    proxy.scrollTo(currentBookID, anchor: .center)
+                }
+            }
+        }
+        .modifier(ReferenceBookPageChrome(model: model))
+    }
+
+    private func tile(for book: ReferencePickerBook) -> some View {
+        ReferenceTile(
+            title: book.name,
+            font: .callout,
+            isCurrent: model.currentBookID == book.id,
+            identifier: "reference.book.\(book.id)"
+        ) {
+            model.openChapters(for: book.id)
+        }
+        .referenceShortcut(
+            to: ReferencePickerText.reference(book: book.name, chapter: 1, verse: 1)
+        ) {
+            model.select(bookID: book.id, chapter: 1, verse: 1)
+        }
+        .id(book.id)
+    }
+}
+
+private struct ReferenceChapterGrid: View {
+    let model: ReferencePickerModel
+    let book: ReferencePickerBook
+
+    var body: some View {
+        let current = model.currentBookID == book.id ? model.currentChapter : nil
+
+        ReferenceNumberGrid(count: book.chapterCount, current: current) { chapter in
+            ReferenceTile(
+                title: String(chapter),
+                isCurrent: chapter == current,
+                accessibilityLabel: ReferencePickerText.chapter(chapter),
+                identifier: "reference.chapter.\(chapter)"
+            ) {
+                model.openVerses(for: book.id, chapter: chapter)
+            }
+            .referenceShortcut(
+                to: ReferencePickerText.reference(
+                    book: book.name,
+                    chapter: chapter,
+                    verse: 1
+                )
+            ) {
+                model.select(bookID: book.id, chapter: chapter, verse: 1)
+            }
+        }
+        .navigationTitle(book.name)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct ReferenceVerseGrid: View {
+    let model: ReferencePickerModel
+    let book: ReferencePickerBook
+    let chapter: Int
+
+    var body: some View {
+        ReferenceNumberGrid(
+            count: book.verseCount(chapter: chapter),
+            current: nil
+        ) { verse in
+            ReferenceTile(
+                title: String(verse),
+                isCurrent: false,
+                accessibilityLabel: ReferencePickerText.verse(verse),
+                identifier: "reference.verse.\(verse)"
+            ) {
+                model.select(bookID: book.id, chapter: chapter, verse: verse)
+            }
+        }
+        .navigationTitle("\(book.name) \(chapter)")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// A page of numbered tiles, opened with `current` in view.
+private struct ReferenceNumberGrid<Tile: View>: View {
+    let count: Int
+    let current: Int?
+    @ViewBuilder let tile: (Int) -> Tile
+
+    /// Seven columns in the popover at the default text size.
+    @ScaledMetric(relativeTo: .body) private var minimumTileWidth = 50
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVGrid(
+                    columns: [
+                        GridItem(
+                            .adaptive(minimum: minimumTileWidth),
+                            spacing: ReferenceTile.spacing
+                        ),
+                    ],
+                    spacing: ReferenceTile.spacing
+                ) {
+                    // Half-open so an empty versification produces an empty grid.
+                    ForEach(1..<(max(count, 0) + 1), id: \.self) { number in
+                        tile(number)
+                            .id(number)
+                    }
+                }
+                .padding(ReferenceTile.margin)
+            }
+            .task(id: current) {
+                await Task.yield()
+                if let current {
+                    proxy.scrollTo(current, anchor: .center)
+                }
+            }
+        }
+    }
+}
+
+/// One tile of the grid layout: a book, a chapter or a verse. The current book
+/// or chapter is filled with the tint, where a list row tints its name and adds
+/// a checkmark.
+private struct ReferenceTile: View {
+    static let spacing: CGFloat = 8
+    static let margin: CGFloat = 16
+
+    let title: String
+    var font: Font = .body
+    let isCurrent: Bool
+    var accessibilityLabel: String?
+    let identifier: String
+    let action: () -> Void
+
+    @ScaledMetric(relativeTo: .body) private var height = 44
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
+        Button(action: action) {
+            Text(title)
+                .font(isCurrent ? font.weight(.semibold) : font)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity, minHeight: height)
+                .foregroundStyle(
+                    isCurrent ? AnyShapeStyle(.white) : AnyShapeStyle(.primary)
+                )
+                .background(
+                    isCurrent ? AnyShapeStyle(.tint) : AnyShapeStyle(.fill.tertiary),
+                    in: shape
+                )
+                .contentShape(shape)
+                .contentShape(.hoverEffect, shape)
+                .hoverEffect(.highlight)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(accessibilityLabel ?? title))
+        .accessibilityAddTraits(isCurrent ? .isSelected : [])
+        .accessibilityIdentifier(identifier)
+    }
+}
+
+private extension View {
+    /// What the list's "1:1" and "3:1" buttons do, for a tile: open `reference`
+    /// directly, from the tile's context menu and as a named accessibility
+    /// action, without going through the chapter or verse page.
+    func referenceShortcut(
+        to reference: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        let title = ReferencePickerText.goTo(reference)
+        return contextMenu {
+            Button(action: action) {
+                Label(title, systemImage: "arrow.forward")
+            }
+        }
+        .accessibilityAction(named: Text(title), action)
+    }
+}
+
 private enum ReferencePickerText {
     static func chapter(_ chapter: Int) -> String {
         String.localizedStringWithFormat(
@@ -624,6 +924,19 @@ private enum ReferencePickerText {
         String.localizedStringWithFormat(
             String(localized: "RefSelectorVerseTitle"),
             verse
+        )
+    }
+
+    /// "Genesis 3:1".
+    static func reference(book: String, chapter: Int, verse: Int) -> String {
+        "\(book) \(chapter):\(verse)"
+    }
+
+    /// "Go to Genesis 3:1".
+    static func goTo(_ reference: String) -> String {
+        String.localizedStringWithFormat(
+            String(localized: "RefSelectorGoToReference"),
+            reference
         )
     }
 }
