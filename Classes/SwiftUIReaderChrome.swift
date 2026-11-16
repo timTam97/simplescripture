@@ -321,7 +321,44 @@ struct ReaderScreen: View {
     /// Bumped by a swipe that turned the page; the haptic's trigger.
     @State private var swipePageTurns = 0
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     private var chrome: ReaderChromeModel { reading.activePane.chrome }
+
+    @State private var windowFillsScreen = true
+
+    /// Where ‹ reference › goes. At a regular width the tab bar floats at the
+    /// TOP, in the navigation bar's centre, and pushes a `.principal` item down to
+    /// a row of its own under it (MEASURED, iOS 27.2: the bar 112 pt tall). Full
+    /// screen, the control goes LEADING instead, beside the Bible/commentary
+    /// switch, on the tab bar's row.
+    ///
+    /// Only full screen. In a window the leading slot also holds the system's
+    /// window controls, and the tab bar stays centred on the SCREEN, not the
+    /// window: in windows 708–904 pt wide (still regular, measured) the switch
+    /// and the control did not fit beside it, and the bar dropped BOTH — no book
+    /// button, no chapter navigation. A window keeps `.principal` and its second
+    /// row, where everything shows. At a compact width the tab bar is at the
+    /// bottom and the centre is free.
+    private var referencePlacement: ToolbarItemPlacement {
+        horizontalSizeClass == .regular && windowFillsScreen
+            ? .topBarLeading : .principal
+    }
+
+    /// Whether the app's window covers its whole screen: an iPhone always, an
+    /// iPad full screen, not an iPad window of any size.
+    static func windowFillsScreen() -> Bool {
+        let scenes = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive })
+                ?? scenes.first,
+              let window = scene.keyWindow ?? scene.windows.first
+        else { return true }
+        let windowSize = window.bounds.size
+        let screenSize = scene.screen.bounds.size
+        return abs(windowSize.width - screenSize.width) < 1
+            && abs(windowSize.height - screenSize.height) < 1
+    }
 
     var body: some View {
         @Bindable var reading = reading
@@ -329,17 +366,9 @@ struct ReaderScreen: View {
         NavigationStack {
             readerPanes
                 .toolbar {
-                    ToolbarItem(placement: .principal) {
-                        ReaderReferenceControl(
-                            chrome: chrome,
-                            makeReferencePicker: {
-                                makeReferencePicker(reading: reading)
-                            }
-                        )
-                    }
-                    .visibilityPriority(.high)
-
                     // The Bible/commentary switch, at the bar's LEADING edge.
+                    // Declared before the reference control: at a regular width both
+                    // are leading, and the declaration order is the order in the bar.
                     //
                     // Not `.bottomBar`: on iOS 27 the floating tab bar occupies the bottom, so
                     // the picker lands on top of it and taps go to the tab bar. Not
@@ -348,6 +377,20 @@ struct ReaderScreen: View {
                     ToolbarItem(placement: .topBarLeading) {
                         ReadingModePicker(reading: reading)
                     }
+
+                    ToolbarItem(placement: referencePlacement) {
+                        ReaderReferenceControl(
+                            chrome: chrome,
+                            makeReferencePicker: {
+                                makeReferencePicker(reading: reading)
+                            }
+                        )
+                    }
+                    .visibilityPriority(.high)
+                    // The control draws its own glass pill. A leading item would also
+                    // get the bar's shared glass, a second layer under it, and be
+                    // grouped into one capsule with the switch beside it.
+                    .sharedBackgroundVisibility(.hidden)
 
                     // The per-module display toggles, declared ONLY when the active
                     // module has some.
@@ -411,6 +454,11 @@ struct ReaderScreen: View {
         // bar draws above the app, so it is never itself faded.
         .overlay(alignment: .top) {
             StatusBarFade()
+        }
+        // Whether the window fills the screen, re-read whenever the reader's size
+        // changes (a window resized, entered or left full screen, rotated).
+        .onGeometryChange(for: CGSize.self, of: \.size) { _ in
+            windowFillsScreen = ReaderScreen.windowFillsScreen()
         }
     }
 
