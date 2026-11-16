@@ -467,13 +467,15 @@ struct ChapterTextView: View {
                 .id(pane.versePerLine)
             }
             .scrollPosition($pane.scrollPosition)
-            // A SOFT scroll edge effect under the floating tab bar, asked for by
-            // name. Left on the automatic style this scroll view gets none at the
-            // bottom (MEASURED, iOS 27.2 — a `List` under the same bar does), so
-            // the chapter shows through the bar's glass at full contrast and the
-            // selection lens refracts it on every tab change. The text still
-            // scrolls under the bar; there it is blurred and faded.
-            .scrollEdgeEffectStyle(.soft, for: .bottom)
+            // NO scroll edge effect at either end: the text runs crisp under the
+            // floating tab bar's glass and under the navigation bar. Both styles
+            // were tried and rejected by the owner (MEASURED, iOS 27.2): `.soft`
+            // blurs the last lines beside a bar progressively, and `.hard` lays a
+            // backing a shade off the page behind the bar (visible in dark mode)
+            // and slices the line on its edge in half, crisp on one side and
+            // ghosted on the other. The status bar keeps its legibility from
+            // `StatusBarFade` on `ReaderScreen` instead.
+            .scrollEdgeEffectHidden(true, for: [.top, .bottom])
             // Edge-to-edge (see the file header): the scroll view fills the window
             // (`ignoresSafeArea`) and the CONTENT carries the safe-area insets
             // (`contentMargins`), so no line is obscured at rest.
