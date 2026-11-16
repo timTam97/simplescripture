@@ -452,24 +452,19 @@ final class PSSearchEngine {
     /// that are words of a Psalm's title, which the row's text does not hold.
     ///
     /// Read-side only. The column is as the store ships it and as the index
-    /// digest pins it.
+    /// digest pins it. The lines are read by `PSWordMapLine`, as the reader's
+    /// Strong's highlight reads them (`PSSearchQuery.strongsHighlightRanges`),
+    /// which marks each tagged word at its own place in the verse; a row has
+    /// only these words, and marks each wherever it stands.
     static func surfaceWords(inWordMap map: String,
                              taggedWith tokens: Set<String>) -> [String] {
         var words: [String] = []
         var seen = Set<String>()
-        for line in map.components(separatedBy: "\n") {
-            guard let tab = line.range(of: "\t") else { continue }
-            let lemmaStr = String(line[tab.upperBound...])
-            let surface = String(line[line.startIndex..<tab.lowerBound])
-                .replacingOccurrences(of: "<[^>]*>", with: "",
-                                      options: .regularExpression)
-            if surface.isEmpty || lemmaStr.isEmpty { continue }
-            let hit = lemmaStr.components(separatedBy: " ")
-                .contains { !$0.isEmpty && tokens.contains($0) }
-            if !hit { continue }
-            if seen.contains(surface) { continue }
-            seen.insert(surface)
-            words.append(surface)
+        for line in PSWordMapLine.lines(in: map)
+        where line.isTagged(withAnyOf: tokens) {
+            if seen.insert(line.surface).inserted {
+                words.append(line.surface)
+            }
         }
         return words
     }

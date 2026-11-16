@@ -705,6 +705,14 @@ final class SearchModel {
     /// between — the length of the query, a frame or so — the rows on screen
     /// are the previous query's, drawn with these. As before; left alone.
     private(set) var highlightTerms: [SearchHighlightTerm] = []
+    /// What a Strong's search's result carries into the reader instead: the
+    /// numbers of the query last run, in both of an H number's forms — the
+    /// tokens `runQuery` picked each row's words out of its word map with
+    /// (`PSSearchQuery.strongsTokens`). The reader marks the words they tag
+    /// (`ReaderPaneModel.searchHighlightStrongs`). Empty for a text search.
+    ///
+    /// Set and cleared with `highlightTerms`, always.
+    private(set) var highlightStrongsNumbers: [String] = []
 
     @ObservationIgnored private let optionsStore: SearchOptionsStore
     @ObservationIgnored let indexCoordinator: SearchIndexCoordinator
@@ -965,6 +973,7 @@ final class SearchModel {
         results = []
         resultsWereTruncated = false
         highlightTerms = []
+        highlightStrongsNumbers = []
     }
 
     func searchNow() {
@@ -1182,6 +1191,9 @@ final class SearchModel {
             fuzzy: fuzzySearch,
             strongs: strongsSearch
         )
+        highlightStrongsNumbers = strongsSearch
+            ? PSSearchQuery.strongsTokens(fromUserInput: query)
+            : []
         persistOptions()
 
         if !query.isEmpty, indexCoordinator.state == .ready {
@@ -1217,6 +1229,7 @@ final class SearchModel {
             results = []
             resultsWereTruncated = false
             highlightTerms = []
+            highlightStrongsNumbers = []
             onHistoryChange?(nil)
             return
         }
@@ -1281,6 +1294,9 @@ final class SearchModel {
         let capturedStrongsTokens = strongsSearch
             ? PSSearchQuery.strongsTokens(fromUserInput: query)
             : nil
+        // The numbers the rows' words are picked out with are the ones the
+        // reader marks, so a row and the chapter it opens mark one number's.
+        highlightStrongsNumbers = capturedStrongsTokens ?? []
         let operation = queryOperation
 
         queryGeneration &+= 1

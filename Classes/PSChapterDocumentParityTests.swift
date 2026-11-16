@@ -25,7 +25,8 @@
 //  feature (see `sampleRefs`) at BOTH option endpoints. `PSDOC_EXHAUSTIVE=1` walks
 //  all 1,189 chapters × 2 modules × 2 endpoints (4,756 builds, ~30 s).
 //  `testTheReadersWordsAreTheWordsTheSearchMatched` is tiered the same way (the
-//  sample by default, every KJV chapter under the switch, ~8 s in all).
+//  sample by default, every KJV chapter under the switch, ~8 s in all), and so
+//  is `testTheReaderMarksTheWordsAStrongsNumberTags` (~21 s under the switch).
 //
 
 import XCTest
@@ -1739,6 +1740,240 @@ final class PSChapterDocumentParityTests: XCTestCase {
         }
         // 329 verses in the sample chapters, 31,102 in the Bible; twice each.
         XCTAssertEqual(compared, Self.isExhaustive ? 62_204 : 658)
+    }
+
+    // MARK: - A Strong's result's words
+
+    /// Every word of the Bible a word map tags is found at its own place: where
+    /// the chapter's own Strong's marker for one of its numbers follows it.
+    ///
+    /// A Strong's search result marks, in the chapter it opens, the words the
+    /// number tags (`PSSearchQuery.strongsHighlightRanges`). The word map has
+    /// each verse's tagged words in order, and found in order alone a line
+    /// takes the first place its words fit: Psalm 10:4's supplied "*after
+    /// God*" for H0430, where the God the number tags comes after it. So a line
+    /// is found only where a marker for its number follows. This holds the
+    /// walk to the markers over the whole chapter at once — every number in it
+    /// searched for, so every line with a number is marked:
+    ///
+    ///  * every such line is found, and found once, in order;
+    ///  * its mark is its own words, and a marker for one of its numbers
+    ///    follows the mark's last word, past punctuation and no space;
+    ///  * the chapter as drawn with the numbers OFF — the reader's usual case,
+    ///    found by the same markers in the chapter built with them on — marks
+    ///    the same words, in the same order;
+    ///  * a Psalm's title, which its first verse's word map opens with, is
+    ///    marked in the title.
+    ///
+    /// Which words a search for ONE number marks is the same walk, filtered
+    /// (`isTagged`), so this covers each number's marks. MEASURED 2026-11-16:
+    /// 349,513 lines over the Bible, every one with a number; the 349,514th is
+    /// I Corinthians 15:35's "dead", which carries only its Greek word.
+    ///
+    /// The default tier walks the sample chapters; `PSDOC_EXHAUSTIVE=1` walks
+    /// every chapter.
+    func testTheReaderMarksTheWordsAStrongsNumberTags() throws {
+        let resolver = try resolver()
+        let refs: [String] = Self.isExhaustive
+            ? resolver.books.flatMap { book in
+                (1...book.chapterCount).map { "\(book.name) \($0)" }
+            }
+            : Self.sampleRefs
+        var lines = 0
+        var titleLines = 0
+        for ref in refs {
+            let reader = PSContentReader.shared
+            let on = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOn, applyBookmarkHighlights: false), ref)
+            let off = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOff, applyBookmarkHighlights: false), ref)
+            let maps = reader.wordMaps(module: "KJV", ref: ref)
+            XCTAssertEqual(Set(maps.keys),
+                           Set(on.verses.map(\.number).filter { $0 > 0 }),
+                           "\(ref): a verse with no word map, or a word map with no verse")
+
+            // Every number the chapter's markers carry, so every line is marked.
+            var numbers = Set<String>()
+            func texts(of verse: ChapterVerse) -> [[InlineRun]] {
+                verse.headings.filter(\.isCanonical).map(\.runs) + [verse.runs]
+            }
+            for verse in on.verses {
+                for runs in texts(of: verse) {
+                    for marked in ChapterTextRenderer.strongsTaggedWords(of: runs)
+                        .markers.values {
+                        numbers.formUnion(marked)
+                    }
+                }
+            }
+            let offVerses = Dictionary(uniqueKeysWithValues:
+                off.verses.map { ($0.number, $0) })
+
+            for verse in on.verses where !verse.isIntro {
+                let label = "\(ref):\(verse.number)"
+                let map = try XCTUnwrap(maps[verse.number], label)
+                let tagged = texts(of: verse).map {
+                    ChapterTextRenderer.strongsTaggedWords(of: $0)
+                }
+                let found = PSSearchQuery.strongsHighlightRanges(
+                    taggedWithAnyOf: numbers, wordMap: map,
+                    taggedIn: tagged, in: tagged.map(\.words))
+                // Each mark in reading order, with the text it is in.
+                let marks = found.enumerated().flatMap { text, ranges in
+                    ranges.map { (text: text, range: $0) }
+                }
+                let expected = PSWordMapLine.lines(in: map).filter {
+                    $0.isTagged(withAnyOf: numbers)
+                }
+                guard marks.count == expected.count else {
+                    return XCTFail("""
+                        \(label): \(expected.count) tagged lines, \(marks.count) marks.
+                          lines: \(expected.map(\.surface))
+                          marks: \(marks.map { tagged[$0.text].words[$0.range] })
+                        """)
+                }
+                for (mark, line) in zip(marks, expected) {
+                    let words = tagged[mark.text].words
+                    let marked = String(words[mark.range])
+                    XCTAssertEqual(SearchHighlightTerm(marked).tokens,
+                                   SearchHighlightTerm(line.surface).tokens,
+                                   "\(label): a mark is not its line's words")
+                    // The marker after the mark's last word, past punctuation.
+                    var at = words.unicodeScalars.distance(
+                        from: words.startIndex, to: mark.range.upperBound)
+                    var index = mark.range.upperBound
+                    var after: Set<String> = []
+                    while true {
+                        if let numbers = tagged[mark.text].markers[at] {
+                            after = numbers
+                            break
+                        }
+                        guard index != words.endIndex,
+                              !words.unicodeScalars[index].properties.isWhitespace,
+                              !words.unicodeScalars[index].properties.isAlphabetic
+                        else { break }
+                        index = words.unicodeScalars.index(after: index)
+                        at += 1
+                    }
+                    XCTAssertFalse(after.isDisjoint(with: line.lemmas),
+                                   "\(label): \"\(marked)\" is not where \(line.lemmas) tags it")
+                    if mark.text < found.count - 1 { titleLines += 1 }
+                }
+                lines += marks.count
+
+                // Drawn with the numbers off, found by the same markers.
+                let offVerse = try XCTUnwrap(offVerses[verse.number], label)
+                let drawn = texts(of: offVerse).map {
+                    ChapterTextRenderer.searchableWords(of: $0).words
+                }
+                let foundOff = PSSearchQuery.strongsHighlightRanges(
+                    taggedWithAnyOf: numbers, wordMap: map,
+                    taggedIn: tagged, in: drawn)
+                XCTAssertEqual(
+                    foundOff.enumerated().flatMap { text, ranges in
+                        ranges.map { SearchHighlightTerm(String(drawn[text][$0])).tokens }
+                    },
+                    marks.map {
+                        SearchHighlightTerm(String(tagged[$0.text].words[$0.range])).tokens
+                    },
+                    "\(label): with the numbers off, other words are marked")
+            }
+        }
+        // Every line with a number: 2,823 in the sample chapters.
+        XCTAssertEqual(lines, Self.isExhaustive ? 349_513 : 2_823)
+        if !Self.isExhaustive {
+            XCTAssertEqual(titleLines, 6 + 2,
+                           "Psalms 3's title is six lines of its map, Psalms 23's two")
+        }
+    }
+
+    /// A Strong's result's chapter marks the words the number tags, each where
+    /// it stands, with the numbers hidden as they are by default — not every
+    /// word spelled like one of them.
+    ///
+    /// Through the reader's own steps (`ChapterTextRenderer.markingStrongs` over
+    /// the chapter built with the numbers on, then the jacket the row views
+    /// draw), so this is what the reader shows. Most of the cases are verses
+    /// where marking the row's words wherever they stand would mark one too
+    /// many (`PSSearchEngine.surfaceWords`, which the row has).
+    @MainActor
+    func testAStrongsResultsChapterMarksEachTaggedWordWhereItStands() throws {
+        let reader = PSContentReader.shared
+        let style = ChapterTextRenderer.Style.current()
+
+        /// One verse as the reader draws it for a result of `numbers`, its
+        /// headings first and each ending in " | ", with what is jacketed in
+        /// brackets.
+        func drawn(_ ref: String, _ verse: Int, _ numbers: Set<String>,
+                   showingNumbers: Bool = false,
+                   line: UInt = #line) throws -> String {
+            var options = PSChapterExpander.Options.allOff
+            options.strongs = showingNumbers
+            let shown = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: options, applyBookmarkHighlights: false), ref)
+            let tagged = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOn, applyBookmarkHighlights: false), ref)
+            let marked = ChapterTextRenderer.markingStrongs(
+                numbers, wordMaps: reader.wordMaps(module: "KJV", ref: ref),
+                taggedIn: tagged, in: shown)
+            let found = try XCTUnwrap(marked.verses.first { $0.number == verse },
+                                      "\(ref):\(verse)", line: line)
+            var texts = found.headings.map {
+                ChapterTextRenderer.text(for: $0, style: style)
+            }
+            texts.append(ChapterTextRenderer.text(for: found, style: style))
+            return texts.map { text in
+                text.runs.map { run in
+                    let piece = String(text[run.range].characters)
+                    return run.backgroundColor == .yellow ? "[\(piece)]" : piece
+                }.joined()
+            }.joined(separator: " | ")
+        }
+
+        // The first God is the translators' (italic); H0430 tags the second.
+        XCTAssertTrue(try drawn("Psalms 10", 4, ["H0430", "H430"])
+            .hasSuffix("will not seek after God: [God] is not in all his thoughts."))
+        // John 3:16 has "that" twice: G5620 "so loved the world, that", G2443
+        // "that whosoever". Each search marks its own.
+        XCTAssertTrue(try drawn("John 3", 16, ["G5620"])
+            .contains("the world, [that] he gave his only begotten Son, that whosoever"))
+        XCTAssertTrue(try drawn("John 3", 16, ["G2443"])
+            .contains("the world, that he gave his only begotten Son, [that] whosoever"))
+        // "breaking in of waters: in the desolation": H08478 is the second in.
+        XCTAssertTrue(try drawn("Job 30", 14, ["H08478", "H8478"])
+            .contains("breaking in of waters: [in] the desolation"))
+        // "find them, even them that contended": H0582 is the second them.
+        XCTAssertTrue(try drawn("Isaiah 41", 12, ["H0582", "H582"])
+            .contains("not find them, even [them] that contended"))
+
+        // A word's whole surface, the divine name as printed ("L" + small
+        // "ORD"): H3068 in Genesis 2:4 is `that the <divineName>Lord</divineName>`.
+        XCTAssertTrue(try drawn("Genesis 2", 4, ["H03068", "H3068"])
+            .contains("in the day [that the L][ORD] God made"))
+        XCTAssertTrue(try drawn("Genesis 1", 2, ["H0430", "H430"])
+            .contains("And the Spirit [of God] moved"))
+        // A possessive's apostrophe is not a word's.
+        XCTAssertTrue(try drawn("Genesis 6", 18, ["H01121", "H1121"])
+            .contains("[and thy sons]’ wives"))
+
+        // A Psalm's title: H4210 is its "A Psalm", in the heading above verse 1.
+        XCTAssertTrue(try drawn("Psalms 3", 1, ["H04210", "H4210"])
+            .hasPrefix("[A Psalm] of David, when he fled from Absalom his son. | "))
+
+        // The numbers shown move no mark, and no marker is jacketed with a word.
+        XCTAssertTrue(try drawn("Psalms 10", 4, ["H0430", "H430"], showingNumbers: true)
+            .contains(": [God]<0430> is"))
+        XCTAssertTrue(try drawn("Genesis 2", 4, ["H03068", "H3068"], showingNumbers: true)
+            .contains("[that the L][ORD]<03068> God<0430>"))
+
+        // No numbers, no marks; nor for a number the chapter does not have.
+        XCTAssertFalse(try drawn("Genesis 1", 1, []).contains("["))
+        XCTAssertFalse(try drawn("Genesis 1", 1, ["G2316"]).contains("["))
+        XCTAssertEqual(try drawn("Genesis 1", 1, ["H0430", "H430"]),
+                       "In the beginning [God] created the heaven and the earth.")
     }
 
     // MARK: - The flowed paragraph's join

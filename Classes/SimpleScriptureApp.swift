@@ -271,14 +271,16 @@ private struct SearchWorkspace: View {
                 // so the verse you land on marks the words the row did. The same
                 // `search.highlightTerms` the rows use, through the same matcher
                 // (`PSSearchQuery.highlightRanges`), so the two cannot disagree.
-                // A Strong's search has none: its rows mark their own tagged
-                // words and the chapter opens unmarked.
+                // A Strong's search has none: it hands over its numbers, and the
+                // chapter marks the words they tag, each where it stands — the
+                // row's words, at the places the number put them.
                 // One call, because the order is the model's to keep: the open
                 // ends the highlight that was showing, so the terms go on after it.
                 reading.openSearchResult(
                     reference,
                     module: module,
                     terms: session.search.highlightTerms,
+                    strongsNumbers: session.search.highlightStrongsNumbers,
                     mode: session.search.moduleKind
                 )
                 session.selectedWorkspace = .read
