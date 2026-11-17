@@ -289,12 +289,24 @@ final class LibraryAndSettingsUITests: SimpleScriptureUITestCase {
 
     /// Moves the font-size slider in Settings to `size`, and checks it got there.
     ///
-    /// `adjust(toNormalizedSliderPosition:)` drags the thumb, and between the
-    /// ends it can land a step out. MEASURED (iOS 27.2): asked for 20 on the
-    /// slider's 10...36 it landed on 21, and on 20 when the aim was moved 0.6 of
-    /// a step the other way. So each miss moves the aim against it, by less each
-    /// time, until the slider's value, which is the size, reads `size`. The two
-    /// ends were reached at the first attempt.
+    /// `adjust(toNormalizedSliderPosition:)` drags the thumb, and where a drag
+    /// lands depends on where it starts. MEASURED (iOS 27.2, iPhone 18 Pro, on
+    /// the slider's 10...36): from where the thumb rests, a drag of one step
+    /// does not move it (from 19, aimed at 18 or 20: 19), and a drag of two or
+    /// more overshoots by two or three (from 23, aimed at 20: 17). Corrected
+    /// from wherever it landed, as this used to be, the slider circled a size
+    /// without reaching it: six aims between 0.38 and 0.42 left it on 18, not
+    /// 20, and the teardown of `testOpenDictionaryEntryFollowsAFontSizeChange`
+    /// failed. From an end a drag lands the same way every time, a step or so
+    /// past its aim (from 36, aimed at 20: 19, seven times in seven), and the
+    /// ends themselves are reached at the first attempt.
+    ///
+    /// So every drag starts from the end further from `size`, which also keeps
+    /// it long. A miss moves the aim by what it missed by, and once one aim
+    /// has fallen short and another gone over, the next is halfway between
+    /// them: from 36, 18 landed 17 and 19 landed 19, and 18.5 landed 18.
+    /// MEASURED: 32 sizes in 32 across the range reached, in three drags at
+    /// most.
     @MainActor
     private func setFontSize(_ size: Int) {
         let slider = app.sliders["settings.font-size"]
@@ -302,13 +314,21 @@ final class LibraryAndSettingsUITests: SimpleScriptureUITestCase {
         func reading() -> Int? {
             (slider.value as? String).flatMap { Int($0) }
         }
+        let start: CGFloat = size - 10 < 36 - size ? 1 : 0
         var aim = Double(size)
-        var lean = 0.6
+        var short: Double?
+        var over: Double?
         for _ in 0..<6 where reading() != size {
+            slider.adjust(toNormalizedSliderPosition: start)
+            if reading() == size { break }
             slider.adjust(toNormalizedSliderPosition: CGFloat((aim - 10) / 26))
-            if let landed = reading(), landed != size {
-                aim = min(max(aim + Double(size - landed) * lean, 10), 36)
-                lean /= 2
+            guard let landed = reading() else { break }
+            if landed < size { short = max(short ?? aim, aim) }
+            if landed > size { over = min(over ?? aim, aim) }
+            if let short, let over {
+                aim = (short + over) / 2
+            } else if landed != size {
+                aim = min(max(aim + Double(size - landed), 10), 36)
             }
         }
         XCTAssertEqual(reading(), size,
