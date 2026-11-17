@@ -57,6 +57,13 @@
 		A100000000000000000001F9 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F9 /* libsqlite3.tbd */; };
 		A9C105E31C4D6E9C006C755A /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A9C105E21C4D6E9C006C755A /* Security.framework */; };
 		B20000000000000000000002 /* SimpleScriptureUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* SimpleScriptureUITests.swift */; };
+		B2B000000000000000000001 /* ReaderChromeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000001 /* ReaderChromeUITests.swift */; };
+		B2B000000000000000000002 /* ChapterPagingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000002 /* ChapterPagingUITests.swift */; };
+		B2B000000000000000000003 /* ChapterHeadingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000003 /* ChapterHeadingUITests.swift */; };
+		B2B000000000000000000004 /* ReaderPositionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000004 /* ReaderPositionUITests.swift */; };
+		B2B000000000000000000005 /* StudyPopupUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000005 /* StudyPopupUITests.swift */; };
+		B2B000000000000000000006 /* SearchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000006 /* SearchUITests.swift */; };
+		B2B000000000000000000007 /* LibraryAndSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000007 /* LibraryAndSettingsUITests.swift */; };
 		B21000000000000000000011 /* AppModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000001 /* AppModels.swift */; };
 		B21000000000000000000012 /* URLRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000002 /* URLRouter.swift */; };
 		B21000000000000000000013 /* URLRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000003 /* URLRouterTests.swift */; };
@@ -160,6 +167,13 @@
 		A98A6E6C1C64A6860083ECB8 /* libpthread.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libpthread.tbd; path = usr/lib/libpthread.tbd; sourceTree = SDKROOT; };
 		A9C105E21C4D6E9C006C755A /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		B20000000000000000000001 /* SimpleScriptureUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SimpleScriptureUITests.swift; path = Tests/SimpleScriptureUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000001 /* ReaderChromeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReaderChromeUITests.swift; path = Tests/ReaderChromeUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000002 /* ChapterPagingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChapterPagingUITests.swift; path = Tests/ChapterPagingUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000003 /* ChapterHeadingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChapterHeadingUITests.swift; path = Tests/ChapterHeadingUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000004 /* ReaderPositionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReaderPositionUITests.swift; path = Tests/ReaderPositionUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000005 /* StudyPopupUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StudyPopupUITests.swift; path = Tests/StudyPopupUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000006 /* SearchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SearchUITests.swift; path = Tests/SearchUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000007 /* LibraryAndSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryAndSettingsUITests.swift; path = Tests/LibraryAndSettingsUITests.swift; sourceTree = "<group>"; };
 		B20000000000000000000003 /* SimpleScriptureUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SimpleScriptureUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B21000000000000000000001 /* AppModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModels.swift; sourceTree = "<group>"; };
 		B21000000000000000000002 /* URLRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLRouter.swift; sourceTree = "<group>"; };
@@ -531,6 +545,13 @@
 			isa = PBXGroup;
 			children = (
 				B20000000000000000000001 /* SimpleScriptureUITests.swift */,
+				B2A000000000000000000001 /* ReaderChromeUITests.swift */,
+				B2A000000000000000000002 /* ChapterPagingUITests.swift */,
+				B2A000000000000000000003 /* ChapterHeadingUITests.swift */,
+				B2A000000000000000000004 /* ReaderPositionUITests.swift */,
+				B2A000000000000000000005 /* StudyPopupUITests.swift */,
+				B2A000000000000000000006 /* SearchUITests.swift */,
+				B2A000000000000000000007 /* LibraryAndSettingsUITests.swift */,
 			);
 			name = PocketSwordUITests;
 			sourceTree = "<group>";
@@ -740,6 +761,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				B20000000000000000000002 /* SimpleScriptureUITests.swift in Sources */,
+				B2B000000000000000000001 /* ReaderChromeUITests.swift in Sources */,
+				B2B000000000000000000002 /* ChapterPagingUITests.swift in Sources */,
+				B2B000000000000000000003 /* ChapterHeadingUITests.swift in Sources */,
+				B2B000000000000000000004 /* ReaderPositionUITests.swift in Sources */,
+				B2B000000000000000000005 /* StudyPopupUITests.swift in Sources */,
+				B2B000000000000000000006 /* SearchUITests.swift in Sources */,
+				B2B000000000000000000007 /* LibraryAndSettingsUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
