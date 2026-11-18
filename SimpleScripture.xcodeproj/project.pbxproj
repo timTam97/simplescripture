@@ -57,13 +57,6 @@
 		A100000000000000000001F9 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F9 /* libsqlite3.tbd */; };
 		A9C105E31C4D6E9C006C755A /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A9C105E21C4D6E9C006C755A /* Security.framework */; };
 		B20000000000000000000002 /* SimpleScriptureUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000001 /* SimpleScriptureUITests.swift */; };
-		B2B000000000000000000001 /* ReaderChromeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000001 /* ReaderChromeUITests.swift */; };
-		B2B000000000000000000002 /* ChapterPagingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000002 /* ChapterPagingUITests.swift */; };
-		B2B000000000000000000003 /* ChapterHeadingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000003 /* ChapterHeadingUITests.swift */; };
-		B2B000000000000000000004 /* ReaderPositionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000004 /* ReaderPositionUITests.swift */; };
-		B2B000000000000000000005 /* StudyPopupUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000005 /* StudyPopupUITests.swift */; };
-		B2B000000000000000000006 /* SearchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000006 /* SearchUITests.swift */; };
-		B2B000000000000000000007 /* LibraryAndSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000007 /* LibraryAndSettingsUITests.swift */; };
 		B21000000000000000000011 /* AppModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000001 /* AppModels.swift */; };
 		B21000000000000000000012 /* URLRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000002 /* URLRouter.swift */; };
 		B21000000000000000000013 /* URLRouterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B21000000000000000000003 /* URLRouterTests.swift */; };
@@ -81,6 +74,13 @@
 		B280000000000000000000041 /* PSInfoPopupContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = B28000000000000000000004 /* PSInfoPopupContent.swift */; };
 		B29000000000000000000011 /* SwiftUIAboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B29000000000000000000001 /* SwiftUIAboutView.swift */; };
 		B29000000000000000000012 /* Notices in Resources */ = {isa = PBXBuildFile; fileRef = B29000000000000000000002 /* Notices */; };
+		B2B000000000000000000001 /* ReaderChromeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000001 /* ReaderChromeUITests.swift */; };
+		B2B000000000000000000002 /* ChapterPagingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000002 /* ChapterPagingUITests.swift */; };
+		B2B000000000000000000003 /* ChapterHeadingUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000003 /* ChapterHeadingUITests.swift */; };
+		B2B000000000000000000004 /* ReaderPositionUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000004 /* ReaderPositionUITests.swift */; };
+		B2B000000000000000000005 /* StudyPopupUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000005 /* StudyPopupUITests.swift */; };
+		B2B000000000000000000006 /* SearchUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000006 /* SearchUITests.swift */; };
+		B2B000000000000000000007 /* LibraryAndSettingsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2A000000000000000000007 /* LibraryAndSettingsUITests.swift */; };
 		D2BFE5F925E9C43D00E04366 /* libiconv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = D2BFE5F825E9C43D00E04366 /* libiconv.tbd */; };
 		D2BFE5FF25E9C52100E04366 /* CoreServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D2BFE5FE25E9C52100E04366 /* CoreServices.framework */; };
 		D2CF000126D100000000A001 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = D2CF000026D100000000A001 /* LaunchScreen.storyboard */; };
@@ -167,13 +167,6 @@
 		A98A6E6C1C64A6860083ECB8 /* libpthread.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libpthread.tbd; path = usr/lib/libpthread.tbd; sourceTree = SDKROOT; };
 		A9C105E21C4D6E9C006C755A /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		B20000000000000000000001 /* SimpleScriptureUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SimpleScriptureUITests.swift; path = Tests/SimpleScriptureUITests.swift; sourceTree = "<group>"; };
-		B2A000000000000000000001 /* ReaderChromeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReaderChromeUITests.swift; path = Tests/ReaderChromeUITests.swift; sourceTree = "<group>"; };
-		B2A000000000000000000002 /* ChapterPagingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChapterPagingUITests.swift; path = Tests/ChapterPagingUITests.swift; sourceTree = "<group>"; };
-		B2A000000000000000000003 /* ChapterHeadingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChapterHeadingUITests.swift; path = Tests/ChapterHeadingUITests.swift; sourceTree = "<group>"; };
-		B2A000000000000000000004 /* ReaderPositionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReaderPositionUITests.swift; path = Tests/ReaderPositionUITests.swift; sourceTree = "<group>"; };
-		B2A000000000000000000005 /* StudyPopupUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StudyPopupUITests.swift; path = Tests/StudyPopupUITests.swift; sourceTree = "<group>"; };
-		B2A000000000000000000006 /* SearchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SearchUITests.swift; path = Tests/SearchUITests.swift; sourceTree = "<group>"; };
-		B2A000000000000000000007 /* LibraryAndSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryAndSettingsUITests.swift; path = Tests/LibraryAndSettingsUITests.swift; sourceTree = "<group>"; };
 		B20000000000000000000003 /* SimpleScriptureUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SimpleScriptureUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B21000000000000000000001 /* AppModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModels.swift; sourceTree = "<group>"; };
 		B21000000000000000000002 /* URLRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLRouter.swift; sourceTree = "<group>"; };
@@ -192,6 +185,13 @@
 		B28000000000000000000004 /* PSInfoPopupContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PSInfoPopupContent.swift; sourceTree = "<group>"; };
 		B29000000000000000000001 /* SwiftUIAboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftUIAboutView.swift; sourceTree = "<group>"; };
 		B29000000000000000000002 /* Notices */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Notices; path = Resources/Notices; sourceTree = "<group>"; };
+		B2A000000000000000000001 /* ReaderChromeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReaderChromeUITests.swift; path = Tests/ReaderChromeUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000002 /* ChapterPagingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChapterPagingUITests.swift; path = Tests/ChapterPagingUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000003 /* ChapterHeadingUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ChapterHeadingUITests.swift; path = Tests/ChapterHeadingUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000004 /* ReaderPositionUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReaderPositionUITests.swift; path = Tests/ReaderPositionUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000005 /* StudyPopupUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = StudyPopupUITests.swift; path = Tests/StudyPopupUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000006 /* SearchUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SearchUITests.swift; path = Tests/SearchUITests.swift; sourceTree = "<group>"; };
+		B2A000000000000000000007 /* LibraryAndSettingsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = LibraryAndSettingsUITests.swift; path = Tests/LibraryAndSettingsUITests.swift; sourceTree = "<group>"; };
 		D2BFDF4425E47C8C00E04366 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/Localizable.strings; sourceTree = "<group>"; };
 		D2BFE5F825E9C43D00E04366 /* libiconv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libiconv.tbd; path = usr/lib/libiconv.tbd; sourceTree = SDKROOT; };
 		D2BFE5FB25E9C4FD00E04366 /* MobileCoreServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MobileCoreServices.framework; path = System/Library/Frameworks/MobileCoreServices.framework; sourceTree = SDKROOT; };
@@ -821,7 +821,7 @@
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
@@ -857,7 +857,7 @@
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
@@ -947,7 +947,7 @@
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture.dev;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
@@ -1077,7 +1077,7 @@
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture.dev;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
@@ -1438,7 +1438,7 @@
 					"$(inherited)",
 					"$(SRCROOT)",
 				);
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = org.timsam.SimpleScripture;
 				PRODUCT_MODULE_NAME = SimpleScripture;
 				PRODUCT_NAME = SimpleScripture;
