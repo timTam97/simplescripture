@@ -226,11 +226,14 @@ final class ReaderChromeUITests: SimpleScriptureUITestCase {
         selectReadingMode("Bible")
         openReadingOverflowMenu()
         // KJV earns six rows; cross-references is deliberately absent (no
-        // OSISScripref filter, no Feature=Scripref).
+        // OSISScripref filter, no Feature=Scripref). The Strong's row is a
+        // submenu whose label carries its choice, `Strong's Numbers, Off`
+        // (MEASURED, iOS 27.2: the subtitle is folded into the label).
         let titles = ["Strong's Numbers", "Morphological Tags", "Headings",
                       "Footnotes", "Red Letter", "Verse Per Line"]
-        XCTAssertTrue(app.buttons[titles[0]].waitForExistence(timeout: 5))
-        for title in titles {
+        let strongsRow = strongsDisplayRow
+        XCTAssertTrue(strongsRow.waitForExistence(timeout: 5))
+        for title in titles.dropFirst() {
             XCTAssertTrue(app.buttons[title].exists,
                           "The Bible's display menu is missing \(title).")
         }
@@ -240,14 +243,15 @@ final class ReaderChromeUITests: SimpleScriptureUITestCase {
         XCTAssertFalse(app.buttons["History and Search"].exists)
         // The open menu is the one collection view on screen (iOS 27.2
         // hierarchy), so its buttons are the rows, in order.
+        let rows = app.collectionViews.buttons.allElementsBoundByIndex.map(\.label)
         XCTAssertEqual(
-            app.collectionViews.buttons.allElementsBoundByIndex.map(\.label),
+            rows.map { $0.hasPrefix("\(titles[0]), ") ? titles[0] : $0 },
             titles,
-            "The Bible's display menu is not exactly its six toggles."
+            "The Bible's display menu is not exactly its six toggles: \(rows)"
         )
         dismissMenu()
         XCTAssertTrue(
-            app.buttons[titles[0]].waitForNonExistence(timeout: 5),
+            strongsRow.waitForNonExistence(timeout: 5),
             "The display menu did not close."
         )
 
@@ -300,7 +304,100 @@ final class ReaderChromeUITests: SimpleScriptureUITestCase {
         XCTAssertEqual(sameVerse.frame.minY, topVerseY, accuracy: 1,
                        "The Bible pane moved across a visit to the commentary.")
         openReadingOverflowMenu()
-        XCTAssertTrue(app.buttons[titles[0]].waitForExistence(timeout: 5))
+        XCTAssertTrue(strongsRow.waitForExistence(timeout: 5))
         dismissMenu()
+    }
+
+    /// The Strong's row offers Off, Numbers and Underlined Words, says which
+    /// is chosen, and the reader follows each choice: the markers with
+    /// Numbers, the words as links with Underlined Words, neither with Off.
+    ///
+    /// Chosen through the menu, so the keys are not launch arguments (an
+    /// argument would shadow the menu's writes), and the test ends on Off:
+    /// a fresh clone's choice, and the one every other test expects unless it
+    /// passes its own. MEASURED (iOS 27.2): before the words' text was keyed
+    /// on whether it links them (`ChapterRunsText.linksWords`), Off to
+    /// Underlined Words drew the underlines with no link in the hierarchy,
+    /// and back to Off left all 73 of Genesis 1's.
+    ///
+    /// The place is a launch argument: the test pages nowhere.
+    @MainActor
+    func testStrongsChoiceSwitchesBetweenNumbersAndUnderlinedWords() throws {
+        app.terminate()
+        app.launchArguments += [
+            "-lastRef", "Genesis 1",
+            "-bibleScrollPosition", "0",
+            "-bibleVersePosition", "1",
+        ]
+        app.launch()
+        XCTAssertTrue(
+            app.buttons["reading.reference-picker"].waitForExistence(timeout: 20),
+            "SimpleScripture did not finish initialization."
+        )
+        let word = app.links["pslink://strongsword/H07225"]
+        let marker = app.links["pslink://strongs/Hebrew/07225"]
+
+        chooseStrongsDisplay("Underlined Words")
+        XCTAssertTrue(word.waitForExistence(timeout: 10),
+                      "Underlined Words did not make \"In the beginning\" a link")
+        XCTAssertEqual(word.label, "In the beginning")
+        XCTAssertFalse(marker.exists, "Underlined Words drew the numbers")
+
+        chooseStrongsDisplay("Numbers", from: "Underlined Words")
+        XCTAssertTrue(marker.waitForExistence(timeout: 10),
+                      "Numbers did not draw the H07225 marker")
+        XCTAssertFalse(word.exists, "Numbers left the words linked")
+
+        chooseStrongsDisplay("Off", from: "Numbers")
+        XCTAssertTrue(marker.waitForNonExistence(timeout: 10),
+                      "Off left the markers")
+        XCTAssertFalse(word.exists, "Off left the words linked")
+        // Off straight from Underlined Words takes the links off too.
+        chooseStrongsDisplay("Underlined Words", from: "Off")
+        XCTAssertTrue(word.waitForExistence(timeout: 10))
+        chooseStrongsDisplay("Off", from: "Underlined Words")
+        XCTAssertTrue(word.waitForNonExistence(timeout: 10),
+                      "Off from Underlined Words left the words' links in the hierarchy")
+
+        // The row reads the choice it was left on.
+        openReadingOverflowMenu()
+        XCTAssertTrue(strongsDisplayRow.waitForExistence(timeout: 5))
+        XCTAssertEqual(strongsDisplayRow.label, "Strong's Numbers, Off")
+        dismissMenu()
+    }
+
+    // MARK: - Helpers
+
+    /// The ••• menu's Strong's row, whose label carries the choice.
+    private var strongsDisplayRow: XCUIElement {
+        app.buttons.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Strong's Numbers")
+        ).firstMatch
+    }
+
+    /// Chooses `label` in the ••• menu's Strong's submenu, checking first that
+    /// the row reads `current` when given. The menu closes on the choice.
+    @MainActor
+    private func chooseStrongsDisplay(
+        _ label: String, from current: String? = nil,
+        file: StaticString = #filePath, line: UInt = #line
+    ) {
+        openReadingOverflowMenu()
+        let row = strongsDisplayRow
+        XCTAssertTrue(row.waitForExistence(timeout: 5),
+                      "The display menu has no Strong's row", file: file, line: line)
+        if let current {
+            XCTAssertEqual(row.label, "Strong's Numbers, \(current)",
+                           "The Strong's row does not read its choice",
+                           file: file, line: line)
+        }
+        row.tap()
+        let choice = app.buttons[label].firstMatch
+        XCTAssertTrue(choice.waitForExistence(timeout: 5),
+                      "The Strong's submenu offers no \(label)", file: file, line: line)
+        choice.tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5),
+                      "The menu stayed open after choosing \(label)",
+                      file: file, line: line)
     }
 }

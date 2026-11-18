@@ -37,8 +37,17 @@ private enum ReaderFeature {
 }
 
 /// One row of the per-tab display menu: a boolean toggle over a per-module
-/// preference key.
+/// preference key, or (Strong's) a choice among `StrongsDisplay`'s three.
 struct ReaderDisplayToggle: Identifiable, Equatable {
+    /// How the row is drawn and what it writes.
+    enum Control: Equatable {
+        /// A checkmark row that flips `preference`.
+        case toggle
+        /// A submenu of Off / Numbers / Underlined Words, over `preference`
+        /// and `Defaults.strongsUnderlinePreference` (`StrongsDisplay`).
+        case strongsDisplay
+    }
+
     /// Stable identity for `ForEach`, and the accessibility-identifier suffix
     /// ("strongs", "morph", "headings", "footnotes", "xref", "redLetter", "vpl")
     /// the XCUITests look for.
@@ -49,6 +58,16 @@ struct ReaderDisplayToggle: Identifiable, Equatable {
     /// The unsuffixed preference name; the module name is appended by
     /// `UserDefaults.ps*(…forModule:)`.
     let preference: String
+    var control: Control = .toggle
+
+    /// Every unsuffixed key the row writes: what a reset has to clear
+    /// (`LaunchCoordinator.resetPreferences`).
+    var preferences: [String] {
+        switch control {
+        case .toggle: [preference]
+        case .strongsDisplay: [preference, Defaults.strongsUnderlinePreference]
+        }
+    }
 
     /// The rows a module's advertised features earn it.
     ///
@@ -77,7 +96,8 @@ struct ReaderDisplayToggle: Identifiable, Equatable {
                 ReaderDisplayToggle(
                     id: "strongs",
                     titleKey: "PreferencesStrongsPreferencesTitle",
-                    preference: Defaults.strongsPreference
+                    preference: Defaults.strongsPreference,
+                    control: .strongsDisplay
                 )
             )
         }
@@ -158,6 +178,9 @@ final class ReaderChromeModel {
     /// `ReaderDisplayToggle.id`. Held in the model rather than read live inside
     /// the view body so a write goes through Observation and refreshes the menu.
     var displayToggleValues: [String: Bool] = [:]
+    /// The Strong's row's choice, mirrored the same way. `.off` when the module
+    /// has no Strong's row.
+    var strongsDisplay: StrongsDisplay = .off
     /// Drives the reference picker popover/sheet.
     var isPresentingReferencePicker: Bool = false
     /// Selects the accessibility-identifier prefix ("bible."/"commentary.").
@@ -167,6 +190,8 @@ final class ReaderChromeModel {
     @ObservationIgnored var onNextChapter: (@MainActor () -> Void)?
     /// Applies a display-toggle flip: write the per-module pref, then redisplay.
     @ObservationIgnored var onDisplayToggle: (@MainActor (ReaderDisplayToggle) -> Void)?
+    /// Applies a Strong's choice the same way.
+    @ObservationIgnored var onStrongsDisplayChange: (@MainActor (StrongsDisplay) -> Void)?
 
     var identifierPrefix: String {
         isBibleTab ? "bible" : "commentary"
@@ -184,6 +209,7 @@ final class ReaderChromeModel {
         )
         guard let moduleName else {
             displayToggleValues = [:]
+            strongsDisplay = .off
             return
         }
         displayToggleValues = Dictionary(
@@ -191,6 +217,9 @@ final class ReaderChromeModel {
                 ($0.id, defaults.psBool($0.preference, forModule: moduleName))
             }
         )
+        strongsDisplay = displayToggles.contains { $0.control == .strongsDisplay }
+            ? StrongsDisplay.current(forModule: moduleName, defaults: defaults)
+            : .off
     }
 }
 
@@ -566,10 +595,18 @@ struct ReaderScreen: View {
                         ToolbarOverflowMenu {
                             Section {
                                 ForEach(chrome.displayToggles) { toggle in
-                                    ReaderDisplayToggleButton(
-                                        chrome: chrome,
-                                        toggle: toggle
-                                    )
+                                    switch toggle.control {
+                                    case .toggle:
+                                        ReaderDisplayToggleButton(
+                                            chrome: chrome,
+                                            toggle: toggle
+                                        )
+                                    case .strongsDisplay:
+                                        StrongsDisplayPicker(
+                                            chrome: chrome,
+                                            toggle: toggle
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -584,7 +621,8 @@ struct ReaderScreen: View {
                 .toolbarBackgroundVisibility(.hidden, for: .navigationBar)
                 .sheet(item: $reading.studyPopup) { popup in
                     StudyPopupSheet(
-                        content: popup.content,
+                        entries: popup.entries,
+                        initial: popup.initial,
                         findAllOccurrences: reading.startStrongsSearch
                     )
                 }
@@ -888,5 +926,44 @@ private struct ReaderDisplayToggleButton: View {
             "\(chrome.identifierPrefix).\(toggle.id)"
         )
         .accessibilityAddTraits(isOn ? [.isSelected] : [])
+    }
+}
+
+/// The Strong's row: a submenu of Off / Numbers / Underlined Words, with the
+/// current choice under its title. A binding whose setter goes through the
+/// host's write-then-redisplay path, as `ReaderDisplayToggleButton` does,
+/// rather than one that owns the pref keys.
+///
+/// A `Menu` around an inline `Picker`, not a `.menu`-style `Picker`: that drew
+/// the row with its title alone, so the choice could be seen only by opening
+/// it (MEASURED, iOS 27.2). A menu's second label `Text` is its subtitle.
+private struct StrongsDisplayPicker: View {
+    let chrome: ReaderChromeModel
+    let toggle: ReaderDisplayToggle
+
+    var body: some View {
+        Menu {
+            Picker(
+                LocalizedStringKey(toggle.titleKey),
+                selection: Binding(
+                    get: { chrome.strongsDisplay },
+                    set: { display in
+                        guard display != chrome.strongsDisplay else { return }
+                        chrome.onStrongsDisplayChange?(display)
+                    }
+                )
+            ) {
+                ForEach(StrongsDisplay.allCases) { display in
+                    Text(LocalizedStringKey(display.titleKey)).tag(display)
+                }
+            }
+            .pickerStyle(.inline)
+        } label: {
+            Text(LocalizedStringKey(toggle.titleKey))
+            Text(LocalizedStringKey(chrome.strongsDisplay.titleKey))
+        }
+        .accessibilityIdentifier(
+            "\(chrome.identifierPrefix).\(toggle.id)"
+        )
     }
 }

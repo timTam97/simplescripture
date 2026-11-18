@@ -120,7 +120,10 @@ final class PSContentReader: NSObject {
     func options(forModule module: String) -> PSChapterExpander.Options {
         let defaults = UserDefaults.standard
         var options = PSChapterExpander.Options()
-        options.strongs = defaults.psBool(Defaults.strongsPreference, forModule: module)
+        // Only Numbers draws the markers. Underlined Words draws the chapter
+        // without them and links the words they tag instead, found through a
+        // copy built with them on (`ReaderPaneModel.annotatingStrongs`).
+        options.strongs = StrongsDisplay.current(forModule: module, defaults: defaults) == .numbers
         options.morphs = defaults.psBool(Defaults.morphPreference, forModule: module)
         options.headings = defaults.psBool(Defaults.headingsPreference, forModule: module)
         options.redLetter = defaults.psBool(Defaults.redLetterPreference, forModule: module)
@@ -278,13 +281,15 @@ final class PSContentReader: NSObject {
     /// index holds for the same verses (it is built from these rows).
     ///
     /// Empty for a ref that does not resolve, and for a module without Strong's
-    /// numbers. Not a render input: the reader asks for it only while a
-    /// Strong's search result is highlighted (`ReaderPaneModel`).
+    /// numbers. The reader asks for it while a Strong's search result is
+    /// highlighted, and on every render in Underlined Words mode
+    /// (`ReaderPaneModel.annotatingStrongs`).
     func wordMaps(module: String, ref: String) -> [Int: String] {
         guard let store, let resolver,
               let (book, chapter) = resolver.resolve(ref: ref) else { return [:] }
         // Keyed by the module's own key text, the LONG book name, as `headings`.
-        return store.wordMaps(module: module, bookName: book.longName, chapter: chapter)
+        return store.wordMaps(module: module, bookOsis: book.osisName,
+                              bookName: book.longName, chapter: chapter)
     }
 
     /// The empty-chapter fallback, byte-identical to the engine's. The
@@ -359,5 +364,59 @@ final class PSContentReader: NSObject {
     static func decodePassage(_ passage: String) -> String {
         let plussed = passage.replacingOccurrences(of: "+", with: " ")
         return plussed.removingPercentEncoding ?? plussed
+    }
+}
+
+/// How a module's Strong's numbers are shown: the reader's three-way choice.
+///
+/// **Two per-module keys, not one.** `strongsPreference` (Bool) is whether
+/// Strong's is shown at all, exactly as it always was, so every saved value and
+/// every `-strongsPreference_KJV YES` launch argument keeps its meaning.
+/// `strongsUnderlinePreference` (Bool, absent reads as off) picks underlined
+/// words over the numbers, and means nothing while the first is off.
+enum StrongsDisplay: String, CaseIterable, Identifiable {
+    /// No markers and no links.
+    case off
+    /// A grey superscript marker after each tagged word, tapped for its entry.
+    case numbers
+    /// No markers: each tagged word or phrase is underlined and is itself the
+    /// link (`ChapterVerse.strongsWords`). A number with no English word to
+    /// stand on (John 3:16's leading articles) is not reachable this way;
+    /// Numbers shows it.
+    case words
+
+    var id: String { rawValue }
+
+    /// The localization key of the choice's title in the reader's menu.
+    var titleKey: String {
+        switch self {
+        case .off: "PreferencesStrongsDisplayOff"
+        case .numbers: "PreferencesStrongsDisplayNumbers"
+        case .words: "PreferencesStrongsDisplayWords"
+        }
+    }
+
+    static func current(forModule module: String,
+                        defaults: UserDefaults = .standard) -> StrongsDisplay {
+        guard defaults.psBool(Defaults.strongsPreference, forModule: module) else {
+            return .off
+        }
+        return defaults.psBool(Defaults.strongsUnderlinePreference, forModule: module)
+            ? .words
+            : .numbers
+    }
+
+    /// Writes both keys `current(forModule:)` reads. Off clears the underline
+    /// key too: it is not read while Strong's is off, but left on it would make
+    /// Underlined Words of anything that later turns `strongsPreference` on by
+    /// itself — a seeded container, a `-strongsPreference_KJV YES` argument —
+    /// where that has always meant the numbers.
+    static func write(_ display: StrongsDisplay,
+                      forModule module: String,
+                      defaults: UserDefaults = .standard) {
+        defaults.psSet(display != .off, forPref: Defaults.strongsPreference, module: module)
+        defaults.psSet(display == .words,
+                       forPref: Defaults.strongsUnderlinePreference,
+                       module: module)
     }
 }

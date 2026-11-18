@@ -22,9 +22,15 @@ instead of sliding. Switch between Bible and Commentary to read the passage
 or Matthew Henry's notes.
 
 Reading options include red-letter text, headings, footnotes, Strong's numbers
-and morphology where the selected resource supplies them. Enable Strong's
-numbers and tap a number to open its dictionary entry. Links inside an entry
-let you continue your word study.
+and morphology where the selected resource supplies them. Strong's Numbers
+offers three choices: Off, Numbers, and Underlined Words. With Numbers, each
+tagged word is followed by its number; tap the number to open its dictionary
+entry. With Underlined Words, the numbers are hidden and each tagged word or
+phrase is underlined; tap the word to open its entry. When a word translates
+more than one original word, the entry offers each of its numbers at the top.
+A few numbers have no English word of their own (such as a Greek article) and
+appear only with Numbers. Links inside an entry let you continue your word
+study.
 
 Tap a verse number to open its actions, including bookmarking the passage.
 Verse-per-line mode separates the verses; prose mode groups Bible verses into

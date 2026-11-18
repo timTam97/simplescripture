@@ -152,6 +152,9 @@ enum ChapterTextRenderer {
     /// so there is one copy and one order.
     static func text(for verse: ChapterVerse, style: Style) -> AttributedString {
         var out = attributed(runs: verse.runs, style: style)
+        // Underlined Words' links go on first: the bookmark colour and the
+        // jackets paint over them as over any text.
+        linkStrongsWords(verse.strongsWords, in: &out)
         if let colour = verse.highlightColour,
            let background = Color(bookmarkRGBAString: colour),
            let last = out.characters.lastIndex(where: { !$0.isWhitespace }) {
@@ -369,29 +372,36 @@ enum ChapterTextRenderer {
     /// The runs must have the numbers on, or there are no markers to find: the
     /// reader reads them from the chapter built that way, whatever it shows.
     static func strongsTaggedWords(of runs: [InlineRun]) -> PSStrongsTaggedWords {
-        var markers: [Int: Set<String>] = [:]
+        var markers: [Int: [String]] = [:]
         var wordsCount = 0
         for run in runs where !run.text.isEmpty {
             guard run.isMarker else {
                 wordsCount += run.text.unicodeScalars.count
                 continue
             }
-            // As a word map writes the number: `H0430`, `G2316`.
+            // As a word map writes the number: `H0430`, `G2316`. In the order
+            // the markers stand, each once: the order a word's numbers are
+            // offered in (`StudyPopup`).
             guard case .strongs(let type, let value)? = run.link else { continue }
             let prefix = type == "Hebrew" ? "H" : type == "Greek" ? "G" : nil
-            if let prefix {
-                markers[wordsCount, default: []].insert(prefix + value)
+            if let prefix, markers[wordsCount]?.contains(prefix + value) != true {
+                markers[wordsCount, default: []].append(prefix + value)
             }
         }
         return PSStrongsTaggedWords(words: searchableWords(of: runs).words,
                                     markers: markers)
     }
 
-    /// `document` with the words a Strong's search result marks put on it
-    /// (`ChapterVerse.strongsMarks`, `ChapterHeading.strongsMarks`) — every
-    /// word in the chapter that its verse's word map tags with one of
-    /// `numbers`, each at its own place (`PSSearchQuery.strongsHighlightRanges`).
-    /// With no `numbers`, the marks come off.
+    /// `document` with its Strong's annotations put on it, both from one walk
+    /// of each verse's word map (`PSSearchQuery.strongsWords`):
+    ///
+    ///  * the words a Strong's search result marks (`ChapterVerse.strongsMarks`,
+    ///    `ChapterHeading.strongsMarks`) — every word in the chapter its verse's
+    ///    word map tags with one of `numbers`, each at its own place;
+    ///  * with `linkingWords`, every word the word map tags, linked to its
+    ///    numbers (`strongsWords`): Underlined Words mode.
+    ///
+    /// With no `numbers` and no `linkingWords`, the annotations come off.
     ///
     /// `tagged` is the same chapter built with the Strong's numbers on, which is
     /// `document` itself when they are shown: the markers are what a word is
@@ -402,17 +412,18 @@ enum ChapterTextRenderer {
     /// A verse's canonical headings are read ahead of it, because that is where
     /// a Psalm's title is in its first verse's word map. They are its own until
     /// the prose layout hoists them onto the paragraph
-    /// (`ChapterDocument.paragraphs`), which copies their marks with them.
+    /// (`ChapterDocument.paragraphs`), which copies their annotations with them.
     ///
     /// `wordMaps` is keyed by verse (`PSContentReader.wordMaps`), and a verse's
     /// `number` is its slot in the chapter, which in a Bible is the verse: slot
     /// 0 is the intro, which has no word map.
-    static func markingStrongs(_ numbers: Set<String>,
-                               wordMaps: [Int: String],
-                               taggedIn tagged: ChapterDocument,
-                               in document: ChapterDocument) -> ChapterDocument {
+    static func annotatingStrongs(highlighting numbers: Set<String>,
+                                  linkingWords: Bool,
+                                  wordMaps: [Int: String],
+                                  taggedIn tagged: ChapterDocument,
+                                  in document: ChapterDocument) -> ChapterDocument {
         var taggedVerses: [Int: ChapterVerse] = [:]
-        if !numbers.isEmpty {
+        if !numbers.isEmpty || linkingWords {
             for verse in tagged.verses { taggedVerses[verse.number] = verse }
         }
         // The texts of a verse a word map covers, in its order.
@@ -420,39 +431,115 @@ enum ChapterTextRenderer {
             verse.headings.filter(\.isCanonical).map(\.runs) + [verse.runs]
         }
 
-        var marked = document
-        for index in marked.verses.indices {
-            var verse = marked.verses[index]
+        var annotated = document
+        for index in annotated.verses.indices {
+            var verse = annotated.verses[index]
             verse.strongsMarks = []
+            verse.strongsWords = []
             for heading in verse.headings.indices {
                 verse.headings[heading].strongsMarks = []
+                verse.headings[heading].strongsWords = []
             }
             if !verse.isIntro, let map = wordMaps[verse.number],
                let source = taggedVerses[verse.number] {
                 let drawn = texts(of: verse).map { searchableWords(of: $0) }
-                let found = PSSearchQuery.strongsHighlightRanges(
-                    taggedWithAnyOf: numbers,
+                let found = PSSearchQuery.strongsWords(
                     wordMap: map,
                     taggedIn: texts(of: source).map { strongsTaggedWords(of: $0) },
                     in: drawn.map(\.words)
                 )
                 if found.count == drawn.count {
-                    let marks = zip(found, drawn).map { found, drawn in
-                        renderedRanges(of: found, in: drawn.words,
-                                       stretches: drawn.stretches)
+                    // Per text: the marks, and the links.
+                    let annotations = zip(found, drawn).map { found, drawn in
+                        // As `PSSearchQuery.strongsHighlightRanges` marks.
+                        let marked = found.filter {
+                            $0.line.isTagged(withAnyOf: numbers)
+                        }
+                        let marks = renderedRanges(
+                            of: marked.map(\.range), in: drawn.words,
+                            stretches: drawn.stretches
+                        )
+                        var links: [StrongsWordLink] = []
+                        if linkingWords {
+                            for word in found {
+                                // One range per stretch of runs, and runs part
+                                // inside a word ("L" + small "ORD"): put back
+                                // together where nothing stands between them, so
+                                // a link is parted only by a marker inside it.
+                                var pieces: [Range<Int>] = []
+                                for range in renderedRanges(
+                                    of: [word.range], in: drawn.words,
+                                    stretches: drawn.stretches
+                                ) {
+                                    if let last = pieces.last,
+                                       last.upperBound == range.lowerBound {
+                                        pieces[pieces.count - 1] = last.lowerBound..<range.upperBound
+                                    } else {
+                                        pieces.append(range)
+                                    }
+                                }
+                                links += pieces.map {
+                                    StrongsWordLink(range: $0, numbers: word.numbers)
+                                }
+                            }
+                        }
+                        return (marks: marks, links: links)
                     }
                     var segment = 0
                     for heading in verse.headings.indices
                     where verse.headings[heading].isCanonical {
-                        verse.headings[heading].strongsMarks = marks[segment]
+                        verse.headings[heading].strongsMarks = annotations[segment].marks
+                        verse.headings[heading].strongsWords = annotations[segment].links
                         segment += 1
                     }
-                    verse.strongsMarks = marks[segment]
+                    verse.strongsMarks = annotations[segment].marks
+                    verse.strongsWords = annotations[segment].links
                 }
             }
-            marked.verses[index] = verse
+            annotated.verses[index] = verse
         }
-        return marked
+        return annotated
+    }
+
+    /// Link and underline each of `words` (`ChapterVerse.strongsWords`) in
+    /// `text`, which is `attributed(runs:)` of the runs they were found in.
+    ///
+    /// **Applied straight after `attributed(runs:)`, before the bookmark colour
+    /// and the search jacket**, which paint over it as they paint over any text.
+    ///
+    /// A link with no colour of its own is drawn in the tint, so each part of a
+    /// word that has none gets the body colour; a part that has one keeps it:
+    /// Christ's words stay red and the translators' supplied italics grey. The
+    /// underline is grey whatever the text's colour, a lighter mark than the
+    /// text so a page of tagged words still reads as text.
+    static func linkStrongsWords(_ words: [StrongsWordLink],
+                                 in text: inout AttributedString) {
+        guard !words.isEmpty else { return }
+        guard words.allSatisfy({ $0.range.lowerBound >= 0 }),
+              let end = words.map(\.range.upperBound).max(),
+              end <= text.unicodeScalars.count else {
+            assertionFailure("a Strong's word link runs off the end of its text")
+            return
+        }
+        for word in words where !word.range.isEmpty {
+            guard let url = InlineLink.strongsWord(numbers: word.numbers).url else {
+                continue
+            }
+            // Indices made at the point of use, one word at a time: each
+            // mutation can invalidate an index taken before it (see `jacket`).
+            let start = text.index(text.startIndex,
+                                   offsetByUnicodeScalars: word.range.lowerBound)
+            let end = text.index(start, offsetByUnicodeScalars: word.range.count)
+            let uncoloured = text[start..<end].runs[\.foregroundColor]
+                .compactMap { colour, range in colour == nil ? range : nil }
+            for range in uncoloured {
+                text[range].foregroundColor = .primary
+            }
+            text[start..<end].link = url
+            text[start..<end].underlineStyle = Text.LineStyle(
+                pattern: .solid, color: .secondary
+            )
+        }
     }
 
     /// A heading's text — `<p><b>` in the HTML.
@@ -472,6 +559,7 @@ enum ChapterTextRenderer {
             run.style.insert(.bold)
             return run
         }, style: style)
+        linkStrongsWords(heading.strongsWords, in: &out)
         // A Psalm's title is tagged like its verses, and a Strong's result
         // marks it too. A text search never matches it: the index has no
         // title text.
@@ -898,6 +986,7 @@ private struct ParagraphRow: View {
                     text: flowed,
                     pane: pane,
                     style: style,
+                    linksWords: paragraph.verses.contains { !$0.strongsWords.isEmpty },
                     verseLayoutStore: verseLayoutStore
                 )
                     .tracksTopmostVerse(
@@ -947,7 +1036,8 @@ private struct VerseRow: View {
             // That row is its heading. An empty `Text` under it would still take a
             // line, and the padding below it.
             if !verse.isIntro || verse.hasVisibleText {
-                ChapterRunsText(text: Text(labelled), pane: pane, style: style)
+                ChapterRunsText(text: Text(labelled), pane: pane, style: style,
+                                linksWords: !verse.strongsWords.isEmpty)
                     .padding(.bottom, style.fontSize * 0.35)
             }
         }
@@ -985,6 +1075,8 @@ private struct HeadingRow: View {
             .padding(.bottom, style.fontSize * 0.3)
             .accessibilityAddTraits(.isHeader)
             .routesChapterLinks(to: pane)
+            // See `ChapterRunsText.linksWords`.
+            .id(!heading.strongsWords.isEmpty)
     }
 }
 
@@ -994,6 +1086,18 @@ private struct ChapterRunsText: View {
     let text: Text
     let pane: ReaderPaneModel
     let style: ChapterTextRenderer.Style
+    /// Whether the text links Underlined Words' words (`strongsWords`).
+    ///
+    /// **The text's identity, because a `Text` does not rebuild its
+    /// accessibility links when only its links change.** Turning Underlined
+    /// Words on from Off changes nothing but link and underline attributes, and
+    /// the words were drawn underlined and tapped through to their entries
+    /// with no link in the hierarchy; turning it off left all 73 of Genesis 1's
+    /// links there, dead (measured 2026-11-18, iOS 27.2, 2 tries in 2; the
+    /// links came right once the rows scrolled off screen and back). Numbers
+    /// to and from either changes the text itself and was right. Keyed here,
+    /// not on the row, whose identity is the verse the scroll position names.
+    var linksWords = false
     var verseLayoutStore: VerseLayoutStore?
 
     var body: some View {
@@ -1005,6 +1109,7 @@ private struct ChapterRunsText: View {
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .routesChapterLinks(to: pane)
+            .id(linksWords)
     }
 }
 

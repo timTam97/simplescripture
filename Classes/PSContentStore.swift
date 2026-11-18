@@ -751,13 +751,40 @@ final class PSContentStore: NSObject {
     /// takes the LONG book name. A verse with no row, or with no word map (every
     /// verse of a module without Strong's), is absent. A chunk that fails to
     /// inflate has already been reported by `chunkRows`; its verses are absent.
-    func wordMaps(module: String, bookName: String, chapter: Int) -> [Int: String] {
+    ///
+    /// **The rows are found by ordinal, through `idx_vp`**, then held to the
+    /// key text's prefix. A chapter's verses sit in its slots: verse `v` is at
+    /// the chapter's `ordinal` + `v`, inside its `entry_count` (MEASURED over
+    /// all 58,817 rows of both modules). The prefix alone (`LIKE`) can use no
+    /// index and read all 31,102 KJV rows for every chapter, 7–10 ms of the
+    /// 17 ms an Underlined Words render took in Psalms 119 and John 3, which
+    /// read this at every render. `testTheReaderMarksTheWordsAStrongsNumberTags`
+    /// holds the result to every verse of every chapter.
+    func wordMaps(module: String, bookOsis: String, bookName: String,
+                  chapter: Int) -> [Int: String] {
         queue.sync {
+            guard let slots = statement(
+                "SELECT ordinal, entry_count FROM chapters"
+                + " WHERE module=? AND book_osis=? AND chapter=?;") else { return [:] }
+            bind(slots, 1, module)
+            bind(slots, 2, bookOsis)
+            sqlite3_bind_int(slots, 3, Int32(chapter))
+            guard sqlite3_step(slots) == SQLITE_ROW else {
+                sqlite3_reset(slots)
+                return [:]   // not a failure: wholly-empty chapters are omitted
+            }
+            let first = sqlite3_column_int64(slots, 0)
+            let count = sqlite3_column_int64(slots, 1)
+            sqlite3_reset(slots)
+
             guard let st = statement(
                 "SELECT osis_ref, text_id FROM verses_plain"
-                + " WHERE module=? AND osis_ref LIKE ?;") else { return [:] }
+                + " WHERE module=? AND ordinal>? AND ordinal<?"
+                + " AND osis_ref LIKE ?;") else { return [:] }
             bind(st, 1, module)
-            bind(st, 2, "\(bookName) \(chapter):%")
+            sqlite3_bind_int64(st, 2, first)
+            sqlite3_bind_int64(st, 3, first + count)
+            bind(st, 4, "\(bookName) \(chapter):%")
             var textIDs: [(verse: Int, textID: Int)] = []
             while sqlite3_step(st) == SQLITE_ROW {
                 let ref = Self.text(st, 0)
@@ -777,8 +804,7 @@ final class PSContentStore: NSObject {
                 let chunk = textID / chunkRowsPlain
                 let slot = textID % chunkRowsPlain
                 if chunks[chunk] == nil {
-                    chunks[chunk] = .some(chunkRows(table: "plain_texts_chunks",
-                                                    module: module, chunkID: chunk))
+                    chunks[chunk] = .some(wordMapChunk(module: module, chunkID: chunk))
                 }
                 // `chunkRows` has already reported a chunk that failed.
                 guard let fields = chunks[chunk] ?? nil else { continue }
@@ -791,6 +817,36 @@ final class PSContentStore: NSObject {
             }
             return out
         }
+    }
+
+    /// The last few `plain_texts_chunks` `wordMaps` inflated, newest last.
+    ///
+    /// An Underlined Words render reads its chapter's word maps every time
+    /// (`ReaderPaneModel.annotatingStrongs`), and inflating and splitting a
+    /// chunk was most of what that read cost. A chunk is 256 verses, about
+    /// eight chapters, so the same chapter drawn again (a toggle, the font, a
+    /// bookmark) and a page turn to the next one mostly find theirs here. Not
+    /// used by the search index build, which reads every chunk once. Only on
+    /// `queue`.
+    private var wordMapChunks: [(key: String, rows: [[String]])] = []
+    private static let wordMapChunkLimit = 4
+
+    /// `chunkRows` of a `plain_texts_chunks` chunk, through `wordMapChunks`.
+    /// A chunk that fails is not kept, and `chunkRows` has reported it.
+    private func wordMapChunk(module: String, chunkID: Int) -> [[String]]? {
+        let key = "\(module)#\(chunkID)"
+        if let index = wordMapChunks.firstIndex(where: { $0.key == key }) {
+            let hit = wordMapChunks.remove(at: index)
+            wordMapChunks.append(hit)
+            return hit.rows
+        }
+        guard let rows = chunkRows(table: "plain_texts_chunks",
+                                   module: module, chunkID: chunkID) else { return nil }
+        wordMapChunks.append((key, rows))
+        if wordMapChunks.count > Self.wordMapChunkLimit {
+            wordMapChunks.removeFirst()
+        }
+        return rows
     }
 
     // MARK: - Module metadata

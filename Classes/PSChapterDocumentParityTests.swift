@@ -243,6 +243,10 @@ final class PSChapterDocumentParityTests: XCTestCase {
             // superscript verse label. The HTML side's verse anchors are stripped and
             // verse identity is checked separately, so it is not counted here.
             return nil
+        case .strongsWord:
+            // Not produced by the token grammar either: the renderer attaches it to
+            // a word in Underlined Words mode, from the word maps.
+            return nil
         case nil:
             return nil
         }
@@ -1803,6 +1807,7 @@ final class PSChapterDocumentParityTests: XCTestCase {
                 for runs in texts(of: verse) {
                     for marked in ChapterTextRenderer.strongsTaggedWords(of: runs)
                         .markers.values {
+                        // Each group's numbers, in marker order.
                         numbers.formUnion(marked)
                     }
                 }
@@ -1846,7 +1851,7 @@ final class PSChapterDocumentParityTests: XCTestCase {
                     var after: Set<String> = []
                     while true {
                         if let numbers = tagged[mark.text].markers[at] {
-                            after = numbers
+                            after = Set(numbers)
                             break
                         }
                         guard index != words.endIndex,
@@ -1892,7 +1897,7 @@ final class PSChapterDocumentParityTests: XCTestCase {
     /// it stands, with the numbers hidden as they are by default — not every
     /// word spelled like one of them.
     ///
-    /// Through the reader's own steps (`ChapterTextRenderer.markingStrongs` over
+    /// Through the reader's own steps (`ChapterTextRenderer.annotatingStrongs` over
     /// the chapter built with the numbers on, then the jacket the row views
     /// draw), so this is what the reader shows. Most of the cases are verses
     /// where marking the row's words wherever they stand would mark one too
@@ -1916,8 +1921,9 @@ final class PSChapterDocumentParityTests: XCTestCase {
             let tagged = try XCTUnwrap(reader.chapterDocument(
                 module: "KJV", ref: ref, kind: .bible,
                 options: .allOn, applyBookmarkHighlights: false), ref)
-            let marked = ChapterTextRenderer.markingStrongs(
-                numbers, wordMaps: reader.wordMaps(module: "KJV", ref: ref),
+            let marked = ChapterTextRenderer.annotatingStrongs(
+                highlighting: numbers, linkingWords: false,
+                wordMaps: reader.wordMaps(module: "KJV", ref: ref),
                 taggedIn: tagged, in: shown)
             let found = try XCTUnwrap(marked.verses.first { $0.number == verse },
                                       "\(ref):\(verse)", line: line)
@@ -1974,6 +1980,270 @@ final class PSChapterDocumentParityTests: XCTestCase {
         XCTAssertFalse(try drawn("Genesis 1", 1, ["G2316"]).contains("["))
         XCTAssertEqual(try drawn("Genesis 1", 1, ["H0430", "H430"]),
                        "In the beginning [God] created the heaven and the earth.")
+    }
+
+    // MARK: - Underlined Words' links
+
+    /// Every word of the Bible a word map tags is linked, in Underlined Words
+    /// mode, at its own place and to its own numbers.
+    ///
+    /// The mode draws a chapter with no markers and links each tagged word
+    /// (`ChapterVerse.strongsWords`), found by the same walk a Strong's result's
+    /// marks are (`PSSearchQuery.strongsWords`), through the chapter built with
+    /// the numbers on. Over every chapter drawn with all the options off:
+    ///
+    ///  * one link per line that carries a number, in order, and its words are
+    ///    the line's;
+    ///  * its numbers are some of the line's, as the markers write them, never
+    ///    none, and its URL comes back as the same link;
+    ///  * a Psalm's title is linked in the title.
+    ///
+    /// It also counts what the popup and the docs need: words with more than one
+    /// number, the most on one word, which of a word's numbers is a particle
+    /// (H0853, G3588), and the marker numbers no word is linked to.
+    ///
+    /// The default tier walks the sample chapters; `PSDOC_EXHAUSTIVE=1` walks
+    /// every chapter.
+    func testEveryTaggedWordLinksToTheNumbersItsMarkerCarries() throws {
+        let resolver = try resolver()
+        let refs: [String] = Self.isExhaustive
+            ? resolver.books.flatMap { book in
+                (1...book.chapterCount).map { "\(book.name) \($0)" }
+            }
+            : Self.sampleRefs
+        var links = 0
+        var titleLinks = 0
+        var multiple = 0
+        var most = 0
+        var particleFirst = 0
+        var particleLast = 0
+        var markerNumbers = 0
+        var linkedNumbers = 0
+        let particles: Set<String> = ["H0853", "G3588"]
+        for ref in refs {
+            let reader = PSContentReader.shared
+            let on = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOn, applyBookmarkHighlights: false), ref)
+            let off = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOff, applyBookmarkHighlights: false), ref)
+            let maps = reader.wordMaps(module: "KJV", ref: ref)
+            let linked = ChapterTextRenderer.annotatingStrongs(
+                highlighting: [], linkingWords: true,
+                wordMaps: maps, taggedIn: on, in: off)
+
+            func texts(of verse: ChapterVerse) -> [[InlineRun]] {
+                verse.headings.filter(\.isCanonical).map(\.runs) + [verse.runs]
+            }
+            var numbers = Set<String>()
+            for verse in on.verses {
+                for runs in texts(of: verse) {
+                    for group in ChapterTextRenderer.strongsTaggedWords(of: runs)
+                        .markers.values {
+                        numbers.formUnion(group)
+                        markerNumbers += group.count
+                    }
+                }
+            }
+
+            for verse in linked.verses where !verse.isIntro {
+                let label = "\(ref):\(verse.number)"
+                XCTAssertTrue(verse.strongsMarks.isEmpty, label)
+                let canonical = verse.headings.filter(\.isCanonical)
+                // Each link in reading order, with the words it covers.
+                var found: [(words: String, numbers: [String], inTitle: Bool)] = []
+                for (index, runs) in texts(of: verse).enumerated() {
+                    let words = index < canonical.count
+                        ? canonical[index].strongsWords
+                        : verse.strongsWords
+                    let text = String(ChapterTextRenderer.attributed(
+                        runs: runs, style: .init(fontName: "Georgia", fontSize: 20,
+                                                 lineSpacingMultiple: 1.4)
+                    ).characters)
+                    let scalars = Array(text.unicodeScalars)
+                    for word in words {
+                        XCTAssertLessThanOrEqual(word.range.upperBound, scalars.count, label)
+                        var piece = String.UnicodeScalarView()
+                        piece.append(contentsOf: scalars[word.range])
+                        found.append((String(piece), word.numbers,
+                                      index < canonical.count))
+                    }
+                }
+                let expected = PSWordMapLine.lines(in: maps[verse.number] ?? "")
+                    .filter { $0.isTagged(withAnyOf: numbers) }
+                guard found.count == expected.count else {
+                    return XCTFail("""
+                        \(label): \(expected.count) tagged lines, \(found.count) links.
+                          lines: \(expected.map(\.surface))
+                          links: \(found.map(\.words))
+                        """)
+                }
+                for (link, line) in zip(found, expected) {
+                    XCTAssertEqual(SearchHighlightTerm(link.words).tokens,
+                                   SearchHighlightTerm(line.surface).tokens,
+                                   "\(label): a link is not its line's words")
+                    XCTAssertFalse(link.numbers.isEmpty, "\(label): \(link.words)")
+                    XCTAssertTrue(Set(link.numbers).isSubset(of: Set(line.lemmas)),
+                                  "\(label): \(link.numbers) are not \(line.lemmas)")
+                    let url = try XCTUnwrap(
+                        InlineLink.strongsWord(numbers: link.numbers).url, label)
+                    XCTAssertEqual(InlineLink(url: url),
+                                   .strongsWord(numbers: link.numbers), label)
+                    if link.inTitle { titleLinks += 1 }
+                    if link.numbers.count > 1 {
+                        multiple += 1
+                        if particles.contains(link.numbers[0]) { particleFirst += 1 }
+                        if let last = link.numbers.last, particles.contains(last) {
+                            particleLast += 1
+                        }
+                    }
+                    most = max(most, link.numbers.count)
+                    linkedNumbers += link.numbers.count
+                }
+                links += found.count
+            }
+        }
+        // Every line with a number, as `testTheReaderMarksTheWordsAStrongsNumberTags`.
+        XCTAssertEqual(links, Self.isExhaustive ? 349_513 : 2_823)
+        // MEASURED 2026-11-18. The words with more than one number, which the
+        // popup offers side by side: never more than four, so the segments fit.
+        XCTAssertEqual(multiple, Self.isExhaustive ? 17_874 : 247)
+        XCTAssertEqual(most, Self.isExhaustive ? 4 : 3)
+        // Where one is a particle (the object marker H0853, the article G3588)
+        // it comes first and never last, which is why the popup opens on the
+        // last (`StudyPopup`).
+        XCTAssertEqual(particleFirst, Self.isExhaustive ? 15_749 : 237)
+        XCTAssertEqual(particleLast, 0)
+        // The marker numbers no word is linked to: those with no English word
+        // (John 3:16's leading articles), unreachable in this mode by the
+        // owner's choice. Numbers mode shows them.
+        XCTAssertEqual(markerNumbers - linkedNumbers, Self.isExhaustive ? 5_452 : 48,
+                       "of \(markerNumbers) marker numbers")
+        if !Self.isExhaustive {
+            XCTAssertEqual(titleLinks, 6 + 2,
+                           "Psalms 3's title is six lines of its map, Psalms 23's two")
+        }
+    }
+
+    /// Underlined Words links each word to its own numbers, where it stands,
+    /// and keeps the text's own colours, under the bookmark colour and the
+    /// search jacket.
+    ///
+    /// Through the reader's own steps (`ChapterTextRenderer.annotatingStrongs`
+    /// over the chapter built with the numbers on, then `text(for:)`, which
+    /// links the words before anything paints over them).
+    @MainActor
+    func testUnderlinedWordsLinkEachWordToItsOwnNumbers() throws {
+        let reader = PSContentReader.shared
+        let style = ChapterTextRenderer.Style.current()
+
+        /// One verse of `ref` in Underlined Words mode, red letter and headings
+        /// on, the markers off.
+        func verse(_ ref: String, _ number: Int,
+                   line: UInt = #line) throws -> ChapterVerse {
+            var options = PSChapterExpander.Options.allOff
+            options.redLetter = true
+            options.headings = true
+            let shown = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: options, applyBookmarkHighlights: false), ref, line: line)
+            let tagged = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOn, applyBookmarkHighlights: false), ref, line: line)
+            let linked = ChapterTextRenderer.annotatingStrongs(
+                highlighting: [], linkingWords: true,
+                wordMaps: reader.wordMaps(module: "KJV", ref: ref),
+                taggedIn: tagged, in: shown)
+            return try XCTUnwrap(linked.verses.first { $0.number == number },
+                                 "\(ref):\(number)", line: line)
+        }
+        /// The verse as drawn, headings first and each ending in " | ", each
+        /// link in brackets with its numbers.
+        func drawn(_ ref: String, _ number: Int, line: UInt = #line) throws -> String {
+            let found = try verse(ref, number, line: line)
+            var texts = found.headings.map { ChapterTextRenderer.text(for: $0, style: style) }
+            texts.append(ChapterTextRenderer.text(for: found, style: style))
+            return texts.map { text in
+                text.runs[\.link].map { link, range -> String in
+                    let piece = String(text[range].characters)
+                    guard let link,
+                          case .strongsWord(let numbers)? = InlineLink(url: link) else {
+                        return piece
+                    }
+                    return "[\(piece)|\(numbers.joined(separator: ","))]"
+                }.joined()
+            }.joined(separator: " | ")
+        }
+
+        // Each word its own numbers, a word with two offering both in the
+        // markers' order.
+        XCTAssertEqual(try drawn("Genesis 1", 1), """
+            [In the beginning|H07225] [God|H0430] [created|H0853,H01254] \
+            [the heaven|H08064] [and|H0853] [the earth|H0776].
+            """)
+        // John 3:16's two "that"s are two numbers' words. Its leading articles
+        // (`<3588>(T-NSM)<3588>(T-ASM)For`) have no English word and no link.
+        let john = try drawn("John 3", 16)
+        XCTAssertTrue(john.hasPrefix("¶[For|G1063] [God|G3588,G2316] [so|G3779]"), john)
+        XCTAssertTrue(john.contains(
+            "[the world|G3588,G2889], [that|G5620] [he gave|G1325]"), john)
+        XCTAssertTrue(john.contains("[Son|G3588,G5207], [that|G2443] [whosoever|G3956]"),
+                      john)
+        // The translators' supplied "after God" is no number's.
+        XCTAssertTrue(try drawn("Psalms 10", 4)
+            .contains("[will not seek|H01875] after God: [God|H0430] is"))
+        // A Psalm's title is linked in the title.
+        XCTAssertTrue(try drawn("Psalms 3", 1)
+            .hasPrefix("[A Psalm|H04210] [of David|H01732], [when he fled|H01272]"))
+        // One link over the divine name's two runs ("L" + small "ORD").
+        XCTAssertTrue(try drawn("Genesis 2", 4).contains("[that the LORD|H03068] [God|H0430]"))
+
+        // The text keeps its own colours under the link: Christ's words red,
+        // the supplied words grey, a plain word the body colour (not the
+        // tint). Every link is underlined; nothing else is.
+        let red = ChapterTextRenderer.text(for: try verse("John 3", 16), style: style)
+        for run in red.runs where run.link != nil {
+            XCTAssertEqual(run.foregroundColor, .wordOfChrist,
+                           String(red[run.range].characters))
+            XCTAssertNotNil(run.underlineStyle, String(red[run.range].characters))
+        }
+        let plain = ChapterTextRenderer.text(for: try verse("Psalms 10", 4), style: style)
+        var sawSupplied = false
+        for run in plain.runs {
+            let piece = String(plain[run.range].characters)
+            if run.link != nil {
+                XCTAssertEqual(run.foregroundColor, .primary, piece)
+                XCTAssertNotNil(run.underlineStyle, piece)
+            } else {
+                XCTAssertNil(run.underlineStyle, piece)
+                if piece.contains("after God") {
+                    sawSupplied = true
+                    XCTAssertEqual(run.foregroundColor, .secondary, piece)
+                }
+            }
+        }
+        XCTAssertTrue(sawSupplied, "Psalms 10:4's supplied words were not drawn as a run")
+
+        // The bookmark colour and a search jacket paint over the links and
+        // leave them links.
+        var bookmarked = try verse("Genesis 1", 1)
+        bookmarked.highlightColour = "rgba(255,0,0,0.5)"
+        var searched = style
+        searched.highlightTerms = ["God"]
+        let painted = ChapterTextRenderer.text(for: bookmarked, style: searched)
+        let god = try XCTUnwrap(painted.range(of: "God"))
+        XCTAssertEqual(painted[god].backgroundColor, .yellow)
+        XCTAssertEqual(
+            painted[god].link,
+            InlineLink.strongsWord(numbers: ["H0430"]).url
+        )
+        let created = try XCTUnwrap(painted.range(of: "created"))
+        XCTAssertNotNil(painted[created].backgroundColor)
+        XCTAssertEqual(
+            painted[created].link,
+            InlineLink.strongsWord(numbers: ["H0853", "H01254"]).url
+        )
     }
 
     // MARK: - The flowed paragraph's join

@@ -49,6 +49,8 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
         app.terminate()
         app.launchArguments += [
             "-strongsPreference_KJV", "YES",
+            // Numbers, whatever a test before this one left the choice on.
+            "-strongsUnderlinePreference_KJV", "NO",
             "-headingsPreference_KJV", "YES",
             "-vplPreference_KJV", "YES",
         ]
@@ -144,6 +146,69 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
                       "going back dismissed the popup instead of popping the trail")
     }
 
+    /// In Underlined Words mode a tagged word is itself the link to its entry,
+    /// and the numbers are not drawn.
+    ///
+    /// The link's identifier is its `pslink://strongsword/…` URL, with the
+    /// numbers the chapter's markers carry for it: "In the beginning" is H07225.
+    @MainActor
+    func testUnderlinedWordOpensItsLexiconEntry() throws {
+        openGenesis1WithStrongsNumbers(underlined: true)
+        let word = app.links["pslink://strongsword/H07225"]
+        XCTAssertTrue(
+            word.waitForExistence(timeout: 10),
+            "Genesis 1:1's \"In the beginning\" is not a link in Underlined Words"
+        )
+        XCTAssertEqual(word.label, "In the beginning")
+        XCTAssertFalse(app.links["pslink://strongs/Hebrew/07225"].exists,
+                       "Underlined Words drew the H07225 marker too")
+        word.tap()
+
+        let popup = app.descendants(matching: .any)["study.popup"]
+        XCTAssertTrue(popup.firstMatch.waitForExistence(timeout: 10),
+                      "tapping an underlined word did not open the study popup")
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "H7225")
+            ).firstMatch.exists,
+            "the study popup did not open on H7225"
+        )
+        XCTAssertFalse(app.descendants(matching: .any)["study.numbers"].exists,
+                       "a word with one number offered a choice of numbers")
+    }
+
+    /// A word with several numbers offers each, opening on the last: Genesis
+    /// 1:1's "created" is H853 (the object marker) and H1254, in the order its
+    /// markers stand, and the particle's comes first.
+    @MainActor
+    func testAWordWithSeveralNumbersOffersEach() throws {
+        openGenesis1WithStrongsNumbers(underlined: true)
+        let word = app.links["pslink://strongsword/H0853/H01254"]
+        XCTAssertTrue(
+            word.waitForExistence(timeout: 10),
+            "Genesis 1:1's \"created\" is not one link to H0853 and H01254"
+        )
+        word.tap()
+
+        let popup = app.descendants(matching: .any)["study.popup"]
+        XCTAssertTrue(popup.firstMatch.waitForExistence(timeout: 10),
+                      "tapping an underlined word did not open the study popup")
+        let first = app.buttons["H853"]
+        let last = app.buttons["H1254"]
+        XCTAssertTrue(last.waitForExistence(timeout: 5),
+                      "the popup offers no H1254 segment")
+        XCTAssertTrue(first.exists, "the popup offers no H853 segment")
+        XCTAssertTrue(last.isSelected, "the popup did not open on the last number")
+        XCTAssertFalse(first.isSelected)
+
+        first.tap()
+        XCTAssertTrue(
+            first.wait(for: \.isSelected, toEqual: true, timeout: 5),
+            "choosing H853 did not select it"
+        )
+        XCTAssertTrue(popup.firstMatch.exists, "choosing a number closed the popup")
+    }
+
     // MARK: - Helpers
 
     /// Relaunches at the top of Genesis 1 with the KJV's Strong's numbers showing.
@@ -163,11 +228,16 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
     /// picker is not used here. MEASURED (iOS 27.2): relaunched into Genesis 3
     /// flowing with the numbers on, every element query took 2.2 s where it
     /// takes 0.35 s, and the four taps to Genesis 1 took 31 s.
+    ///
+    /// `underlined` picks Underlined Words over the numbers, by argument too,
+    /// and either way: a run that left the choice on Underlined Words must not
+    /// take the markers away from the tests that tap them.
     @MainActor
-    private func openGenesis1WithStrongsNumbers() {
+    private func openGenesis1WithStrongsNumbers(underlined: Bool = false) {
         app.terminate()
         app.launchArguments += [
             "-strongsPreference_KJV", "YES",
+            "-strongsUnderlinePreference_KJV", underlined ? "YES" : "NO",
             "-lastRef", "Genesis 1",
             "-bibleScrollPosition", "0",
             "-bibleVersePosition", "1",

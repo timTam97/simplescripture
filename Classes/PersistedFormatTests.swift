@@ -279,6 +279,17 @@ final class PersistedFormatTests: XCTestCase {
         XCTAssertEqual(swift, "a_b_c_d")
     }
 
+    /// The Strong's choice's two keys, as they are saved (`StrongsDisplay`).
+    /// `strongsPreference` is the key every saved Strong's setting is already
+    /// under; `strongsUnderlinePreference` joined it for Underlined Words.
+    func testModuleKey_strongsDisplayKeysAreTheirWireStrings() {
+        let defaults = UserDefaults.standard
+        XCTAssertEqual(defaults.psModuleKey(Defaults.strongsPreference, "KJV"),
+                       "strongsPreference_KJV")
+        XCTAssertEqual(defaults.psModuleKey(Defaults.strongsUnderlinePreference, "KJV"),
+                       "strongsUnderlinePreference_KJV")
+    }
+
     // MARK: - HistoryStore iCloud merge / cap / dedup
     //
     // Locks the cloud<->local recursive merge, the 100-entry cap

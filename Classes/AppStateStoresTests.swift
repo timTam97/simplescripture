@@ -1586,10 +1586,13 @@ final class AppStateStoresTests: XCTestCase {
             store: store
         )
         XCTAssertFalse(toggles.isEmpty)
-        for toggle in toggles {
+        // Every key a row writes: the Strong's row writes two (`StrongsDisplay`).
+        let preferences = toggles.flatMap(\.preferences)
+        XCTAssertTrue(preferences.contains(Defaults.strongsUnderlinePreference))
+        for preference in preferences {
             defaults.psSet(
                 false,
-                forPref: toggle.preference,
+                forPref: preference,
                 module: BundledModules.bible
             )
         }
@@ -1603,15 +1606,17 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertTrue(coordinator.resetPreferences())
 
         for toggle in toggles {
-            XCTAssertNil(
-                defaults.object(
-                    forKey: defaults.psModuleKey(
-                        toggle.preference,
-                        BundledModules.bible
-                    )
-                ),
-                "\(toggle.id) survived the reset"
-            )
+            for preference in toggle.preferences {
+                XCTAssertNil(
+                    defaults.object(
+                        forKey: defaults.psModuleKey(
+                            preference,
+                            BundledModules.bible
+                        )
+                    ),
+                    "\(toggle.id)'s \(preference) survived the reset"
+                )
+            }
         }
         // The wire key spelled out, and what the reader then renders with.
         XCTAssertNil(defaults.object(forKey: "vplPreference_KJV"))
@@ -4186,6 +4191,10 @@ final class AppStateStoresTests: XCTestCase {
             .note(kind: "n", value: "1", module: "KJV", passage: "Genesis+4%3A1"),
             .scriptRef(value: "Gen 1:1"),
             .verseMenu(verse: 16),
+            // A word in Underlined Words mode, with one number and with two.
+            .strongsWord(numbers: ["H07225"]),
+            .strongsWord(numbers: ["H0853", "H01254"]),
+            .strongsWord(numbers: ["G3588", "G2316"]),
         ]
 
         for link in cases {
@@ -4203,6 +4212,8 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertNil(InlineLink(url: try XCTUnwrap(URL(string: "sword://Bible/John%203:16"))))
         XCTAssertNil(InlineLink(url: try XCTUnwrap(URL(string: "https://crosswire.org"))))
         XCTAssertNil(InlineLink(url: try XCTUnwrap(URL(string: "pslink://nonsense/1"))))
+        XCTAssertNil(InlineLink(url: try XCTUnwrap(URL(string: "pslink://strongsword"))),
+                     "A word link with no number is no link.")
     }
 
     /// The per-module display toggles a module's BAKED feature set earns it:
@@ -4225,6 +4236,12 @@ final class AppStateStoresTests: XCTestCase {
             "KJV earns six rows in this order, with no cross-references row."
         )
         XCTAssertFalse(kjv.contains { $0.id == "xref" })
+        // Strong's is a choice of three (`StrongsDisplay`) over two keys; every
+        // other row is a flip of one.
+        XCTAssertEqual(kjv.map(\.control),
+                       [.strongsDisplay, .toggle, .toggle, .toggle, .toggle, .toggle])
+        XCTAssertEqual(kjv.first?.preferences,
+                       [Defaults.strongsPreference, Defaults.strongsUnderlinePreference])
         // Each row must carry the same unsuffixed pref name the UIKit menu wrote,
         // because the persisted key is "<pref>_<ModuleName>".
         XCTAssertEqual(
@@ -4286,6 +4303,19 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(chrome.displayToggles.count, 6)
         XCTAssertEqual(chrome.displayToggleValues["strongs"], true)
         XCTAssertEqual(chrome.displayToggleValues["vpl"], false)
+        XCTAssertEqual(chrome.strongsDisplay, .numbers)
+
+        defaults.psSet(
+            true,
+            forPref: Defaults.strongsUnderlinePreference,
+            module: BundledModules.bible
+        )
+        chrome.reloadDisplayToggles(
+            forModule: BundledModules.bible,
+            store: store,
+            defaults: defaults
+        )
+        XCTAssertEqual(chrome.strongsDisplay, .words)
 
         // Switching to a module with no features empties both, which is what hides
         // the control.
@@ -4296,6 +4326,57 @@ final class AppStateStoresTests: XCTestCase {
         )
         XCTAssertTrue(chrome.displayToggles.isEmpty)
         XCTAssertTrue(chrome.displayToggleValues.isEmpty)
+        XCTAssertEqual(chrome.strongsDisplay, .off)
+    }
+
+    /// The Strong's choice reads every saved boolean as it always read, and
+    /// writes the two keys it reads.
+    ///
+    /// `strongsPreference` keeps its meaning — Strong's shown at all — so a saved
+    /// `true`, and the `-strongsPreference_KJV YES` launch argument the
+    /// XCUITests pass, still mean the numbers. The underline key means nothing
+    /// while it is off.
+    func testStrongsDisplayReadsAndWritesBothKeys() {
+        let module = BundledModules.bible
+        let strongs = defaults.psModuleKey(Defaults.strongsPreference, module)
+        let underline = defaults.psModuleKey(Defaults.strongsUnderlinePreference, module)
+        XCTAssertEqual(strongs, "strongsPreference_KJV")
+        XCTAssertEqual(underline, "strongsUnderlinePreference_KJV")
+
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults), .off)
+        defaults.set(true, forKey: strongs)
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
+                       .numbers)
+        // As a launch argument writes it: the string "YES".
+        defaults.set("YES", forKey: strongs)
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
+                       .numbers)
+        defaults.set(true, forKey: underline)
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
+                       .words)
+        defaults.set(false, forKey: strongs)
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
+                       .off, "The underline key alone shows nothing.")
+
+        StrongsDisplay.write(.numbers, forModule: module, defaults: defaults)
+        XCTAssertEqual(defaults.object(forKey: strongs) as? Bool, true)
+        XCTAssertEqual(defaults.object(forKey: underline) as? Bool, false)
+        StrongsDisplay.write(.words, forModule: module, defaults: defaults)
+        XCTAssertEqual(defaults.object(forKey: strongs) as? Bool, true)
+        XCTAssertEqual(defaults.object(forKey: underline) as? Bool, true)
+        StrongsDisplay.write(.off, forModule: module, defaults: defaults)
+        XCTAssertEqual(defaults.object(forKey: strongs) as? Bool, false)
+        XCTAssertEqual(defaults.object(forKey: underline) as? Bool, false,
+                       "Off left the underline on for the next thing to turn Strong's on")
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults), .off)
+        defaults.set(true, forKey: strongs)
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
+                       .numbers, "Strong's turned on after Off is the numbers")
+        for display in StrongsDisplay.allCases {
+            StrongsDisplay.write(display, forModule: module, defaults: defaults)
+            XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
+                           display)
+        }
     }
 
     /// The accessibility-identifier prefix keeps the UIKit menu's per-tab spelling
@@ -6328,6 +6409,94 @@ final class AppStateStoresTests: XCTestCase {
             XCTAssertEqual(workspace.bible.searchHighlightStrongs, [])
             XCTAssertEqual(marks().verses, [])
             XCTAssertEqual(workspace.bible.textStyle.highlightTerms, ["God"])
+        }
+    }
+
+    /// Underlined Words draws the chapter with no Strong's markers and links
+    /// every word they tag to its numbers, with a Strong's search's marks on
+    /// top; Numbers puts the markers back and takes the links off.
+    ///
+    /// The pane reads the choice at every render (`annotatingStrongs`), from
+    /// `UserDefaults.standard` as the reader does, so the two keys are put back
+    /// as they were.
+    @MainActor
+    func testUnderlinedWordsHideTheNumbersAndLinkTheWords() throws {
+        try withSearchResultRoute { standard, workspace in
+            let module = BundledModules.bible
+            let keys = [Defaults.strongsPreference, Defaults.strongsUnderlinePreference]
+                .map { standard.psModuleKey($0, module) }
+            let saved = keys.map { standard.object(forKey: $0) }
+            defer {
+                for (key, value) in zip(keys, saved) {
+                    if let value {
+                        standard.set(value, forKey: key)
+                    } else {
+                        standard.removeObject(forKey: key)
+                    }
+                }
+            }
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            let pane = workspace.bible
+
+            @MainActor func links(_ verse: Int) -> [[String]] {
+                pane.document.verses.first { $0.number == verse }?
+                    .strongsWords.map(\.numbers) ?? []
+            }
+            @MainActor func showsMarkers() -> Bool {
+                pane.document.verses.contains(where: \.carriesStrongsMarkers)
+            }
+
+            StrongsDisplay.write(.words, forModule: module, defaults: standard)
+            workspace.redisplay(pane: .bible, restore: .verse)
+            XCTAssertFalse(showsMarkers(), "Underlined Words drew the numbers.")
+            XCTAssertEqual(links(1), [["H07225"], ["H0430"], ["H0853", "H01254"],
+                                      ["H08064"], ["H0853"], ["H0776"]])
+            XCTAssertTrue(pane.document.verses.filter { !$0.isIntro }
+                            .allSatisfy { !$0.strongsWords.isEmpty },
+                          "A verse of Genesis 1 has no word linked.")
+
+            // A Strong's search's marks go on with the links, from the same walk.
+            pane.searchHighlightStrongs = PSSearchQuery.strongsTokens(fromUserInput: "H430")
+            XCTAssertFalse(pane.document.verses.first { $0.number == 1 }?
+                            .strongsMarks.isEmpty ?? true)
+            XCTAssertEqual(links(1).count, 6, "The search's marks took the links off.")
+
+            // Numbers: the markers back, the links off, the marks kept.
+            StrongsDisplay.write(.numbers, forModule: module, defaults: standard)
+            workspace.redisplay(pane: .bible, restore: .verse)
+            XCTAssertTrue(showsMarkers())
+            XCTAssertEqual(links(1), [])
+            XCTAssertFalse(pane.document.verses.first { $0.number == 1 }?
+                            .strongsMarks.isEmpty ?? true)
+
+            // Off: neither markers nor links.
+            pane.searchHighlightStrongs = []
+            StrongsDisplay.write(.off, forModule: module, defaults: standard)
+            workspace.redisplay(pane: .bible, restore: .verse)
+            XCTAssertFalse(showsMarkers())
+            XCTAssertEqual(links(1), [])
+        }
+    }
+
+    /// A word with several numbers opens one popup offering each, in the
+    /// markers' order, on the last: the particle's marker comes first
+    /// (`StudyPopup`).
+    @MainActor
+    func testATappedWordWithSeveralNumbersOpensAPopupOfferingEach() throws {
+        try withSearchResultRoute { _, workspace in
+            workspace.bible.handle(link: .strongsWord(numbers: ["H0853", "H01254"]))
+            let popup = try XCTUnwrap(workspace.studyPopup)
+            XCTAssertEqual(popup.entries.map(\.reference), ["H853", "H1254"])
+            XCTAssertEqual(popup.initial, 1)
+            XCTAssertEqual(popup.content.reference, "H1254")
+            XCTAssertTrue(popup.entries.allSatisfy(\.isStrongsEntry))
+
+            // One number is one entry, the popup a marker opens.
+            workspace.studyPopup = nil
+            workspace.bible.handle(link: .strongsWord(numbers: ["G2316"]))
+            XCTAssertEqual(workspace.studyPopup?.entries.map(\.reference), ["G2316"])
+            XCTAssertEqual(workspace.studyPopup?.content.reference, "G2316")
+            workspace.studyPopup = nil
         }
     }
 
