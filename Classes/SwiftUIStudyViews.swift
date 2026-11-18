@@ -19,8 +19,26 @@ import UIKit
 /// the hero in its own script font, the reference demoted to a subtitle, and the
 /// definition below over frosted material.
 struct StudyPopupSheet: View {
-    let content: PSInfoPopupContent
+    /// The entries the reader opened, one per Strong's number of the word
+    /// tapped (`StudyPopup`). Usually one.
+    let entries: [PSInfoPopupContent]
     let findAllOccurrences: (String) -> Void
+
+    /// Which of `entries` is chosen. Choosing another starts its own trail.
+    @State private var selected: Int
+
+    init(entries: [PSInfoPopupContent],
+         initial: Int = 0,
+         findAllOccurrences: @escaping (String) -> Void) {
+        self.entries = entries
+        self.findAllOccurrences = findAllOccurrences
+        _selected = State(initialValue: entries.indices.contains(initial) ? initial : 0)
+    }
+
+    /// The chosen entry the reader opened, before any cross-link.
+    private var content: PSInfoPopupContent {
+        entries[selected]
+    }
 
     /// Cross-links followed from the entry the reader opened, innermost last.
     ///
@@ -40,6 +58,9 @@ struct StudyPopupSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if entries.count > 1 {
+                numberPicker
+            }
             if !trail.isEmpty {
                 backBar
             }
@@ -57,10 +78,10 @@ struct StudyPopupSheet: View {
                 // entries use the user's chosen font.
                 usesSystemFace: current.isStrongsEntry
             )
-            // `current` changes identity when a cross-link is followed, which resets
-            // the entry's scroll offset. Without this the new definition opens
-            // scrolled to wherever the previous one sat.
-            .id(current.reference ?? "root-\(trail.count)")
+            // `current` changes identity when a cross-link is followed or another
+            // number is chosen, which resets the entry's scroll offset. Without this
+            // the new definition opens scrolled to wherever the previous one sat.
+            .id(current.reference ?? "root-\(selected)-\(trail.count)")
             if let searchTerm = current.searchTerm {
                 Divider()
                 Button {
@@ -79,7 +100,35 @@ struct StudyPopupSheet: View {
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(.regularMaterial)
+        // A container, so its identifier is its own and not every child's: on
+        // the bare stack it replaced `study.numbers`, `study.back` and
+        // `study.find-all` on the controls inside it (MEASURED, iOS 27.2: the
+        // segmented control, Back and Find All all reported `study.popup`).
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("study.popup")
+    }
+
+    /// One segment per number of the word tapped (`H853 | H1254`). Choosing
+    /// one drops the trail: Back belongs to the entry it was followed from.
+    private var numberPicker: some View {
+        Picker("StrongsWordNumbersPicker", selection: Binding(
+            get: { selected },
+            set: { index in
+                guard index != selected else { return }
+                trail = []
+                selected = index
+            }
+        )) {
+            ForEach(entries.indices, id: \.self) { index in
+                Text(entries[index].reference ?? "\(index + 1)").tag(index)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 20)
+        // Clear of the sheet's grabber, which 16 pt left 4 pt into the
+        // segments' frame (MEASURED, iOS 27.2).
+        .padding(.top, 24)
+        .accessibilityIdentifier("study.numbers")
     }
 
     private var backBar: some View {

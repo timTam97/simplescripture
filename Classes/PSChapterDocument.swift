@@ -65,6 +65,11 @@ enum InlineLink: Equatable, Hashable {
     /// The verse NUMBER itself. Not produced by the token grammar — the renderer
     /// attaches it to the superscript label.
     case verseMenu(verse: Int)
+    /// A word or phrase in Underlined Words mode, linked to the numbers that tag
+    /// it (`ChapterVerse.strongsWords`), as the chapter's markers write them:
+    /// `H0853`, `H01254`, `G2316`. Not produced by the token grammar — the
+    /// renderer attaches it to the word. Never empty.
+    case strongsWord(numbers: [String])
 
     /// A compact URL for this link.
     ///
@@ -96,6 +101,9 @@ enum InlineLink: Equatable, Hashable {
         case .verseMenu(let verse):
             components.host = "versemenu"
             components.path = "/\(verse)"
+        case .strongsWord(let numbers):
+            components.host = "strongsword"
+            components.path = "/" + numbers.joined(separator: "/")
         }
         return components.url
     }
@@ -136,6 +144,9 @@ enum InlineLink: Equatable, Hashable {
         case "versemenu":
             guard let first = parts.first, let verse = Int(first) else { return nil }
             self = .verseMenu(verse: verse)
+        case "strongsword":
+            guard !parts.isEmpty else { return nil }
+            self = .strongsWord(numbers: parts)
         default:
             return nil
         }
@@ -206,6 +217,19 @@ struct ChapterHeading: Equatable, Hashable {
     /// The words a Strong's search result marks in this heading — a Psalm's
     /// title is tagged like its verses. See `ChapterVerse.strongsMarks`.
     var strongsMarks: [Range<Int>] = []
+    /// The words linked in Underlined Words mode. See `ChapterVerse.strongsWords`.
+    var strongsWords: [StrongsWordLink] = []
+}
+
+/// A word or phrase linked to the Strong's numbers that tag it, in Underlined
+/// Words mode: where it is, as unicode-scalar offsets in
+/// `ChapterTextRenderer.attributed(runs:)` of the runs it is in, and its
+/// numbers as the chapter's markers write them (`H0853`, `H01254`), in their
+/// order. A marker inside a phrase (a morph tag, a footnote) splits it in two,
+/// each with the same numbers.
+struct StrongsWordLink: Equatable, Hashable {
+    var range: Range<Int>
+    var numbers: [String]
 }
 
 /// One verse row: the unit the `LazyVStack` renders and scrolls to.
@@ -272,10 +296,20 @@ struct ChapterVerse: Identifiable, Equatable, Hashable {
     ///
     /// **Never set by the builder**, so the parity tests' documents leave it
     /// empty. The reader puts it on the document it shows
-    /// (`ChapterTextRenderer.markingStrongs`) for as long as the result's
+    /// (`ChapterTextRenderer.annotatingStrongs`) for as long as the result's
     /// highlight lasts, because the marks depend on the chapter's word maps,
     /// which a style cannot carry the way it carries a text search's terms.
     var strongsMarks: [Range<Int>] = []
+
+    /// The words this verse's word map tags, each linked to its numbers, in
+    /// Underlined Words mode (`StrongsDisplay.words`). The renderer underlines
+    /// them and makes each a link (`ChapterTextRenderer.linkStrongsWords`).
+    ///
+    /// **Never set by the builder**, like `strongsMarks`, and for the same
+    /// reason: they come from the chapter's word maps. The reader puts them on
+    /// the document it shows (`ChapterTextRenderer.annotatingStrongs`) at every
+    /// render while the mode is on.
+    var strongsWords: [StrongsWordLink] = []
 }
 
 /// A run of verses that render as one flowing paragraph.

@@ -77,9 +77,33 @@ private enum SWRender {
 
 /// A study popup the reader wants shown: a Strong's entry, a morph tag, a
 /// footnote, or a lexicon entry. Carried by a `sheet(item:)` binding.
+///
+/// A word linked in Underlined Words mode can carry several Strong's numbers
+/// (`created` is H853 and H1254): its popup holds an entry for each, in the
+/// order the markers stand, and the sheet offers them side by side. It opens on
+/// the LAST, because where a word carries a particle and a word, the particle's
+/// marker comes first (`created<0853><01254>`, `the way<3588><3598>`).
 struct StudyPopup: Identifiable, Equatable {
     let id = UUID()
-    let content: PSInfoPopupContent
+    /// Never empty.
+    let entries: [PSInfoPopupContent]
+    /// The entry the sheet opens on.
+    let initial: Int
+
+    /// The entry the sheet opens on.
+    var content: PSInfoPopupContent { entries[initial] }
+
+    init(content: PSInfoPopupContent) {
+        entries = [content]
+        initial = 0
+    }
+
+    /// Opens on the last of `entries`, which must not be empty.
+    init(entries: [PSInfoPopupContent]) {
+        precondition(!entries.isEmpty, "a study popup with no entry")
+        self.entries = entries
+        initial = entries.count - 1
+    }
 
     static func == (lhs: StudyPopup, rhs: StudyPopup) -> Bool {
         lhs.id == rhs.id
@@ -198,7 +222,7 @@ final class ReaderPaneModel {
     /// (`ReadingWorkspaceModel.clearSearchHighlight`). Unlike the terms, the
     /// marks are not a style: where a number's words are depends on the
     /// chapter's word maps, so they are put on the document
-    /// (`ChapterTextRenderer.markingStrongs`), here for the chapter showing and
+    /// (`ChapterTextRenderer.annotatingStrongs`), here for the chapter showing and
     /// by `render` for every chapter drawn while they last. Clear it by
     /// assigning `[]`.
     var searchHighlightStrongs: [String] = [] {
@@ -207,25 +231,34 @@ final class ReaderPaneModel {
             // Not assigned when nothing changed (numbers taken off a chapter
             // that had no marks): an assignment rebuilds the paragraphs and
             // redraws every row.
-            let marked = markingStrongs(document)
-            if marked != document { document = marked }
+            let annotated = annotatingStrongs(document)
+            if annotated != document { document = annotated }
         }
     }
 
-    /// `document` with `searchHighlightStrongs`' words marked, or with its marks
-    /// taken off when there are no numbers.
+    /// `document` with its Strong's annotations: `searchHighlightStrongs`'
+    /// words marked, and in Underlined Words mode (`StrongsDisplay.words`)
+    /// every tagged word linked to its numbers. Both come off when they no
+    /// longer apply.
     ///
-    /// The store is read only to mark: a chapter drawn with no numbers set
-    /// costs nothing here, and one with no marks on it is returned as it is.
-    private func markingStrongs(_ document: ChapterDocument) -> ChapterDocument {
-        guard !searchHighlightStrongs.isEmpty else {
-            let isMarked = document.verses.contains {
-                !$0.strongsMarks.isEmpty
-                    || $0.headings.contains { !$0.strongsMarks.isEmpty }
+    /// The store is read only to annotate: a chapter drawn with neither costs
+    /// nothing here, and one with nothing on it is returned as it is. With
+    /// both, the word maps and the tagged copy are read once.
+    private func annotatingStrongs(_ document: ChapterDocument) -> ChapterDocument {
+        let linkingWords = moduleName.map {
+            StrongsDisplay.current(forModule: $0) == .words
+        } ?? false
+        guard !searchHighlightStrongs.isEmpty || linkingWords else {
+            let isAnnotated = document.verses.contains {
+                !$0.strongsMarks.isEmpty || !$0.strongsWords.isEmpty
+                    || $0.headings.contains {
+                        !$0.strongsMarks.isEmpty || !$0.strongsWords.isEmpty
+                    }
             }
-            guard isMarked else { return document }
-            return ChapterTextRenderer.markingStrongs(
-                [], wordMaps: [:], taggedIn: document, in: document
+            guard isAnnotated else { return document }
+            return ChapterTextRenderer.annotatingStrongs(
+                highlighting: [], linkingWords: false,
+                wordMaps: [:], taggedIn: document, in: document
             )
         }
         guard let ref = renderedRef, let module = moduleName,
@@ -234,8 +267,9 @@ final class ReaderPaneModel {
         let wordMaps = reader.wordMaps(module: module, ref: ref)
         // A word is found by the chapter's own Strong's markers, so the chapter
         // is read with the numbers on: `document` itself when it has them, and
-        // otherwise the same chapter built again with them. Not for a chapter
-        // with no word maps (a commentary's), which has nothing to mark.
+        // otherwise the same chapter built again with them — always, in
+        // Underlined Words mode. Not for a chapter with no word maps (a
+        // commentary's), which has nothing to annotate.
         let tagged: ChapterDocument
         if wordMaps.isEmpty
             || document.verses.contains(where: \.carriesStrongsMarkers) {
@@ -252,8 +286,9 @@ final class ReaderPaneModel {
             ) else { return document }
             tagged = built
         }
-        return ChapterTextRenderer.markingStrongs(
-            Set(searchHighlightStrongs),
+        return ChapterTextRenderer.annotatingStrongs(
+            highlighting: Set(searchHighlightStrongs),
+            linkingWords: linkingWords,
             wordMaps: wordMaps,
             taggedIn: tagged,
             in: document
@@ -475,9 +510,10 @@ final class ReaderPaneModel {
         var style = ChapterTextRenderer.Style.current()
         style.highlightTerms = searchHighlightTerms
         textStyle = style
-        // And the Strong's marks, made again for the runs this render built: a
-        // display toggle (the numbers shown, say) moves every word's place.
-        document = markingStrongs(
+        // And the Strong's marks and word links, made again for the runs this
+        // render built: a display toggle (the numbers shown, say) moves every
+        // word's place.
+        document = annotatingStrongs(
             PSContentReader.shared.chapterDocument(
                 module: module,
                 ref: ref,
@@ -1145,6 +1181,19 @@ extension ReaderPaneModel {
         case .strongs(let type, let value):
             let (entry, popup) = strongsPopup(type: type, value: value)
             present(entry: entry, popup: popup)
+        case .strongsWord(let numbers):
+            // A word in Underlined Words mode: an entry for each of its numbers,
+            // as the chapter's markers write them (`H0853`, `G2316`).
+            let entries = numbers.compactMap { number -> PSInfoPopupContent? in
+                guard let prefix = number.first, prefix == "H" || prefix == "G" else {
+                    return nil
+                }
+                return strongsPopup(type: prefix == "H" ? "Hebrew" : "Greek",
+                                    value: String(number.dropFirst())).1
+            }
+            if !entries.isEmpty {
+                workspace?.showStudyPopup(entries: entries)
+            }
         case .morph(let type, let value):
             present(entry: morphEntry(type: type, value: value), popup: nil)
         case .note(let kind, let value, let module, let passage):
@@ -1385,6 +1434,10 @@ final class ReadingWorkspaceModel {
             guard let self, let pane else { return }
             self.applyDisplayToggle(toggle, on: pane)
         }
+        chrome.onStrongsDisplayChange = { [weak self, weak pane] display in
+            guard let self, let pane else { return }
+            self.applyStrongsDisplay(display, on: pane)
+        }
     }
 
     /// Flips a per-module display pref and re-renders. The key is
@@ -1397,6 +1450,21 @@ final class ReadingWorkspaceModel {
         let defaults = UserDefaults.standard
         let current = defaults.psBool(toggle.preference, forModule: module)
         defaults.psSet(!current, forPref: toggle.preference, module: module)
+        NotificationCenter.default.post(
+            name: pane.redisplayNotification,
+            object: nil
+        )
+        pane.rebuildDisplayToggles()
+    }
+
+    /// Writes a Strong's choice (`StrongsDisplay`, two per-module keys) and
+    /// re-renders, as `applyDisplayToggle` does for a flip.
+    private func applyStrongsDisplay(
+        _ display: StrongsDisplay,
+        on pane: ReaderPaneModel
+    ) {
+        guard let module = pane.moduleName else { return }
+        StrongsDisplay.write(display, forModule: module)
         NotificationCenter.default.post(
             name: pane.redisplayNotification,
             object: nil
@@ -1767,6 +1835,12 @@ final class ReadingWorkspaceModel {
 
     func showStudyPopup(_ content: PSInfoPopupContent) {
         studyPopup = StudyPopup(content: content)
+    }
+
+    /// One popup offering each of `entries`, opening on the last
+    /// (`StudyPopup`). `entries` must not be empty.
+    func showStudyPopup(entries: [PSInfoPopupContent]) {
+        studyPopup = StudyPopup(entries: entries)
     }
 
     func presentVerseMenu(verse: Int) {

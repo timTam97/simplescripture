@@ -85,6 +85,9 @@ enum Defaults {
 
     // from attributeValueForEntryData: && getChapter:
     static let strongsPreference           = "strongsPreference"
+    /// With `strongsPreference` on: underline the words the numbers tag instead
+    /// of showing the numbers (`StrongsDisplay`). Absent reads as off.
+    static let strongsUnderlinePreference  = "strongsUnderlinePreference"
     static let morphPreference             = "morphPreference"
     static let scriptRefsPreference        = "scriptRefsPreference"
     static let footnotesPreference         = "footnotesPreference"

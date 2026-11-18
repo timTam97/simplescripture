@@ -784,37 +784,95 @@ final class PSSearchQuery: NSObject {
     /// Words are matched as the index's tokens (`highlightTokens`), so case and
     /// punctuation do not part a surface from its verse: the divine name is
     /// `Lord` in the column and `LORD` in the text, and `me! many` is one line.
+    ///
+    /// The walk is `strongsWalk`, which the reader's Underlined Words mode
+    /// (`strongsWords`) shares: this is that walk with the lines filtered.
     class func strongsHighlightRanges(
         taggedWithAnyOf numbers: Set<String>,
         wordMap: String,
         taggedIn tagged: [PSStrongsTaggedWords],
         in texts: [String]
     ) -> [[Range<String.Index>]] {
-        var marks = Array(repeating: [Range<String.Index>](), count: texts.count)
-        guard tagged.count == texts.count else { return marks }
+        guard tagged.count == texts.count else {
+            return Array(repeating: [], count: texts.count)
+        }
         let lines = PSWordMapLine.lines(in: wordMap)
         // Nothing after the last tagged line can be marked, so the walk stops
         // there.
         guard let lastTagged = lines.lastIndex(where: {
             $0.isTagged(withAnyOf: numbers)
-        }) else { return marks }
+        }) else { return Array(repeating: [], count: texts.count) }
+        let taggedTokens = tagged.map { highlightTokens(in: $0.words) }
+        let found = strongsWalk(lines: lines[...lastTagged], taggedIn: tagged,
+                                tokens: taggedTokens)
+            .filter { lines[$0.line].isTagged(withAnyOf: numbers) }
+        return drawnRanges(of: found, tokens: taggedTokens, in: texts).map {
+            $0.map(\.range)
+        }
+    }
 
+    /// Every word a verse's `word_map` tags, each at its own place, with the
+    /// numbers that tag it: what the reader's Underlined Words mode links
+    /// (`ChapterVerse.strongsWords`). One array per text, as
+    /// `strongsHighlightRanges` returns.
+    ///
+    /// The same walk as `strongsHighlightRanges` with no line filtered out, so
+    /// every line is found where the chapter's own marker for one of its
+    /// numbers follows it. A word's `numbers` are the ones in that marker that
+    /// its line lists, in the marker's order (`created` → `H0853`, `H01254`):
+    /// a marker number its line does not list has no English word of its own,
+    /// and neither has a marker no line is found before (John 3:16's leading
+    /// articles). Neither is linked.
+    class func strongsWords(
+        wordMap: String,
+        taggedIn tagged: [PSStrongsTaggedWords],
+        in texts: [String]
+    ) -> [[PSStrongsWord]] {
+        guard tagged.count == texts.count else {
+            return Array(repeating: [], count: texts.count)
+        }
+        let lines = PSWordMapLine.lines(in: wordMap)
+        let taggedTokens = tagged.map { highlightTokens(in: $0.words) }
+        return drawnRanges(
+            of: strongsWalk(lines: lines[...], taggedIn: tagged, tokens: taggedTokens),
+            tokens: taggedTokens, in: texts
+        )
+    }
+
+    /// One line `strongsWalk` found: which line, the text it is in, its place
+    /// among that text's words, and the numbers that tag it there.
+    private struct FoundLine {
+        let line: Int
+        let lineValue: PSWordMapLine
+        let text: Int
+        let places: Range<Int>
+        let numbers: [String]
+    }
+
+    /// The walk both of the reader's Strong's passes share — see
+    /// `strongsHighlightRanges`. Finds each of `lines` in turn, in `tagged`
+    /// (whose words are `tokens`), only where a marker for one of its numbers
+    /// follows its last word.
+    private static func strongsWalk(
+        lines: ArraySlice<PSWordMapLine>,
+        taggedIn tagged: [PSStrongsTaggedWords],
+        tokens: [[HighlightToken]]
+    ) -> [FoundLine] {
         // Every word of every text, in reading order: the text it is in, its
-        // place among that text's words, its token, and whether one of the
-        // chapter's markers follows it, with the numbers in that marker.
+        // place among that text's words, its token, and the numbers in the
+        // chapter's marker that follows it, if one does.
         struct Word {
             let text: Int
             let place: Int
             let folded: String
-            let numbersAfter: Set<String>
+            let numbersAfter: [String]
         }
-        let taggedTokens = tagged.map { highlightTokens(in: $0.words) }
         var words: [Word] = []
         for (index, text) in tagged.enumerated() {
             let scalars = text.words.unicodeScalars
             var counted = scalars.startIndex
             var offset = 0
-            for (place, token) in taggedTokens[index].enumerated() {
+            for (place, token) in tokens[index].enumerated() {
                 offset += scalars.distance(from: counted, to: token.range.upperBound)
                 counted = token.range.upperBound
                 words.append(Word(
@@ -828,9 +886,9 @@ final class PSSearchQuery: NSObject {
             }
         }
 
-        var found: [[Range<Int>]] = Array(repeating: [], count: texts.count)
+        var found: [FoundLine] = []
         var cursor = 0
-        for line in lines[...lastTagged] {
+        for (lineIndex, line) in zip(lines.indices, lines) {
             let surface = highlightTokens(in: line.surface).map(\.folded)
             guard !surface.isEmpty, words.count - cursor >= surface.count else {
                 continue
@@ -846,34 +904,52 @@ final class PSSearchQuery: NSObject {
                     fits = false
                     break
                 }
-                if fits, !words[first + surface.count - 1].numbersAfter
-                    .isDisjoint(with: lemmas) {
+                if fits, words[first + surface.count - 1].numbersAfter
+                    .contains(where: lemmas.contains) {
                     match = first
                     break
                 }
             }
             guard let first = match else { continue }
             let last = first + surface.count - 1
-            if line.isTagged(withAnyOf: numbers) {
-                found[words[first].text].append(
-                    words[first].place..<(words[last].place + 1)
-                )
-            }
+            found.append(FoundLine(
+                line: lineIndex,
+                lineValue: line,
+                text: words[first].text,
+                places: words[first].place..<(words[last].place + 1),
+                numbers: words[last].numbersAfter.filter(lemmas.contains)
+            ))
             cursor = last + 1
         }
+        return found
+    }
 
-        // From places among the words to ranges of the text drawn.
-        for (index, text) in texts.enumerated() where !found[index].isEmpty {
+    /// `found`, from places among the tagged texts' words (`tokens`) to ranges
+    /// of the texts drawn. A text whose words are not the tagged one's gets
+    /// nothing.
+    private static func drawnRanges(
+        of found: [FoundLine],
+        tokens: [[HighlightToken]],
+        in texts: [String]
+    ) -> [[PSStrongsWord]] {
+        var out = Array(repeating: [PSStrongsWord](), count: texts.count)
+        for (index, text) in texts.enumerated() {
+            let lines = found.filter { $0.text == index }
+            guard !lines.isEmpty else { continue }
             let drawn = highlightTokens(in: text)
-            guard drawn.map(\.folded) == taggedTokens[index].map(\.folded) else {
+            guard drawn.map(\.folded) == tokens[index].map(\.folded) else {
                 continue
             }
-            marks[index] = found[index].map {
-                drawn[$0.lowerBound].range.lowerBound
-                    ..< drawn[$0.upperBound - 1].range.upperBound
+            out[index] = lines.map {
+                PSStrongsWord(
+                    range: drawn[$0.places.lowerBound].range.lowerBound
+                        ..< drawn[$0.places.upperBound - 1].range.upperBound,
+                    numbers: $0.numbers,
+                    line: $0.lineValue
+                )
             }
         }
-        return marks
+        return out
     }
 
     /// The numbers in the Strong's marker that follows the word ending at
@@ -883,7 +959,7 @@ final class PSSearchQuery: NSObject {
         after end: String.Index,
         at offset: Int,
         in text: PSStrongsTaggedWords
-    ) -> Set<String> {
+    ) -> [String] {
         let scalars = text.words.unicodeScalars
         var index = end
         var offset = offset
@@ -898,6 +974,19 @@ final class PSSearchQuery: NSObject {
     }
 }
 
+/// A word or phrase a verse's word map tags, found at its own place
+/// (`PSSearchQuery.strongsWords`).
+struct PSStrongsWord: Equatable {
+    /// The word's range of the text it was found in.
+    let range: Range<String.Index>
+    /// The numbers that tag it, as the chapter's marker writes them (`H0853`,
+    /// `H01254`, `G2316`), in the marker's order. Never empty.
+    let numbers: [String]
+    /// Its word-map line, whose lemmas a Strong's search's numbers are matched
+    /// against (`PSWordMapLine.isTagged`), as `strongsHighlightRanges` does.
+    let line: PSWordMapLine
+}
+
 /// A text a Strong's highlight finds its words in: the words, and where the
 /// chapter's Strong's markers stand among them.
 ///
@@ -909,8 +998,9 @@ struct PSStrongsTaggedWords: Equatable {
     let words: String
     /// The places in `words`, as unicode-scalar offsets, that a marker group
     /// with a Strong's number in it follows, with its numbers as a word map
-    /// writes them (`H0430`, `G2316`).
-    let markers: [Int: Set<String>]
+    /// writes them (`H0430`, `G2316`), in the order the markers stand, each
+    /// once.
+    let markers: [Int: [String]]
 }
 
 /// One line of a verse's `word_map`: the word or words that render one
