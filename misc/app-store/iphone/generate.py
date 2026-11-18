@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Compose App Store PNGs from native, unmodified app captures.
 
-Requires Pillow and the macOS San Francisco system font.
-Run from any directory: python3 misc/app-store/iphone/generate.py
+Each export size renders from captures taken natively at that size, in
+sources/<width>x<height>/. Requires Pillow and the macOS San Francisco
+system font. Run from any directory: python3 misc/app-store/iphone/generate.py
 """
 
 from __future__ import annotations
@@ -167,16 +168,21 @@ def main() -> None:
         "draft": args.draft, "exports": [],
     }
     captures = {}
-    for item in items:
-        path = args.sources / item["source"]
-        captures[item["source"]] = read_srgb(path)
-        if not args.draft and captures[item["source"]].width < 1206:
-            raise ValueError(f"Expected native-resolution capture, got {path}")
+    for directory, size in SIZES.items():
+        for item in items:
+            path = args.sources / directory / item["source"]
+            capture = read_srgb(path)
+            if not args.draft and capture.size != size:
+                raise ValueError(
+                    f"Expected a native {size[0]} × {size[1]} capture, got {path}"
+                )
+            captures[(directory, item["source"])] = capture
 
     for directory, size in SIZES.items():
         images = []
         for item in items:
-            image, layout = render(item, captures[item["source"]], size)
+            capture = captures[(directory, item["source"])]
+            image, layout = render(item, capture, size)
             target = args.output / directory / f"{item['id']}.png"
             save_png(image, target)
             with Image.open(target) as result:
@@ -189,9 +195,9 @@ def main() -> None:
                 "pixels": list(size),
                 "bytes": target.stat().st_size,
                 "sha256": sha256(target),
-                "source": item["source"],
-                "source_sha256": sha256(args.sources / item["source"]),
-                "source_pixels": list(captures[item["source"]].size),
+                "source": f"{directory}/{item['source']}",
+                "source_sha256": sha256(args.sources / directory / item["source"]),
+                "source_pixels": list(capture.size),
                 **layout,
             })
             images.append(image)
