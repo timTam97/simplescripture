@@ -193,7 +193,14 @@ struct WorkspaceTabs: View {
         // back. 18 of 27 tab changes took it, and it does not depend on what the
         // workspaces contain or on how the selection is stored. None do with the
         // search tab declared last.
-        TabView(selection: $session.selectedWorkspace) {
+        //
+        // NOTE the BINDING: `tabBarSelection`, not `selectedWorkspace`. Its setter
+        // is a tap on the tab bar, the selected tab included, and a tap on the
+        // selected Read tab sends the pane on screen to the top of its chapter
+        // (issue #31). Everything else that selects a workspace — a route, a
+        // search result, the Library — sets `selectedWorkspace`, and none of it is
+        // a reselect.
+        TabView(selection: $session.tabBarSelection) {
             Tab(
                 "WorkspaceRead",
                 systemImage: "book",

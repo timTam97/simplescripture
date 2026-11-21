@@ -756,6 +756,16 @@ struct ChapterTextView: View {
                 // is what lets the restore gate be a gate rather than a timeout.
                 if newPhase == .tracking || newPhase == .interacting {
                     pane.userBeganScrolling()
+                } else if newPhase == .animating {
+                    // The Read tab reselected: the system's scroll to the top moves
+                    // the reader off a verse landing as a finger does. MEASURED (iOS
+                    // 27.2): it reports `.animating`; the pane's own scrolls are not
+                    // animated and report no phase — but for the reselect's own,
+                    // `scrollToChapterTop()`, which has closed the landing before it
+                    // starts — and a tap on the status bar
+                    // reports none either (the pane sees that one through its
+                    // scroll position — see `ReaderPaneModel.scrollPosition`).
+                    pane.systemScrollBegan()
                 }
             }
             // A chapter the reader pages to gets a NEW scroll view, not the old one

@@ -188,7 +188,25 @@ final class ReaderPaneModel {
 
     /// Where the scroll view is. `ScrollPosition` addresses a verse by IDENTITY,
     /// which is what lets the `versepos` pixel table and its rotation re-measure go.
-    var scrollPosition = ScrollPosition(idType: Int.self)
+    ///
+    /// **SwiftUI writes to it as well.** A tap on the status bar scrolls the
+    /// reader to the top with no scroll phase at all, and as it goes the row at
+    /// the top is written back here, one id after another (MEASURED, iOS 27.2:
+    /// 14, 12, 10 … 1 after a link to John 3:16; a landing writes back only
+    /// the row it was asked for). So once an open verse landing has been asked
+    /// of the scroll view, a position that no longer names its row — another
+    /// row, an edge, an offset — is the reader leaving it. The pane writes
+    /// nothing else while a landing is open: every scroll of its own but the
+    /// landing's goes through `apply` or `scrollToChapterTop()`, which close
+    /// it first.
+    var scrollPosition = ScrollPosition(idType: Int.self) {
+        didSet {
+            if let landing = verseLanding, landing.isRequested,
+               scrollPosition.viewID(type: Int.self) != landing.row {
+                verseLanding = nil
+            }
+        }
+    }
 
     /// Verse-per-line, read per-module. Drives the row unit in `ChapterTextView`;
     /// the document itself is layout-agnostic.
@@ -375,7 +393,59 @@ final class ReaderPaneModel {
     /// (do not re-anchor on a verse while an offset restore is still in flight) and
     /// `topmostVerseChanged` (the row at the top before it lands has not measured
     /// where it lands — see `shownVerseIsMeasured`).
+    ///
+    /// Its verse counterpart is `verseLanding`. At most one of the two is set.
     @ObservationIgnored private var outstandingOffsetRestore: CGFloat?
+    /// A verse scroll that has been asked for, and that nothing has moved the
+    /// reader away from since: no finger on the reader, no newer restore, no
+    /// scroll of the system's own (`systemScrollBegan`, and another row written
+    /// back into `scrollPosition`). The row is what a size change re-issues
+    /// while it is open, and the first report of the new chapter's rows asks
+    /// for it again (`scrollOffsetChanged`).
+    ///
+    /// **Kept open past the landing, because no report says the landing is
+    /// over.** A lazy stack lands a row in steps, as it measures what it
+    /// scrolls past (MEASURED, iOS 27.2: John 3:16 first stood 71 pt past the
+    /// bar's foot and then at it, a millisecond apart; the commentary's
+    /// Genesis 1:1, 182 pt past and then at it, 3 ms apart), and every launch
+    /// has the bars settling after a link parked during it. Until the reader
+    /// moves it, the verse a link named is where the reader is.
+    ///
+    /// Opened only by `apply(.verse)`. The width change's re-anchor on the
+    /// topmost verse opens none, so a height change after it keeps its offset.
+    @ObservationIgnored private var verseLanding: VerseLanding?
+    private struct VerseLanding {
+        let verse: Int
+        /// `rowID(containing: verse)`, which is not always the verse's own row:
+        /// a paragraph's in prose, the title's for verse 1.
+        let row: Int
+        /// The `restoreGeneration` of the restore that opened it.
+        let generation: Int
+        /// The content height the scroll view last reported when the scroll was
+        /// asked for, nil on a chapter it has not reported on. A report of any
+        /// other height has laid out rows the request may not have seen.
+        let contentHeightAtRequest: CGFloat?
+        /// Whether the row is still to be asked for again once the new rows
+        /// have been laid out. Once per landing.
+        var awaitsLayout = true
+        /// Whether the row has been handed to the scroll view. Until then the
+        /// position holds what was there before, which says nothing about the
+        /// landing (`scrollPosition`).
+        var isRequested = false
+    }
+    /// Which restore a deferred scroll belongs to. `apply` bumps it, and every
+    /// hop it queues — and the size hook's — scrolls only if no newer restore
+    /// has been applied by the time it runs.
+    ///
+    /// A hop is one main-queue turn later, not one SwiftUI update, and turns
+    /// queue up behind a busy main thread: a `sword://` link parked at launch
+    /// queued the launch's offset restore, the link's verse scroll and the size
+    /// hook's re-anchor, and ran all three 190 ms later, in that order, after
+    /// the reader had been laid out (MEASURED, iOS 27.2). The last one won. A
+    /// restore that asks nothing of the scroll view (an offset it is already
+    /// at, the top of a chapter on a new scroll view) left an older one's
+    /// scroll to run after it.
+    @ObservationIgnored private var restoreGeneration = 0
     /// The scroll view's last laid-out report about the chapter it is showing.
     /// EVERY one: those a size change suppresses and those inside the two-point
     /// dead zone as well, which `lastScrollOffset` leaves out. nil until this
@@ -534,10 +604,23 @@ final class ReaderPaneModel {
     /// set being replaced, so the request is dropped and the old content offset is
     /// kept against new row heights (e.g. flipping Verse Per Line at Gen 1:1 landed
     /// on verse 6). Affects font changes and every display toggle.
+    ///
+    /// **"One update after" is a main-queue turn, and a turn is not an update.**
+    /// It can run before SwiftUI has laid out the new rows, or long after —
+    /// behind a busy main thread, with other scrolls queued ahead of it and
+    /// behind it. So a hop scrolls only for the restore that queued it
+    /// (`restoreGeneration`), and a verse scroll stays open (`verseLanding`):
+    /// asked for again once the new rows have reported, and re-issued by a
+    /// size change, until the reader moves.
     private func apply(_ restore: PaneRestore) {
         // It belongs to the offset restore that set it. Any newer instruction
         // ends it, another offset included, which sets its own below.
         offsetRestoreVerse = nil
+        // So does it end the hops of every restore before it, and a verse
+        // landing still open, which `.verse` opens again below.
+        restoreGeneration &+= 1
+        let generation = restoreGeneration
+        verseLanding = nil
         switch restore {
         case .verse(let verse):
             guard verse > 0 else { return }
@@ -570,8 +653,18 @@ final class ReaderPaneModel {
             if target == document.verses.first?.number {
                 persistPosition(verse: verse, scrollOffset: 0)
             }
+            // `render` has dropped the report about the chapter before this one,
+            // so a new chapter's first report is of another height.
+            verseLanding = VerseLanding(
+                verse: verse,
+                row: target,
+                generation: generation,
+                contentHeightAtRequest: reportedSample?.contentHeight
+            )
             Task { @MainActor [weak self] in
-                self?.scrollPosition.scrollTo(id: target, anchor: .top)
+                guard let self, self.restoreGeneration == generation else { return }
+                self.verseLanding?.isRequested = true
+                self.scrollPosition.scrollTo(id: target, anchor: .top)
             }
         case .offset(let offset):
             guard offset > 0 else {
@@ -614,7 +707,8 @@ final class ReaderPaneModel {
             // Asked for either way. In place it is where the view already is, and
             // `scroll(toOffset:)` then issues nothing.
             Task { @MainActor [weak self] in
-                self?.scroll(toOffset: offset)
+                guard let self, self.restoreGeneration == generation else { return }
+                self.scroll(toOffset: offset)
             }
         case .none:
             // A chapter change lands at the top, which is what
@@ -624,7 +718,8 @@ final class ReaderPaneModel {
             currentShownVerse = 1
             shownVerseIsMeasured = true
             Task { @MainActor [weak self] in
-                self?.scrollPosition.scrollTo(edge: .top)
+                guard let self, self.restoreGeneration == generation else { return }
+                self.scrollPosition.scrollTo(edge: .top)
             }
         case .chapterStart:
             // A new scroll view (see `scrollSurface`), and a new position to go with
@@ -762,7 +857,9 @@ final class ReaderPaneModel {
     /// has arrived, and nothing is asked of a scroll view that is already
     /// there: it would not move, so it would report nothing, and the offset
     /// would stay. That is the size hook's replay once a restore has landed and
-    /// a bookmark change's redisplay in place.
+    /// a bookmark change's redisplay in place. (While a verse landing is open
+    /// the size hook replays no offset: it asks for the row — see
+    /// `restoreAfterSizeChange`.)
     ///
     /// While it is held it can still be applied raw, by a size change that
     /// arrives with the landing. MEASURED in a rotation of the flowing layout:
@@ -819,6 +916,53 @@ final class ReaderPaneModel {
 
     func scrollToVerse(_ verse: Int) {
         apply(.verse(verse))
+    }
+
+    /// The Read tab tapped while it is selected (`AppSession.tabBarSelection`):
+    /// back to the top of this chapter.
+    ///
+    /// The FIRST ROW, whatever it is — not `rowID(containing: 1)`. A
+    /// commentary's first row is its chapter summary, which verse 1
+    /// deliberately does not land on (see `rowID`); the top of the chapter is
+    /// above it. With Headings on a Bible's first row is its title, where
+    /// verse 1 lands anyway.
+    ///
+    /// Persisted here, as `.chapterStart` persists its own: a scroll view
+    /// already at the top reports nothing. "0" / "1" are the bytes the system's
+    /// scroll to the top left in the Bible's keys through its scroll reports,
+    /// and a scroll on its way reports as that one did, ending at the top.
+    ///
+    /// **Animated, unlike every other move the reader makes, because the
+    /// system's is.** The system sends the same scroll view to the top (the
+    /// pane on screen — see `ReaderScreen.readerPanes`), animated over about
+    /// 0.3 s. Not animated, this cut it off in the first frame, and the tap's
+    /// scroll became a jump. Animated, it lands at the top with no bounce.
+    /// The system's own landing is not enough without it: after a Bible ⇄
+    /// commentary round trip it came to rest 33 pt short, verse 1's first
+    /// line behind the bar (MEASURED, iOS 27.2, iPhone 18 Pro, 18 pt: 2 tries
+    /// of 2; where it goes wrong was not found).
+    ///
+    /// Ends whatever is in flight: an offset restore that has not landed (a
+    /// reselect straight after a launch), the verse its keys carried, a verse
+    /// armed for the pane's next appearance. Not deferred, as `apply` is: no
+    /// document changes in this update.
+    func scrollToChapterTop() {
+        guard let first = document.verses.first?.number else { return }
+        outstandingOffsetRestore = nil
+        // A newer instruction than any restore, as `apply` is to the one before
+        // it: no hop queued ahead of the tap scrolls after it, and a verse
+        // landing still open (a link opened, then this tap) is over — a size
+        // change after it must not send the reader back to the linked verse.
+        restoreGeneration &+= 1
+        verseLanding = nil
+        verseToShow = 0
+        lastScrollOffset = 0
+        shownVerseIsMeasured = true
+        // Also ends `offsetRestoreVerse`.
+        persistPosition(verse: 1, scrollOffset: 0)
+        withAnimation {
+            scrollPosition.scrollTo(id: first, anchor: .top)
+        }
     }
 
     /// The id of the row that displays `verse`.
@@ -907,6 +1051,29 @@ final class ReaderPaneModel {
             // out — see `scroll(toOffset:)`.
             takeOffsetOutOfScrollPosition()
         }
+        // The first report of rows the verse scroll may not have seen: a new
+        // chapter's, or the same chapter laid out again at another height (a
+        // font or a display toggle). Ahead of the suppression too, because the
+        // bars settling at launch arrive in the same pass as the new rows.
+        //
+        // The scroll was asked for from a hop, and a hop is a main-queue turn:
+        // it can reach SwiftUI ahead of the new rows, while the scroll view
+        // still holds the old chapter's offset and row heights. MEASURED (iOS
+        // 27.2): the commentary showing John 3 at its record for verse 22,
+        // a `sword://` link to Genesis 1:1 left it 751 pt into record 1 in 6
+        // links in 30, with nothing of the pane's after the scroll. The scroll
+        // view went from 4945 to 6251 to 1249 as it measured the new rows,
+        // and stopped there. Asked again now, the row is one it has.
+        if var landing = verseLanding, landing.awaitsLayout,
+           sample.contentHeight != landing.contentHeightAtRequest {
+            landing.awaitsLayout = false
+            verseLanding = landing
+            Task { @MainActor [weak self] in
+                guard let self, self.verseLanding?.generation == landing.generation
+                else { return }
+                self.scrollPosition.scrollTo(id: landing.row, anchor: .top)
+            }
+        }
         guard !isRestoringAfterTransition else { return }
         let normalized = max(0, sample.offset)
         if let target = outstandingOffsetRestore {
@@ -950,8 +1117,23 @@ final class ReaderPaneModel {
     /// This is what makes `outstandingOffsetRestore` a gate rather than a timeout. If
     /// a restore ever neither lands nor pins, the user's first touch resumes normal
     /// persistence instead of suppressing it for the rest of the session.
+    ///
+    /// It also closes a verse landing (`verseLanding`): from here on, where the
+    /// reader is is where the finger left it, not the verse that was asked for.
     func userBeganScrolling() {
         outstandingOffsetRestore = nil
+        verseLanding = nil
+    }
+
+    /// The scroll view began an animated scroll of its own: the Read tab
+    /// reselected. It moves the reader away from a verse landing, so the
+    /// landing closes, as it does for a finger. (The status bar's scroll to the
+    /// top reports no phase; it closes the landing through `scrollPosition`.)
+    ///
+    /// Not `userBeganScrolling()`: that releases an offset restore in flight
+    /// as well, and the offset gate is a finger's to release.
+    func systemScrollBegan() {
+        verseLanding = nil
     }
 
     /// The topmost visible verse changed, as reported by the view.
@@ -1101,8 +1283,43 @@ final class ReaderPaneModel {
     /// paragraph is one flowing `Text`, not one scroll target per verse, so
     /// re-anchoring to `rowID(containing:)` would jump to the paragraph's first
     /// verse; the per-verse layout tracker updates the title independently.
+    ///
+    /// **Both give way to a verse landing the reader has not moved from**
+    /// (`verseLanding`), whose row is asked for again on either path, in the
+    /// one hop that clears the suppression. A width change re-anchors on the
+    /// verse anyway; a height change in that window has no offset of its own
+    /// to keep.
     func restoreAfterSizeChange(widthChanged: Bool) {
         let generation = sizeChangeGeneration
+        let restore = restoreGeneration
+        // A verse landing the reader has not moved from comes first, on either
+        // path: the row the restore named is re-issued (`verseLanding`).
+        //
+        // Neither the offset nor `currentShownVerse` can be trusted until the
+        // landing is over. Every report from the scroll view before it lands is
+        // taken as the reader's position, and a launch's size changes arrive in
+        // that window: a link parked at launch is rendered before the reader's
+        // first layout, which reports verse 1 at offset 0, and the bars settle
+        // after it. Re-anchored on that verse 1, the reader opened a `sword://`
+        // link to John 3:16 at the top of John 3, 25 launches in 30 (MEASURED,
+        // iOS 27.2). An offset the new chapter republished at the old one's
+        // place is no better, and a size change that moves the scroll view
+        // sends it there by `scrollTo(y:)`, which replaces the row.
+        //
+        // Not for a pane that owes a render — see below.
+        if let landing = verseLanding, refToShow == nil {
+            verseToShow = 0
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.verseLanding?.generation == landing.generation {
+                    self.settleLandingPosition(landing)
+                    self.scrollPosition.scrollTo(id: landing.row, anchor: .top)
+                }
+                guard self.sizeChangeGeneration == generation else { return }
+                self.isRestoringAfterTransition = false
+            }
+            return
+        }
         // Re-anchor on the verse only where it is a better answer than the pixels:
         //
         //  * the rows are per verse (per record, on a commentary) and not
@@ -1151,14 +1368,44 @@ final class ReaderPaneModel {
         verseToShow = 0
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if let restoreOffset {
-                self.scroll(toOffset: restoreOffset)
-            } else if let verseTarget {
-                self.scrollPosition.scrollTo(id: verseTarget, anchor: .top)
+            // A restore applied since this was worked out has scrolled the pane
+            // where it wants it, and this is the place it left.
+            if self.restoreGeneration == restore {
+                if let restoreOffset {
+                    self.scroll(toOffset: restoreOffset)
+                } else if let verseTarget {
+                    self.scrollPosition.scrollTo(id: verseTarget, anchor: .top)
+                }
             }
             guard self.sizeChangeGeneration == generation else { return }
             self.isRestoringAfterTransition = false
         }
+    }
+
+    /// Saves where the scroll view is as a size change re-issues a verse
+    /// landing, if that is not what the pane last saved.
+    ///
+    /// The re-issued row may be where the scroll view already is — the size
+    /// change kept it at the top, at an offset of the new layout's — and a
+    /// scroll view that does not move reports nothing. Everything it
+    /// published during the change was suppressed, so the keys would keep the
+    /// old layout's offset for a relaunch to restore. Where it does move, its
+    /// report is saved as ever.
+    ///
+    /// The verse is the one the view reported, if that is in the landing's
+    /// row (a verse inside the paragraph, in prose), and the landing's
+    /// otherwise: a report from before the landing names where the reader WAS.
+    private func settleLandingPosition(_ landing: VerseLanding) {
+        guard let reportedSample else { return }
+        let offset = max(0, reportedSample.offset)
+        let reportedInRow = rowID(containing: currentShownVerse) == landing.row
+        guard !reportedInRow
+            || abs(offset - lastScrollOffset) > Self.scrollThreshold else { return }
+        lastScrollOffset = offset
+        persistPosition(
+            verse: reportedInRow ? currentShownVerse : landing.verse,
+            scrollOffset: offset
+        )
     }
 
 }
@@ -1762,6 +2009,15 @@ final class ReadingWorkspaceModel {
         )
         session?.library.recordHistory(mode: mode)
         return true
+    }
+
+    // MARK: Tab reselect
+
+    /// A tap on the Read tab while Read is selected. Only the pane on screen
+    /// moves and only its position keys are written: the other pane keeps its
+    /// place, and whatever it owes, for when it is next shown.
+    func returnToTopOfChapter() {
+        activePane.scrollToChapterTop()
     }
 
     // MARK: Reference selection

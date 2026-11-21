@@ -402,33 +402,41 @@ struct SearchResultRow: Identifiable, Equatable {
 
     let reference: String
     let text: String?
-    /// The words of the verse a Strong's search matched: the ones tagged with
-    /// the number (`PSSearchEngine.runQuery`). Empty for a text search, and for
-    /// a row restored from the saved history.
-    let strongsHighlightWords: [String]
-    /// Those words as the row marks them: whole words, like any other term,
-    /// and with no minimum length — `I` is one of them, and marks the word.
-    /// Made here, once, and not in the row's body.
-    let strongsHighlightTerms: [SearchHighlightTerm]
+    /// Where a Strong's search marks `text`: the words the verse's word map
+    /// tags with the number, each at its own place, as UTF-16 ranges
+    /// (`PSSearchEngine.markStrongsWords`). Made with the query, off the main
+    /// thread, so the row's body reads no store. Empty for a text search, and
+    /// for a row restored from the saved history until the search runs again.
+    let strongsMarks: [Range<Int>]
+    /// The verse's title, with its marks, when the number tags a word of it: a
+    /// Psalm's, which `text` does not have. The row shows it above the verse.
+    let strongsHeadings: [PSMarkedText]
 
-    init(reference: String, text: String?, strongsHighlightWords: [String]) {
+    init(reference: String,
+         text: String?,
+         strongsMarks: [Range<Int>] = [],
+         strongsHeadings: [PSMarkedText] = []) {
         self.reference = reference
         self.text = text
-        self.strongsHighlightWords = strongsHighlightWords
-        self.strongsHighlightTerms = strongsHighlightWords
-            .map { SearchHighlightTerm($0) }
-            .filter { !$0.tokens.isEmpty }
+        self.strongsMarks = strongsMarks
+        self.strongsHeadings = strongsHeadings
     }
 
-    /// What this row marks: its own Strong's words when it has any, and the
-    /// query's terms otherwise.
+    /// Whether a Strong's search marked this row.
+    var isMarkedByStrongs: Bool {
+        !strongsMarks.isEmpty || !strongsHeadings.isEmpty
+    }
+
+    /// The terms this row marks: the query's, unless a Strong's search marked
+    /// it, and then none — its marks are its own.
     ///
     /// By what the row holds, not by the Strong's toggle as it stands. A row a
-    /// Strong's search found holds the words tagged with the number (the query
-    /// matched a lemma and has no terms of its own); a text search's row holds
-    /// none. Here and not in the list's body, so that a test can read it.
+    /// Strong's search found holds the places of the words tagged with the
+    /// number (the query matched a lemma and has no terms of its own); a text
+    /// search's row holds none. Here and not in the list's body, so that a test
+    /// can read it.
     func highlightTerms(orQuery terms: [SearchHighlightTerm]) -> [SearchHighlightTerm] {
-        strongsHighlightTerms.isEmpty ? terms : strongsHighlightTerms
+        isMarkedByStrongs ? [] : terms
     }
 }
 
@@ -707,9 +715,10 @@ final class SearchModel {
     private(set) var highlightTerms: [SearchHighlightTerm] = []
     /// What a Strong's search's result carries into the reader instead: the
     /// numbers of the query last run, in both of an H number's forms — the
-    /// tokens `runQuery` picked each row's words out of its word map with
+    /// tokens `runQuery` marked each row's words with
     /// (`PSSearchQuery.strongsTokens`). The reader marks the words they tag
-    /// (`ReaderPaneModel.searchHighlightStrongs`). Empty for a text search.
+    /// (`ReaderPaneModel.searchHighlightStrongs`), by the same walk, so a row
+    /// and its chapter mark the same words. Empty for a text search.
     ///
     /// Set and cleared with `highlightTerms`, always.
     private(set) var highlightStrongsNumbers: [String] = []
@@ -959,7 +968,8 @@ final class SearchModel {
             SearchResultRow(
                 reference: $0.reference,
                 text: $0.fullText,
-                strongsHighlightWords: $0.strongsHighlightWords ?? []
+                strongsMarks: $0.strongsMarks,
+                strongsHeadings: $0.strongsHeadings
             )
         }
     }
@@ -1170,11 +1180,7 @@ final class SearchModel {
                   let reference = entry.key else {
                 return nil
             }
-            return SearchResultRow(
-                reference: reference,
-                text: entry.text,
-                strongsHighlightWords: []
-            )
+            return SearchResultRow(reference: reference, text: entry.text)
         } ?? []
         results = restoredRows
         // A saved search holds its rows and no record of whether they were cut.
@@ -1294,8 +1300,8 @@ final class SearchModel {
         let capturedStrongsTokens = strongsSearch
             ? PSSearchQuery.strongsTokens(fromUserInput: query)
             : nil
-        // The numbers the rows' words are picked out with are the ones the
-        // reader marks, so a row and the chapter it opens mark one number's.
+        // The numbers the rows are marked with are the ones the reader marks,
+        // so a row and the chapter it opens mark one number's words.
         highlightStrongsNumbers = capturedStrongsTokens ?? []
         let operation = queryOperation
 
@@ -1404,6 +1410,31 @@ final class AppSession {
                 )
             }
             workspaceSelection = newValue
+        }
+    }
+    /// The tab bar's binding: every tap on a tab, the one already selected
+    /// included. SwiftUI writes the selection on a reselect as well, which
+    /// Search's `searchFocusRequest` relies on too.
+    ///
+    /// A reselect of Read returns the pane on screen to the top of its chapter
+    /// (issue #31). The system scrolls one scroll view to the top as well, the
+    /// first in the tab, and `ReaderScreen.readerPanes` puts the pane on screen
+    /// first. The app's own scroll is what lands it there exactly and saves it,
+    /// in either pane — see `ReaderPaneModel.scrollToChapterTop()`.
+    ///
+    /// ONLY from the tab bar. `selectedWorkspace = .read` is also how a route
+    /// lands (`open(_:)`, `apply(_:)`, a scripture link tapped in the
+    /// commentary) and how "View in Commentary" switches panes, all with Read
+    /// already selected; taken for a reselect, each would scroll away from the
+    /// verse it had just persisted.
+    var tabBarSelection: Workspace {
+        get { selectedWorkspace }
+        set {
+            if workspaceSelection == .read, newValue == .read {
+                readingWorkspace?.returnToTopOfChapter()
+            }
+            // Through the setter, so the rules for Search hold for a tap too.
+            selectedWorkspace = newValue
         }
     }
     private(set) var searchFocusRequest: UInt = 0

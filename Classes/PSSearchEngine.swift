@@ -437,43 +437,122 @@ final class PSSearchEngine {
 
     // MARK: - Query
 
-    /// The words of a verse tagged with any of `tokens`, from its `word_map`:
-    /// one line per tagged word or run of words, `surface TAB lemma lemma …`.
-    /// Each distinct surface once, in the verse's order.
+    /// A chapter as a Strong's search finds a row's words in it: the numbers
+    /// on, and nothing else that puts a marker among the words. Canonical
+    /// headings — a Psalm's title — are built whatever `headings` says.
+    private static let strongsTaggedOptions = PSChapterExpander.Options(
+        strongs: true, morphs: false, footnotes: false, redLetter: false, headings: false
+    )
+
+    /// Marks each of `results` for a Strong's search on `numbers`: the words
+    /// its verse's word map (`wordMaps`, one per result) tags with any of them,
+    /// each at its own place (`PSSearchResult.strongsMarks`), and the verse's
+    /// title when the number tags a word of it (`strongsHeadings`).
     ///
-    /// **The surface is returned as words, with its markup taken off.** The
-    /// column carries one tag, around the divine name: Genesis 2:4 has `that
-    /// the <divineName>Lord</divineName>` for H3068, where the verse reads
-    /// "that the LORD God made". Handed on as stored, the surface is in no
-    /// verse, tags and all, and the result row had nothing to mark. MEASURED on
-    /// the KJV index (6,878 of 349,514 lines carry the tag): a search for H3068
-    /// listed 5,521 verses and marked a word in one of them; H3069 in none of
-    /// 295. With the tag off, every tagged surface is in its verse except 424
-    /// that are words of a Psalm's title, which the row's text does not hold.
+    /// **Found as the reader finds them in the chapter the row opens**
+    /// (`PSSearchQuery.strongsHighlightRanges`, issue #34): each word-map line
+    /// only where the chapter's own Strong's marker for one of its numbers
+    /// follows it. The index has no positions, so the row used to mark each
+    /// tagged spelling wherever it stood: Psalm 10:4's supplied "*after God*"
+    /// for H0430 as well as the God the number tags, both of John 3:16's
+    /// "that"s for either G5620 or G2443. The markers come from a copy of the
+    /// chapter built with the numbers on, of the listed verses only
+    /// (`chapterDocument(onlyVerses:)`), and the marks go on the row's text by
+    /// place among its words: the index's text has the words the reader's
+    /// verse has (`testTheReadersWordsAreTheWordsTheSearchMatched`), and a
+    /// text with other words is not marked. A Psalm's title is in its first
+    /// verse's word map and in no row's text, so it comes with its marks.
     ///
-    /// Read-side only. The column is as the store ships it and as the index
-    /// digest pins it. The lines are read by `PSWordMapLine`, as the reader's
-    /// Strong's highlight reads them (`PSSearchQuery.strongsHighlightRanges`),
-    /// which marks each tagged word at its own place in the verse; a row has
-    /// only these words, and marks each wherever it stands.
-    static func surfaceWords(inWordMap map: String,
-                             taggedWith tokens: Set<String>) -> [String] {
-        var words: [String] = []
-        var seen = Set<String>()
-        for line in PSWordMapLine.lines(in: map)
-        where line.isTagged(withAnyOf: tokens) {
-            if seen.insert(line.surface).inserted {
-                words.append(line.surface)
+    /// Pinned to the reader, token place for token place, by
+    /// `testAStrongsRowMarksWhatItsChapterMarks`.
+    ///
+    /// At query time, on the query's own queue, and not as each row is drawn,
+    /// so a row's body reads no store. MEASURED 2026-11-21 (iPhone 18 Pro
+    /// simulator, iOS 27.2, `-O`, best of 7, other builds running): for the
+    /// 1,001 rows of a list cut at the cap, 54 ms for H3068 (117 chapters), 80
+    /// for H430 (208), 103 for H1696 (445, the most of any number); 83 for
+    /// G2443's 627 rows (212). The whole query went from 23–30 ms to 55–115.
+    /// Built whole, the same chapters took 92–313 ms.
+    ///
+    /// A row whose chapter cannot be built, or whose verse it does not have,
+    /// is left unmarked; the store has reported why.
+    static func markStrongsWords(in results: [PSSearchResult],
+                                 wordMaps: [String],
+                                 numbers: Set<String>,
+                                 module: String,
+                                 reader: PSContentReader = .shared) {
+        guard results.count == wordMaps.count, !numbers.isEmpty,
+              let resolver = PSBookOSISResolver.shared else { return }
+
+        // The rows of each chapter, chapters in the order the list has them.
+        var chapters: [(ref: String, rows: [(result: Int, verse: Int)])] = []
+        var chapterAt: [String: Int] = [:]
+        for (index, result) in results.enumerated() where !wordMaps[index].isEmpty {
+            let ref = result.reference
+            guard let (book, chapter) = resolver.resolve(ref: ref),
+                  let colon = ref.lastIndex(of: ":"),
+                  let verse = Int(ref[ref.index(after: colon)...]) else { continue }
+            let key = "\(book.osisName) \(chapter)"
+            if let at = chapterAt[key] {
+                chapters[at].rows.append((index, verse))
+            } else {
+                chapterAt[key] = chapters.count
+                chapters.append((ref, [(index, verse)]))
             }
         }
-        return words
+
+        /// `ranges` of `text` in UTF-16 offsets, as the row's attributed
+        /// string takes them.
+        func offsets(_ ranges: [Range<String.Index>], in text: String) -> [Range<Int>] {
+            ranges.map {
+                let range = NSRange($0, in: text)
+                return range.location..<(range.location + range.length)
+            }
+        }
+
+        for chapter in chapters {
+            guard let document = reader.chapterDocument(
+                module: module, ref: chapter.ref, kind: .bible,
+                options: strongsTaggedOptions, applyBookmarkHighlights: false,
+                onlyVerses: Set(chapter.rows.map(\.verse))
+            ) else { continue }
+            var verses: [Int: ChapterVerse] = [:]
+            for verse in document.verses where verses[verse.number] == nil {
+                verses[verse.number] = verse
+            }
+            for row in chapter.rows {
+                guard let verse = verses[row.verse] else { continue }
+                let result = results[row.result]
+                let text = result.fullText ?? ""
+                // What the reader reads, in its order: the canonical headings,
+                // then the verse.
+                let headings = verse.headings.filter(\.isCanonical)
+                let titles = headings.map {
+                    ChapterTextRenderer.searchableWords(of: $0.runs).words
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                let found = PSSearchQuery.strongsHighlightRanges(
+                    taggedWithAnyOf: numbers,
+                    wordMap: wordMaps[row.result],
+                    taggedIn: (headings.map(\.runs) + [verse.runs])
+                        .map(ChapterTextRenderer.strongsTaggedWords(of:)),
+                    in: titles + [text]
+                )
+                guard let marks = found.last else { continue }
+                result.strongsMarks = offsets(marks, in: text)
+                result.strongsHeadings = zip(titles, found).compactMap { title, marks in
+                    marks.isEmpty
+                        ? nil
+                        : PSMarkedText(text: title, marks: offsets(marks, in: title))
+                }
+            }
+        }
     }
 
     /// Runs a query against an already-built index. Returns an empty array if the
     /// index isn't fresh. The FTS5 expression should be produced by `PSSearchQuery`.
-    /// If `strongsTokens` is non-empty, each returned result has its
-    /// `strongsHighlightWords` populated with the English surface form(s) in that
-    /// verse that map to any of the given Strong's tokens.
+    /// If `strongsTokens` is non-empty, each returned result is marked where its
+    /// verse's word map tags any of them (`markStrongsWords`).
     ///
     /// No cancel flag: callers run this off the main thread under a generation
     /// counter and discard superseded results, so cancelling could only save CPU
@@ -502,8 +581,8 @@ final class PSSearchEngine {
         // own highlighting. FTS5's `snippet()` truncates to ~64 tokens and drops
         // highlight markers for matches that hit non-visible columns (e.g. Strong's
         // lemmas), so `snippet()` is the wrong tool for this app. For Strong's
-        // searches we also pull `word_map` so the caller can learn which English
-        // surface word(s) to highlight.
+        // searches we also pull `word_map`, which says which of the verse's words
+        // the number tags (`markStrongsWords`).
         var sql = wantWordMap
             ? "SELECT reference, text_plain, word_map FROM verses WHERE verses MATCH ?"
             : "SELECT reference, text_plain FROM verses WHERE verses MATCH ?"
@@ -547,24 +626,29 @@ final class PSSearchEngine {
         if let bookOsis { bind(st, p, bookOsis); p += 1 }
 
         var results: [PSSearchResult] = []
+        // One per result, for a Strong's search.
+        var wordMaps: [String] = []
         while true {
             let rc = sqlite3_step(st)
             if rc == SQLITE_ROW {
                 let ref = Self.text(st, 0) ?? ""
-                let result = PSSearchResult(reference: ref, fullText: Self.text(st, 1))
-
-                if wantWordMap, let map = Self.text(st, 2), !map.isEmpty {
-                    let words = Self.surfaceWords(inWordMap: map, taggedWith: tokenSet)
-                    if !words.isEmpty { result.strongsHighlightWords = words }
-                }
-
-                results.append(result)
+                results.append(PSSearchResult(reference: ref, fullText: Self.text(st, 1)))
+                if wantWordMap { wordMaps.append(Self.text(st, 2) ?? "") }
             } else if rc == SQLITE_DONE {
                 break
             } else {
                 dlog("PSSearchEngine: step returned \(rc): \(lastError())")
                 break
             }
+        }
+        // Done with the index before the rows are marked, which reads the
+        // content store: a statement not yet reset may still hold the index's
+        // read transaction, and an index build waits on it.
+        sqlite3_reset(st)
+
+        if wantWordMap {
+            Self.markStrongsWords(in: results, wordMaps: wordMaps,
+                                  numbers: tokenSet, module: moduleName)
         }
         return results
     }

@@ -1,7 +1,7 @@
 import XCTest
 
 /// Where the reader rests: after a pick in the reference picker, a drag, a
-/// rotation, and a relaunch.
+/// rotation, a relaunch, and a tap on the Read tab.
 final class ReaderPositionUITests: SimpleScriptureUITestCase {
     /// Choosing book, chapter and verse in the reference picker closes it and
     /// moves the reader to that verse.
@@ -353,6 +353,100 @@ final class ReaderPositionUITests: SimpleScriptureUITestCase {
                     + "offset."
             )
         }
+    }
+
+    /// A tap on the Read tab while it is selected takes the pane on screen to
+    /// the top of its chapter, the commentary included, and leaves the other
+    /// pane where it was.
+    ///
+    /// Issue #31. The system's own scroll to the top went to one scroll view,
+    /// the Bible's, whichever pane showed: with the commentary on screen the
+    /// tap moved nothing there and took the hidden Bible to the top instead.
+    /// MEASURED (2026-11-21, iOS 27.2, iPhone 18 Pro, 18 pt) before the fix:
+    /// the commentary stayed on record 14 through two taps, and the Bible, left
+    /// on verse 14, came back on verse 1. This test failed there at the summary.
+    ///
+    /// The Bible's own tap is checked last, after the round trip through the
+    /// commentary: there, with the panes reordered and only the system's scroll
+    /// to move it, it came to rest 33 pt short, verse 1's first line behind the
+    /// bar.
+    ///
+    /// The top of a commentary chapter is its summary, above record 1. Judged
+    /// by where the text is, not by the reference in the navigation bar.
+    @MainActor
+    func testReselectingReadReturnsThePaneOnScreenToTheTopOfItsChapter() throws {
+        relaunchWithMarkersOff(
+            app.launchArguments, versePerLine: true, headings: false
+        )
+        selectGenesisChapter(1, verse: 14)
+        XCTAssertEqual(
+            try verseAtTheTopOfTheReader()?.verse, 14,
+            "Picking Genesis 1:14 did not put it at the top of the reader, so "
+                + "there is no place in the Bible for the commentary's tap to keep."
+        )
+
+        selectReadingMode("Commentary")
+        let readingAreaTop = app.navigationBars.firstMatch.frame.maxY
+        // MHCC's record for Genesis 1:14-19, and the chapter's summary above
+        // record 1.
+        let record14 = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@",
+                        "the creation of the sun, moon, and stars")
+        ).firstMatch
+        let summary = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS %@",
+                        "Genesis is a name taken from the Greek")
+        ).firstMatch
+        func isAtTheTop(_ text: XCUIElement) -> Bool {
+            text.exists && abs(text.frame.minY - readingAreaTop) <= 10
+        }
+        func rest(of text: XCUIElement) -> String {
+            text.exists ? "starts at y \(text.frame.minY)" : "is not in the hierarchy"
+        }
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in isAtTheTop(record14) },
+                object: nil
+            )], timeout: 5),
+            .completed,
+            "The commentary did not open on the record for verse 14, so there "
+                + "is nothing for the tap to move: it \(rest(of: record14)) with "
+                + "the reading area starting at y \(readingAreaTop)."
+        )
+
+        selectWorkspace("Read")
+        XCTAssertEqual(
+            XCTWaiter().wait(for: [XCTNSPredicateExpectation(
+                predicate: NSPredicate { _, _ in isAtTheTop(summary) },
+                object: nil
+            )], timeout: 5),
+            .completed,
+            "Tapping the selected Read tab did not take the commentary to the "
+                + "top of Genesis 1: its summary \(rest(of: summary)) and the "
+                + "record for verse 14 \(rest(of: record14)), with the reading "
+                + "area starting at y \(readingAreaTop)."
+        )
+
+        selectReadingMode("Bible")
+        XCTAssertEqual(
+            try verseAtTheTopOfTheReader()?.verse, 14,
+            "The commentary's tap moved the Bible, which was not on screen."
+        )
+
+        selectWorkspace("Read")
+        let top = try XCTUnwrap(
+            try verseAtTheTopOfTheReader(),
+            "The reader shows no verse number after the Bible's tap."
+        )
+        XCTAssertEqual(
+            top.verse, 1,
+            "Tapping the selected Read tab did not take the Bible to the top "
+                + "of the chapter."
+        )
+        XCTAssertEqual(
+            top.origin.y, readingAreaTop, accuracy: 1,
+            "Verse 1 is not at the top of the reading area after the Bible's tap."
+        )
     }
 
     // MARK: - Helpers

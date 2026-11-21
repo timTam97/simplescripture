@@ -1891,15 +1891,17 @@ final class AppStateStoresTests: XCTestCase {
             reference: "John 3:16",
             fullText: "For God so loved the world"
         )
-        result.strongsHighlightWords = ["loved"]
+        result.strongsMarks = [11..<16]
+        result.strongsHeadings = [PSMarkedText(text: "A Psalm", marks: [0..<7])]
 
         model.setResults([result])
 
         XCTAssertEqual(model.results.first?.id, "John 3:16")
         XCTAssertEqual(model.results.first?.text, "For God so loved the world")
-        XCTAssertEqual(model.results.first?.strongsHighlightWords, ["loved"])
-        // Made into terms with the row, once: whole words, as the row marks them.
-        XCTAssertEqual(model.results.first?.strongsHighlightTerms, ["loved"])
+        // The marks the query made, carried onto the row as they are.
+        XCTAssertEqual(model.results.first?.strongsMarks, [11..<16])
+        XCTAssertEqual(model.results.first?.strongsHeadings,
+                       [PSMarkedText(text: "A Psalm", marks: [0..<7])])
     }
 
     /// A SECOND "Find all occurrences" must run the new term, not re-show the
@@ -3207,155 +3209,136 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(marked(["God's"], in: luke20v25), ["God\u{2019}s"])
     }
 
-    /// A Strong's row marks the words of the verse tagged with its number: whole
-    /// words, the divine name among them, and a one-letter word as that word.
+    /// A Strong's row marks the words its number tags, each where the number
+    /// tags it: the words the chapter it opens marks (issue #34).
     ///
-    /// A Strong's search matches a lemma, so its row marks the verse's words
-    /// the index holds against that number (`word_map`). Three things were
-    /// wrong with it, on the same substring search the text terms had.
+    /// The index has no positions — its text has no markers and its word map
+    /// no places — and the row had only the tagged spellings, which it marked
+    /// wherever they stood: Psalm 10:4's supplied "*after God*" for H0430 as
+    /// well as the God the number tags, both of John 3:16's "that"s whichever
+    /// of G5620 and G2443 was searched, both of Job 30:14's "in"s for H08478.
+    /// A word of a Psalm's title, which the row's text does not hold, was
+    /// marked nowhere. `PSSearchEngine.markStrongsWords` finds them as the
+    /// reader does, in a copy of the chapter with the numbers on.
     ///
-    /// A word was marked inside longer ones. `I` is the word under G1473, and
-    /// John 14:6 had it marked in "saith", "him" and "life" as well.
+    /// What the row had right before stays: whole words — `I` under G1473 is
+    /// the word, not the i in "saith", "him" and "life" — the divine name,
+    /// which the index stores in markup (`that the <divineName>Lord</divineName>`;
+    /// a search for H3068 once listed 5,521 verses and marked a word in one),
+    /// and a row that chooses between its own marks and the query's terms by
+    /// what it holds, not by the Strong's toggle as it stands.
     ///
-    /// The divine name was marked nowhere. The index stores it in markup —
-    /// `that the <divineName>Lord</divineName>` — and no verse contains that:
-    /// a search for H3068 listed 5,521 verses and marked a word in one.
-    ///
-    /// And the row chose between its own words and the query's terms by the
-    /// Strong's toggle as it stood, not by what the row held
-    /// (`SearchResultRow.highlightTerms(orQuery:)` now).
-    ///
-    /// The word maps below are the index's own lines for these verses.
+    /// The rows are the index's: each verse's plain text as the index build
+    /// cleans it, and its word map, from the store.
     @MainActor
-    func testAStrongsRowMarksTheWordsTaggedWithItsNumber() {
-        /// What the row of `verse` marks for a search on `numbers`, through
-        /// the row's own attributed string.
-        func marked(_ numbers: Set<String>, wordMap: String, in verse: String) -> [String] {
-            let row = SearchResultRow(
-                reference: "a verse",
-                text: verse,
-                strongsHighlightWords: PSSearchEngine.surfaceWords(
-                    inWordMap: wordMap, taggedWith: numbers)
-            )
-            let text = NSAttributedString(
-                SearchHighlightedText.make(verse, terms: row.strongsHighlightTerms)
-            )
-            var out: [String] = []
-            text.enumerateAttribute(
-                .backgroundColor,
-                in: NSRange(location: 0, length: text.length)
+    func testAStrongsRowMarksEachTaggedWordWhereItsChapterDoes() throws {
+        let store = try XCTUnwrap(PSContentStore.shared)
+
+        /// The row a search for `input` lists for `ref`, marked as `runQuery`
+        /// marks it.
+        func row(_ ref: String, _ input: String,
+                 line: UInt = #line) throws -> SearchResultRow {
+            let text = PSSearchQuery.cleanDisplayText(try XCTUnwrap(
+                store.plainText(module: "KJV", osisRef: ref), ref, line: line))
+            let colon = try XCTUnwrap(ref.lastIndex(of: ":"), line: line)
+            let verse = try XCTUnwrap(Int(ref[ref.index(after: colon)...]), line: line)
+            let map = try XCTUnwrap(PSContentReader.shared.wordMaps(
+                module: "KJV", ref: String(ref[..<colon]))[verse], ref, line: line)
+            let result = PSSearchResult(reference: ref, fullText: text)
+            PSSearchEngine.markStrongsWords(
+                in: [result], wordMaps: [map],
+                numbers: Set(PSSearchQuery.strongsTokens(fromUserInput: input)),
+                module: "KJV")
+            return SearchResultRow(reference: ref, text: text,
+                                   strongsMarks: result.strongsMarks,
+                                   strongsHeadings: result.strongsHeadings)
+        }
+        /// `text` as a row draws it, with what is marked in brackets.
+        func drawn(_ text: String, terms: [SearchHighlightTerm] = [],
+                   marks: [Range<Int>]) -> String {
+            let string = NSAttributedString(
+                SearchHighlightedText.make(text, terms: terms, marks: marks))
+            var out = ""
+            string.enumerateAttribute(
+                .backgroundColor, in: NSRange(location: 0, length: string.length)
             ) { value, range, _ in
-                if value != nil {
-                    out.append((text.string as NSString).substring(with: range))
-                }
+                let piece = (string.string as NSString).substring(with: range)
+                out += value != nil ? "[\(piece)]" : piece
             }
             return out
         }
+        /// The verse of the row for `input` at `ref`, as the row draws it.
+        func marked(_ ref: String, _ input: String,
+                    line: UInt = #line) throws -> String {
+            let row = try row(ref, input, line: line)
+            return drawn(row.text ?? "", terms: row.highlightTerms(orQuery: []),
+                         marks: row.strongsMarks)
+        }
 
-        let john14v6 = "Jesus saith unto him, I am the way, the truth, and the life:"
-            + " no man cometh unto the Father, but by me."
-        let john14v6Words = [
-            "Jesus\tG3588 G2424 \u{03BF} \u{03B9}\u{03B7}\u{03C3}\u{03BF}\u{03C5}\u{03C2}",
-            "saith\tG3004 \u{03BB}\u{03B5}\u{03B3}\u{03B5}\u{03B9}",
-            "unto him\tG846 \u{03B1}\u{03C5}\u{03C4}\u{03C9}",
-            "I\tG1473 \u{03B5}\u{03B3}\u{03C9}",
-            "am\tG1510 \u{03B5}\u{03B9}\u{03BC}\u{03B9}",
-            "the way\tG3588 G3598 \u{03B7} \u{03BF}\u{03B4}\u{03BF}\u{03C2}",
-            "the truth\tG3588 G225 \u{03B7} \u{03B1}\u{03BB}\u{03B7}\u{03B8}\u{03B5}\u{03B9}\u{03B1}",
-            "and\tG2532 \u{03BA}\u{03B1}\u{03B9}",
-            "the life\tG3588 G2222 \u{03B7} \u{03B6}\u{03C9}\u{03B7}",
-            "no man\tG3762 \u{03BF}\u{03C5}\u{03B4}\u{03B5}\u{03B9}\u{03C2}",
-            "cometh\tG2064 \u{03B5}\u{03C1}\u{03C7}\u{03B5}\u{03C4}\u{03B1}\u{03B9}",
-            "unto\tG4314 \u{03C0}\u{03C1}\u{03BF}\u{03C2}",
-            "the Father\tG3588 G3962 \u{03C4}\u{03BF}\u{03BD} \u{03C0}\u{03B1}\u{03C4}\u{03B5}\u{03C1}\u{03B1}",
-            "but\tG3361 \u{03BC}\u{03B7}",
-            "by\tG1223 \u{03B4}\u{03B9}",
-            "me\tG1700 \u{03B5}\u{03BC}\u{03BF}\u{03C5}",
-        ].joined(separator: "\n")
+        // The first God is the translators' (italic); H0430 tags the second.
+        XCTAssertTrue(try marked("Psalms 10:4", "H430")
+            .hasSuffix("will not seek after God: [God] is not in all his thoughts."))
+        // John 3:16 has "that" twice: G5620 "so loved the world, that", G2443
+        // "that whosoever". Each search marks its own.
+        XCTAssertTrue(try marked("John 3:16", "G2443")
+            .contains("the world, that he gave his only begotten Son, [that] whosoever"))
+        XCTAssertTrue(try marked("John 3:16", "G5620")
+            .contains("the world, [that] he gave his only begotten Son, that whosoever"))
+        // "breaking in of waters: in the desolation": H08478 is the second in.
+        XCTAssertTrue(try marked("Job 30:14", "H08478")
+            .contains("breaking in of waters: [in] the desolation"))
+        // "find them, even them that contended": H0582 is the second them.
+        XCTAssertTrue(try marked("Isaiah 41:12", "H582")
+            .contains("not find them, even [them] that contended"))
 
-        // One letter, and the word only: not the i in "saith", "him", "life".
-        XCTAssertEqual(marked(["G1473"], wordMap: john14v6Words, in: john14v6), ["I"])
-        // A tagged run of words is marked whole.
-        XCTAssertEqual(marked(["G846"], wordMap: john14v6Words, in: john14v6), ["unto him"])
-        // Every run of words under the number, in the verse's order.
-        XCTAssertEqual(
-            marked(["G3588"], wordMap: john14v6Words, in: john14v6),
-            ["Jesus", "the way", "the truth", "the life", "the Father"]
-        )
-        // No word of the verse carries the number: nothing to mark.
-        XCTAssertEqual(marked(["G9999"], wordMap: john14v6Words, in: john14v6), [])
-
-        // The divine name, which the index stores in markup.
-        let genesis2v4 = "These are the generations of the heavens and of the earth when"
-            + " they were created, in the day that the LORD God made the earth and the"
-            + " heavens,"
-        let genesis2v4Words = [
-            "These\tH0428 H428",
-            "the generations\tH08435 H8435",
-            "of the heavens\tH08064 H8064",
-            "and of the earth\tH0776 H776",
-            "when they were created\tH01254 H1254",
-            "in the day\tH03117 H3117",
-            "that the <divineName>Lord</divineName>\tH03068 H3068",
-            "God\tH0430 H430",
-            "made\tH06213 H6213",
-            "the earth\tH0776 H776",
-            "and the heavens\tH08064 H8064",
-        ].joined(separator: "\n")
-        let lord: Set<String> = ["H03068", "H3068"]
-
-        XCTAssertEqual(
-            PSSearchEngine.surfaceWords(inWordMap: genesis2v4Words, taggedWith: lord),
-            ["that the Lord"],
-            "the surface word still carries the index's markup"
-        )
-        XCTAssertEqual(marked(lord, wordMap: genesis2v4Words, in: genesis2v4),
-                       ["that the LORD"])
+        // The divine name, which the index stores in markup, marked whole.
+        XCTAssertTrue(try marked("Genesis 2:4", "H3068")
+            .contains("in the day [that the LORD] God made"))
         // Two runs of words under one number, each where it is in the verse.
-        XCTAssertEqual(
-            marked(["H0776", "H776"], wordMap: genesis2v4Words, in: genesis2v4),
-            ["and of the earth", "the earth"]
-        )
+        XCTAssertTrue(try marked("Genesis 2:4", "H776")
+            .contains("heavens [and of the earth] when they were created, in the day"
+                      + " that the LORD God made [the earth] and the heavens"))
+        // One letter, and the word only.
+        let john14v6 = try marked("John 14:6", "G1473")
+        XCTAssertTrue(john14v6.hasPrefix("Jesus saith unto him, [I] am the way"), john14v6)
+        XCTAssertEqual(john14v6.filter { $0 == "[" }.count, 1, john14v6)
+        // A tagged run of words is marked whole.
+        XCTAssertTrue(try marked("John 14:6", "G846").hasPrefix("Jesus saith [unto him], I am"))
 
-        // A word of a Psalm's title is in the word map and not in the row's
-        // text. It marks nothing, and the name beside it is still found.
-        let psalms3v1 = "LORD, how are they increased that trouble me! many are they that"
-            + " rise up against me."
-        let psalms3v1Words = [
-            "A Psalm\tH04210 H4210",
-            "of David\tH01732 H1732",
-            "<divineName>Lord</divineName>\tH03068 H3068",
-            "how are they increased\tH07231 H7231",
-        ].joined(separator: "\n")
-        XCTAssertEqual(marked(["H04210", "H4210"], wordMap: psalms3v1Words, in: psalms3v1), [])
-        XCTAssertEqual(marked(lord, wordMap: psalms3v1Words, in: psalms3v1), ["LORD"])
+        // A word of a Psalm's title is in its first verse's word map and not
+        // in the row's text, so the row brings the title with its marks.
+        let psalm = try row("Psalms 3:1", "H4210")
+        XCTAssertEqual(psalm.strongsMarks, [])
+        XCTAssertEqual(psalm.strongsHeadings.map(\.text),
+                       ["A Psalm of David, when he fled from Absalom his son."])
+        if let title = psalm.strongsHeadings.first {
+            XCTAssertTrue(drawn(title.text, marks: title.marks).hasPrefix("[A Psalm] of David"))
+        }
+        XCTAssertTrue(psalm.isMarkedByStrongs)
+        // A number that tags nothing of the title brings no title.
+        let lord = try row("Psalms 3:1", "H3068")
+        XCTAssertEqual(lord.strongsHeadings, [])
+        XCTAssertTrue(drawn(lord.text ?? "", marks: lord.strongsMarks).hasPrefix("[LORD], how"))
 
-        // Which terms a row marks is the row's to say: its own words when it
-        // has any — a Strong's search has no terms, and whatever the list holds
-        // is some other query's — and the query's terms when it has none, as
-        // every row of a text search does.
+        // Which terms a row marks is the row's to say: none of the query's
+        // when a Strong's search marked it — a Strong's search has no terms,
+        // and whatever the list holds is some other query's — and the query's
+        // when it holds no marks, as every row of a text search does.
         let query: [SearchHighlightTerm] = ["the", SearchHighlightTerm("lov", matchesPrefix: true)]
-        let strongsRow = SearchResultRow(
-            reference: "Genesis 2:4",
-            text: genesis2v4,
-            strongsHighlightWords: PSSearchEngine.surfaceWords(
-                inWordMap: genesis2v4Words, taggedWith: lord)
-        )
-        XCTAssertEqual(strongsRow.highlightTerms(orQuery: []), ["that the Lord"])
-        XCTAssertEqual(strongsRow.highlightTerms(orQuery: query), ["that the Lord"])
-        let textRow = SearchResultRow(
-            reference: "Genesis 2:4", text: genesis2v4, strongsHighlightWords: [])
-        XCTAssertEqual(textRow.strongsHighlightTerms, [])
+        let strongsRow = try row("Genesis 2:4", "H3068")
+        XCTAssertTrue(strongsRow.isMarkedByStrongs)
+        XCTAssertEqual(strongsRow.highlightTerms(orQuery: query), [])
+        XCTAssertEqual(psalm.highlightTerms(orQuery: query), [],
+                       "a row marked in its title alone is still a Strong's row")
+        let textRow = SearchResultRow(reference: "Genesis 2:4", text: strongsRow.text)
+        XCTAssertFalse(textRow.isMarkedByStrongs)
         XCTAssertEqual(textRow.highlightTerms(orQuery: query), query)
         XCTAssertEqual(textRow.highlightTerms(orQuery: []), [])
         // A Strong's row whose word map has no word for the number (683 of
-        // G3588's rows) has nothing of its own to mark and nothing to borrow.
-        let bare = SearchResultRow(
-            reference: "John 14:6",
-            text: john14v6,
-            strongsHighlightWords: PSSearchEngine.surfaceWords(
-                inWordMap: john14v6Words, taggedWith: ["G9999"])
-        )
+        // G3588's rows) has nothing of its own to mark, and a Strong's search
+        // has no terms to lend it.
+        let bare = try row("John 14:6", "G9999")
+        XCTAssertFalse(bare.isMarkedByStrongs)
         XCTAssertEqual(bare.highlightTerms(orQuery: []), [])
     }
 
@@ -5650,6 +5633,405 @@ final class AppStateStoresTests: XCTestCase {
                          + "re-anchored on the verse the reader had left.")
     }
 
+    // MARK: Verse landings
+
+    /// A size change before a verse scroll has landed re-issues the verse. It
+    /// does not replay an offset, or re-anchor on a verse, that the scroll view
+    /// reported on the way there.
+    ///
+    /// A `sword://` link parked at launch is rendered before the reader is laid
+    /// out, and the bars settle after the reader is. Its first report is the
+    /// top of the new chapter, row 1 at offset 0, and the height-only step that
+    /// followed re-anchored on that verse 1, after the link's scroll: the reader
+    /// opened John 3:16 at the top of John 3, 25 launches in 30 (MEASURED, iOS
+    /// 27.2, in a trace of the pane's scrolls). Reported first, the old
+    /// chapter's offset republished over the new rows was replayed by
+    /// `scrollTo(y:)` wherever the size change had moved the scroll view,
+    /// which replaced the row.
+    ///
+    /// The landing stays open after the scroll view gets there, because no
+    /// report says the landing is over, and closes when the reader moves: a
+    /// finger, a newer restore, a scroll of the system's own. After those the
+    /// size hook is what it was. The two system scrolls are seen two ways
+    /// (MEASURED, iOS 27.2): the Read tab reselected reports `.animating`, and
+    /// the status bar's scroll to the top reports no phase but writes the row
+    /// at the top back into the scroll position as it goes.
+    ///
+    /// Fails with the landing branch taken out of `restoreAfterSizeChange`
+    /// (every step up to the finger, and the last), with `systemScrollBegan()`
+    /// closing nothing (the reselect), with `scrollPosition`'s `didSet`
+    /// closing nothing (the status bar and the edge), and with what the
+    /// position held before the landing was asked for counted against it (the
+    /// last).
+    @MainActor
+    func testASizeChangeBeforeAVerseLandsReissuesTheVerse() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previousScroll = standard.string(forKey: scrollKey)
+        let previousVerse = standard.string(forKey: verseKey)
+        defer {
+            if let previousScroll {
+                standard.set(previousScroll, forKey: scrollKey)
+            } else {
+                standard.removeObject(forKey: scrollKey)
+            }
+            if let previousVerse {
+                standard.set(previousVerse, forKey: verseKey)
+            } else {
+                standard.removeObject(forKey: verseKey)
+            }
+        }
+        let chapter = ChapterDocument(verses: (1...36).map { ChapterVerse(number: $0) })
+        let laidOut = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 6636, containerHeight: 675)
+        }
+        let makePane = { () -> ReaderPaneModel in
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.versePerLine = true
+            pane.document = chapter
+            return pane
+        }
+
+        // The link parked at launch, as the trace has it: the scroll asked for,
+        // the reader laid out at the top of the chapter, and the bars settling.
+        let parked = makePane()
+        parked.scrollToVerse(16)
+        parked.scrollOffsetChanged(laidOut(0), from: parked.scrollSurface)
+        parked.topmostVerseChanged(1, from: parked.scrollSurface)
+        await sizeChange(parked, widthChanged: false)
+        XCTAssertEqual(targetRow(of: parked), 16,
+                       "The bars settling re-anchored a link parked at launch on "
+                           + "the row at the top before it landed.")
+
+        // The same, with a rotation in that window.
+        let turned = makePane()
+        turned.scrollToVerse(16)
+        turned.topmostVerseChanged(1, from: turned.scrollSurface)
+        await sizeChange(turned, widthChanged: true)
+        XCTAssertEqual(targetRow(of: turned), 16,
+                       "A rotation before the link landed re-anchored on the row "
+                           + "at the top before it.")
+
+        // The reader at verse 5 follows a link to verse 20. The new rows first
+        // report the offset the reader was at, and a size change then moves
+        // the scroll view.
+        let reader = makePane()
+        reader.scrollOffsetChanged(laidOut(600), from: reader.scrollSurface)
+        reader.topmostVerseChanged(5, from: reader.scrollSurface)
+        reader.scrollToVerse(20)
+        reader.scrollOffsetChanged(
+            ReaderScrollSample(offset: 600, contentHeight: 6650, containerHeight: 675),
+            from: reader.scrollSurface
+        )
+        reader.prepareForSizeChange()
+        reader.scrollOffsetChanged(laidOut(580), from: reader.scrollSurface)
+        reader.restoreAfterSizeChange(widthChanged: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(targetRow(of: reader), 20,
+                       "A size change before the link landed sent the reader "
+                           + "back to the offset it had been at.")
+        XCTAssertNil(reader.scrollPosition.y)
+
+        // It lands, and a size change after that moves the scroll view: the
+        // row again, and where the change left the scroll view is saved, since
+        // a scroll view the row does not move reports nothing.
+        reader.scrollOffsetChanged(laidOut(2400), from: reader.scrollSurface)
+        reader.topmostVerseChanged(20, from: reader.scrollSurface)
+        reader.prepareForSizeChange()
+        reader.scrollOffsetChanged(laidOut(2200), from: reader.scrollSurface)
+        reader.restoreAfterSizeChange(widthChanged: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(targetRow(of: reader), 20)
+        XCTAssertNil(reader.scrollPosition.y)
+        // Written on this turn and read on it: the key is not carried across the
+        // hop (see `sizeChange`). A report where the change left the scroll
+        // view saves nothing, because that is already the pane's offset.
+        standard.set("999", forKey: scrollKey)
+        reader.scrollOffsetChanged(laidOut(2200), from: reader.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "999",
+                       "The size change re-issued the row and kept the offset "
+                           + "from before it, so the keys held the old place.")
+
+        // A finger closes the landing: height alone replays the offset again.
+        reader.userBeganScrolling()
+        reader.scrollOffsetChanged(laidOut(1310), from: reader.scrollSurface)
+        reader.prepareForSizeChange()
+        reader.scrollOffsetChanged(laidOut(1250), from: reader.scrollSurface)
+        reader.restoreAfterSizeChange(widthChanged: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertNil(targetRow(of: reader),
+                     "The verse a link named outlived a finger on the reader.")
+        XCTAssertEqual(reader.scrollPosition.y, 1310)
+
+        // So does a newer restore: an offset restore in flight wins, as ever.
+        standard.set("600", forKey: scrollKey)
+        standard.set("9", forKey: verseKey)
+        let restored = makePane()
+        restored.scrollToVerse(20)
+        restored.pendingRestore = .offset(600)
+        restored.applyPendingWork()
+        await sizeChange(restored, widthChanged: true)
+        XCTAssertNil(targetRow(of: restored))
+        XCTAssertEqual(restored.scrollPosition.y, 600)
+
+        // And a scroll of the system's own, the Read tab reselected (it reports
+        // `.animating`): the reader is at the top, and that is what a rotation
+        // keeps.
+        let tapped = makePane()
+        tapped.scrollToVerse(20)
+        for _ in 0..<10 { await Task.yield() }
+        tapped.scrollOffsetChanged(laidOut(2400), from: tapped.scrollSurface)
+        tapped.topmostVerseChanged(20, from: tapped.scrollSurface)
+        tapped.systemScrollBegan()
+        tapped.scrollOffsetChanged(laidOut(0), from: tapped.scrollSurface)
+        tapped.topmostVerseChanged(1, from: tapped.scrollSurface)
+        await sizeChange(tapped, widthChanged: true)
+        XCTAssertEqual(targetRow(of: tapped), 1,
+                       "A rotation after the Read tab was reselected went back to "
+                           + "the verse a link had named.")
+
+        // The status bar tapped: it reports no phase, but SwiftUI writes the row
+        // at the top back into the scroll position as the reader goes up.
+        let topped = makePane()
+        topped.scrollToVerse(20)
+        for _ in 0..<10 { await Task.yield() }
+        topped.scrollOffsetChanged(laidOut(2400), from: topped.scrollSurface)
+        topped.topmostVerseChanged(20, from: topped.scrollSurface)
+        topped.scrollPosition.scrollTo(id: 18, anchor: .top)
+        topped.scrollOffsetChanged(laidOut(0), from: topped.scrollSurface)
+        topped.topmostVerseChanged(1, from: topped.scrollSurface)
+        await sizeChange(topped, widthChanged: true)
+        XCTAssertEqual(targetRow(of: topped), 1,
+                       "A rotation after the status bar took the reader to the "
+                           + "top went back to the verse a link had named.")
+
+        // Any other scroll written to the position is the reader leaving the
+        // landing too: an edge, here.
+        let edged = makePane()
+        edged.scrollToVerse(20)
+        for _ in 0..<10 { await Task.yield() }
+        edged.scrollOffsetChanged(laidOut(2400), from: edged.scrollSurface)
+        edged.topmostVerseChanged(20, from: edged.scrollSurface)
+        edged.scrollPosition.scrollTo(edge: .top)
+        edged.scrollOffsetChanged(laidOut(0), from: edged.scrollSurface)
+        edged.topmostVerseChanged(1, from: edged.scrollSurface)
+        await sizeChange(edged, widthChanged: true)
+        XCTAssertEqual(targetRow(of: edged), 1,
+                       "A rotation after a scroll to the top of the chapter went "
+                           + "back to the verse a link had named.")
+
+        // What the position held before the landing was asked of the scroll view
+        // says nothing about the landing.
+        let early = makePane()
+        early.scrollToVerse(16)
+        early.scrollPosition.scrollTo(id: 1, anchor: .top)
+        early.topmostVerseChanged(1, from: early.scrollSurface)
+        await sizeChange(early, widthChanged: false)
+        XCTAssertEqual(targetRow(of: early), 16,
+                       "A row in the scroll position from before the link's scroll "
+                           + "was asked for closed its landing.")
+    }
+
+    /// A verse scroll is asked for again once the new chapter's rows have
+    /// reported, once.
+    ///
+    /// The scroll is asked for from a hop, one main-queue turn after the new
+    /// document, and a turn is not a SwiftUI update: the request can reach the
+    /// scroll view ahead of the rows it names. MEASURED (iOS 27.2): with the
+    /// commentary at its record for John 3:22, a `sword://` link to Genesis
+    /// 1:1 in the commentary left the reader 751 pt into record 1, 6 links in
+    /// 30, with no scroll of the pane's after the one the link asked for.
+    /// Whatever the request did, the first report of a new chapter's rows is
+    /// of rows the scroll view has, and the row is asked for again.
+    ///
+    /// The position goes on naming the row while the scroll view rests
+    /// somewhere else (MEASURED: SwiftUI wrote back only the row asked for). A
+    /// second request for it is told from the first by the position's own
+    /// seed, which every `scrollTo` moves on: the position is equal to the one
+    /// before only if nothing was asked of it.
+    ///
+    /// Only for rows the request may not have seen: not again on a later
+    /// report, not after a finger, and not for the same chapter drawn again at
+    /// the same height.
+    ///
+    /// Fails with the re-issue taken out of `scrollOffsetChanged`.
+    @MainActor
+    func testAVerseScrollIsAskedForAgainOnceTheNewChapterHasLaidOut() async {
+        let standard = UserDefaults.standard
+        let vplKey = standard.psModuleKey(Defaults.vplPreference, BundledModules.bible)
+        let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
+                    Defaults.commentaryVersePosition,
+                    "bibleScrollPosition", "commentaryScrollPosition", vplKey]
+        // By hand: `withPreservedReadingKeys` takes a synchronous closure.
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        let hop = { for _ in 0..<10 { await Task.yield() } }
+        let sample = { (y: CGFloat, height: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: height, containerHeight: 675)
+        }
+        // Reading Genesis 1 at verse 20.
+        standard.set(true, forKey: vplKey)
+        standard.set("Genesis 1", forKey: Defaults.lastRef)
+        standard.set("1", forKey: Defaults.bibleVersePosition)
+        standard.set("1", forKey: Defaults.commentaryVersePosition)
+        let workspace = ReadingWorkspaceModel()
+        workspace.displayChapter("Genesis 1", polling: .bible, restore: .verse)
+        let bible = workspace.bible
+        await hop()
+        bible.scrollOffsetChanged(sample(1500, 3791), from: bible.scrollSurface)
+        bible.topmostVerseChanged(20, from: bible.scrollSurface)
+
+        // A link to John 3:16: the route persists the ref and the verse, and its
+        // redisplay renders them. Written on the turn of the redisplay, which
+        // reads them.
+        standard.set("John 3", forKey: Defaults.lastRef)
+        standard.set("16", forKey: Defaults.bibleVersePosition)
+        workspace.redisplay(pane: .bible, restore: .verse)
+        XCTAssertEqual(bible.document.verses.last?.number, 36,
+                       "The route did not render John 3.")
+        await hop()
+        XCTAssertEqual(targetRow(of: bible), 16)
+        var asked = bible.scrollPosition
+
+        // The scroll view took the request against the old rows and rests at
+        // their offset; the new rows report it there.
+        bible.scrollOffsetChanged(sample(1500, 6636), from: bible.scrollSurface)
+        await hop()
+        XCTAssertEqual(targetRow(of: bible), 16)
+        XCTAssertNotEqual(bible.scrollPosition, asked,
+                          "The first report of the new chapter's rows did not ask "
+                              + "for the verse again.")
+
+        // Once: a later report of another height is the lazy rows settling.
+        asked = bible.scrollPosition
+        bible.scrollOffsetChanged(sample(700, 6650), from: bible.scrollSurface)
+        await hop()
+        XCTAssertEqual(bible.scrollPosition, asked,
+                       "A later report of the new rows asked for the verse again.")
+
+        // The same chapter drawn again at the same height: the request has the
+        // rows the scroll view has.
+        standard.set("John 3", forKey: Defaults.lastRef)
+        standard.set("16", forKey: Defaults.bibleVersePosition)
+        workspace.redisplay(pane: .bible, restore: .verse)
+        await hop()
+        XCTAssertEqual(targetRow(of: bible), 16)
+        asked = bible.scrollPosition
+        bible.scrollOffsetChanged(sample(900, 6650), from: bible.scrollSurface)
+        await hop()
+        XCTAssertEqual(bible.scrollPosition, asked,
+                       "A redraw of the same rows asked for the verse again.")
+
+        // A finger before the new rows report: the reader's, not the link's.
+        standard.set("Genesis 2", forKey: Defaults.lastRef)
+        standard.set("4", forKey: Defaults.bibleVersePosition)
+        workspace.redisplay(pane: .bible, restore: .verse)
+        await hop()
+        XCTAssertEqual(targetRow(of: bible), 4)
+        asked = bible.scrollPosition
+        bible.userBeganScrolling()
+        bible.scrollOffsetChanged(sample(300, 3000), from: bible.scrollSurface)
+        await hop()
+        XCTAssertEqual(bible.scrollPosition, asked,
+                       "The link's verse was asked for again over a finger.")
+    }
+
+    /// A scroll the pane deferred is dropped when a newer restore is applied
+    /// before it runs.
+    ///
+    /// A hop runs a main-queue turn later, and turns queue up: a `sword://`
+    /// link parked at launch queued the launch's offset scroll, its own verse
+    /// scroll and the size hook's, which ran 190 ms later one after another
+    /// (MEASURED, iOS 27.2). Where the newer restore asks nothing of the scroll
+    /// view — an offset it is already at, a page turn's new scroll view — the
+    /// older scroll ran after it and won.
+    ///
+    /// Fails with the generation check taken out of the hops.
+    @MainActor
+    func testARestoreSupersededInTheSameTurnMovesNothing() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previousScroll = standard.string(forKey: scrollKey)
+        let previousVerse = standard.string(forKey: verseKey)
+        defer {
+            if let previousScroll {
+                standard.set(previousScroll, forKey: scrollKey)
+            } else {
+                standard.removeObject(forKey: scrollKey)
+            }
+            if let previousVerse {
+                standard.set(previousVerse, forKey: verseKey)
+            } else {
+                standard.removeObject(forKey: verseKey)
+            }
+        }
+        let hop = { for _ in 0..<10 { await Task.yield() } }
+        let chapter = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+
+        // Measured at 2700, verse 20. A verse scroll, and then in the same turn
+        // a redraw at the offset the scroll view is at.
+        standard.set("2700", forKey: scrollKey)
+        standard.set("20", forKey: verseKey)
+        let pane = ReaderPaneModel(mode: .bible)
+        pane.versePerLine = true
+        pane.document = chapter
+        pane.scrollOffsetChanged(sample(2700), from: pane.scrollSurface)
+        pane.topmostVerseChanged(20, from: pane.scrollSurface)
+        pane.scrollToVerse(5)
+        pane.pendingRestore = .offset(2700)
+        pane.applyPendingWork()
+        await hop()
+        XCTAssertNil(targetRow(of: pane),
+                     "A verse scroll superseded in the same turn ran after the "
+                         + "restore that replaced it.")
+        XCTAssertNil(pane.scrollPosition.y)
+
+        // A page turn in the same turn as a verse scroll: the new scroll view
+        // starts at the top of the chapter.
+        let paged = ReaderPaneModel(mode: .bible)
+        paged.versePerLine = true
+        paged.document = chapter
+        paged.scrollToVerse(20)
+        paged.pendingRestore = .chapterStart
+        paged.applyPendingWork()
+        await hop()
+        XCTAssertEqual(paged.scrollPosition, ScrollPosition(idType: Int.self),
+                       "The verse scroll before a page turn was handed to the new "
+                           + "chapter's scroll view.")
+
+        // A routed switch to a commentary that has never rendered: the top of
+        // the chapter, and then the verse the link named. The verse is the
+        // scroll that runs.
+        let commentary = ReaderPaneModel(mode: .commentary)
+        commentary.versePerLine = true
+        // Row 0 is the chapter summary, a record with text of its own.
+        commentary.document = ChapterDocument(verses: [0, 1, 3].map {
+            ChapterVerse(number: $0, runs: [InlineRun(text: "The chapter, in outline.")])
+        })
+        commentary.pendingRestore = ReaderPaneModel.PaneRestore.none
+        commentary.applyPendingWork()
+        commentary.pendingRestore = .verse(1)
+        commentary.applyPendingWork()
+        await hop()
+        XCTAssertEqual(targetRow(of: commentary), 1)
+        XCTAssertNil(commentary.scrollPosition.edge)
+    }
+
     // MARK: Paging
 
     /// Paging replaces the scroll view and persists the top of the new chapter.
@@ -6532,6 +6914,229 @@ final class AppStateStoresTests: XCTestCase {
             XCTAssertEqual(workspace.bible.textStyle.highlightTerms, [])
             XCTAssertEqual(workspace.commentary.searchHighlightTerms, [])
         }
+    }
+
+    // MARK: Read reselect
+
+    /// A tap on the selected Read tab takes the pane on screen to the top of
+    /// its chapter, saves that as its place, and leaves the other pane's alone.
+    ///
+    /// Issue #31: the commentary did not move. The top of a commentary chapter
+    /// is its summary, the first row, which a scroll to verse 1 deliberately
+    /// passes over for the record under it (`rowID(containing:)`).
+    ///
+    /// Synchronous throughout, so the host app's reader cannot save its own
+    /// place between a write and the read of it (see `sizeChange`).
+    @MainActor
+    func testReselectingReadReturnsThePaneOnScreenToTheTopOfItsChapter() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            let session = AppSession(selectedWorkspace: .read, dismissKeyboard: {})
+            let workspace = ReadingWorkspaceModel(session: session)
+            let bible = workspace.bible
+            let commentary = workspace.commentary
+            bible.versePerLine = true
+            bible.document = ChapterDocument(
+                verses: (1...31).map { ChapterVerse(number: $0) }
+            )
+            commentary.versePerLine = true
+            commentary.document = ChapterDocument(verses: [
+                ChapterVerse(number: 0, runs: [
+                    InlineRun(text: "Genesis is a name taken from the Greek"),
+                ]),
+                ChapterVerse(number: 1), ChapterVerse(number: 3),
+                ChapterVerse(number: 14),
+            ])
+            let sample = { (y: CGFloat) in
+                ReaderScrollSample(offset: y, contentHeight: 9000, containerHeight: 874)
+            }
+            @MainActor func place(_ pane: ReaderPaneModel, at offset: CGFloat, verse: Int) {
+                pane.scrollOffsetChanged(sample(offset), from: pane.scrollSurface)
+                pane.topmostVerseChanged(verse, from: pane.scrollSurface)
+            }
+            func keys(_ mode: ReadingMode) -> [String?] {
+                mode == .bible
+                    ? [standard.string(forKey: "bibleScrollPosition"),
+                       standard.string(forKey: Defaults.bibleVersePosition)]
+                    : [standard.string(forKey: "commentaryScrollPosition"),
+                       standard.string(forKey: Defaults.commentaryVersePosition)]
+            }
+            place(bible, at: 1500, verse: 20)
+            place(commentary, at: 2700, verse: 14)
+            XCTAssertEqual(keys(.bible), ["1500", "20"])
+            XCTAssertEqual(keys(.commentary), ["2700", "14"])
+
+            workspace.mode = .commentary
+            session.tabBarSelection = .read
+            XCTAssertEqual(targetRow(of: commentary), 0,
+                           "The commentary went to record 1, under its summary.")
+            XCTAssertEqual(keys(.commentary), ["0", "1"],
+                           "The commentary's top was not saved as its place.")
+            XCTAssertEqual(keys(.bible), ["1500", "20"],
+                           "The commentary's tap wrote over the Bible's place.")
+            XCTAssertNil(targetRow(of: bible),
+                         "The commentary's tap scrolled the Bible.")
+
+            place(commentary, at: 600, verse: 3)
+            workspace.mode = .bible
+            session.tabBarSelection = .read
+            XCTAssertEqual(targetRow(of: bible), 1)
+            XCTAssertEqual(keys(.bible), ["0", "1"])
+            XCTAssertEqual(keys(.commentary), ["600", "3"],
+                           "The Bible's tap wrote over the commentary's place.")
+        }
+    }
+
+    /// Only the tab bar's write of the selected tab is a reselect.
+    ///
+    /// `selectedWorkspace = .read` with Read already selected is how a
+    /// `sword://` route lands (`open(_:)`, `apply(_:)`, a scripture link in the
+    /// commentary) and how "View in Commentary" switches panes. Each had just
+    /// persisted the verse it opened; taken for a tap, it would have scrolled
+    /// away from it. Entering Read from another workspace is no reselect
+    /// either, and Search's own reselect still arrives through the same
+    /// binding.
+    @MainActor
+    func testOnlyATapOnTheSelectedReadTabIsAReselect() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            var dismissals = 0
+            let session = AppSession(
+                selectedWorkspace: .read, dismissKeyboard: { dismissals += 1 }
+            )
+            let workspace = ReadingWorkspaceModel(session: session)
+            let bible = workspace.bible
+            bible.versePerLine = true
+            bible.document = ChapterDocument(
+                verses: (1...31).map { ChapterVerse(number: $0) }
+            )
+            // Mid-chapter, with nothing asked of the scroll view. Before each
+            // step, so a step that moves it fails on its own.
+            @MainActor func seat() {
+                let sample = ReaderScrollSample(
+                    offset: 900, contentHeight: 9000, containerHeight: 874
+                )
+                bible.scrollOffsetChanged(sample, from: bible.scrollSurface)
+                bible.topmostVerseChanged(12, from: bible.scrollSurface)
+                bible.scrollPosition = ScrollPosition(idType: Int.self)
+            }
+            @MainActor func assertUnmoved(_ message: String) {
+                XCTAssertNil(targetRow(of: bible), message)
+                XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "900",
+                               message)
+                XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition),
+                               "12", message)
+            }
+
+            seat()
+            session.selectedWorkspace = .read
+            assertUnmoved("A route's selection of Read was taken for a tap.")
+
+            seat()
+            session.tabBarSelection = .library
+            session.tabBarSelection = .read
+            assertUnmoved("Entering Read from the Library was taken for a reselect.")
+
+            let focusRequests = session.searchFocusRequest
+            session.tabBarSelection = .search
+            XCTAssertEqual(session.searchFocusRequest, focusRequests)
+            session.tabBarSelection = .search
+            XCTAssertEqual(session.searchFocusRequest, focusRequests + 1,
+                           "Reselecting Search through the tab bar did not "
+                               + "focus its field.")
+
+            seat()
+            session.tabBarSelection = .read
+            XCTAssertEqual(dismissals, 1,
+                           "Leaving Search by the tab bar left the keyboard up.")
+            XCTAssertEqual(session.selectedWorkspace, .read)
+            assertUnmoved("Entering Read from Search was taken for a reselect.")
+        }
+    }
+
+    /// A tap straight after a launch, with its offset restore still on the
+    /// way, goes to the top and stays there: the restore is over, so the next
+    /// scroll the view reports is saved.
+    ///
+    /// Left armed, the restore would have taken every report until one landed
+    /// on the old offset for "still in flight", and saved none of them.
+    @MainActor
+    func testReturningToTheTopEndsAnOffsetRestoreStillInFlight() {
+        withPreservedPanePositionKeys { standard, scrollKey in
+            standard.set("1099", forKey: scrollKey)
+            standard.set("14", forKey: Defaults.bibleVersePosition)
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.versePerLine = true
+            pane.document = ChapterDocument(
+                verses: (1...31).map { ChapterVerse(number: $0) }
+            )
+            // Armed here; its hop never runs in a synchronous test.
+            pane.pendingRestore = .offset(1099)
+            pane.applyPendingWork()
+
+            pane.scrollToChapterTop()
+            XCTAssertEqual(targetRow(of: pane), 1)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "0")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1")
+
+            pane.scrollOffsetChanged(
+                ReaderScrollSample(offset: 300, contentHeight: 4198, containerHeight: 874),
+                from: pane.scrollSurface
+            )
+            XCTAssertEqual(standard.string(forKey: scrollKey), "300",
+                           "A scroll after the tap was dropped as the launch "
+                               + "restore still in flight.")
+        }
+    }
+
+    /// A tap on the selected Read tab outranks every scroll queued before it
+    /// (issues #31 and #30 together).
+    ///
+    /// A restore scrolls from a hop, a main-queue turn later, and turns queue
+    /// behind a busy main thread (#30 measured a link parked at launch and its
+    /// scrolls running 190 ms late). A tap in that window is the newer
+    /// instruction: the hop of the restore before it — an offset restore's
+    /// `scrollTo(y:)` or a link's row — must not run after it and take the
+    /// reader back down.
+    ///
+    /// Fails with `scrollToChapterTop()` leaving `restoreGeneration` alone.
+    @MainActor
+    func testAReselectOutranksTheScrollsQueuedBeforeIt() async {
+        let standard = UserDefaults.standard
+        let keys = ["bibleScrollPosition", Defaults.bibleVersePosition]
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previous = keys.map { standard.string(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, previous) {
+                if let value { standard.set(value, forKey: key) } else { standard.removeObject(forKey: key) }
+            }
+        }
+        let makePane = { () -> ReaderPaneModel in
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.versePerLine = true
+            pane.document = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+            return pane
+        }
+
+        // A launch's offset restore, its hop still queued, then the tap.
+        let launched = makePane()
+        launched.pendingRestore = .offset(1099)
+        launched.applyPendingWork()
+        launched.scrollToChapterTop()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(targetRow(of: launched), 1,
+                       "The launch restore's queued scroll ran after the tap and "
+                           + "took the reader back to the old offset.")
+        XCTAssertNil(launched.scrollPosition.y)
+
+        // A link's verse scroll, its hop still queued, then the tap.
+        let linked = makePane()
+        linked.scrollToVerse(20)
+        linked.scrollToChapterTop()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(targetRow(of: linked), 1,
+                       "A link's queued scroll ran after the tap and took the "
+                           + "reader back to the linked verse.")
     }
 
     // MARK: Page-turn slide

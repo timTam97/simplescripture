@@ -158,6 +158,40 @@ final class PSSearchIndexParityTests: XCTestCase {
         XCTAssertEqual(out["\"in the beginning\""]?.first, "Genesis 1:1",
                        "the phrase query's first hit moved")
         print("[search-parity] queries: \(out.mapValues { $0.count })")
+
+        // A Strong's query marks its rows where the number tags the words
+        // (`PSSearchEngine.markStrongsWords`), as the chapter does: not at
+        // every word spelled like one (issue #34).
+        func strongs(_ input: String, scope: PSSearchRange = .AllRange,
+                     book: String? = nil, limit: Int32) throws -> [PSSearchResult] {
+            let expression = try XCTUnwrap(PSSearchQuery.fts5Expression(
+                fromUserInput: input, matchType: .AndSearch, fuzzy: false, strongs: true))
+            return engine.runQuery(expression, scope: scope, bookName: book, limit: limit,
+                                   strongsTokens: PSSearchQuery.strongsTokens(fromUserInput: input))
+        }
+        let psalms = try strongs("H430", scope: .BookRange, book: "Psalms", limit: 1_001)
+        let psalm10v4 = try XCTUnwrap(psalms.first { $0.reference == "Psalms 10:4" })
+        let text = try XCTUnwrap(psalm10v4.fullText)
+        // "will not seek after God: God is not": the first is the translators'.
+        let second = try XCTUnwrap(text.range(of: "God", options: .backwards))
+        let at = NSRange(second, in: text)
+        XCTAssertEqual(psalm10v4.strongsMarks, [at.location..<(at.location + at.length)],
+                       "Psalms 10:4 is not marked at the God H0430 tags alone")
+        // A Psalm's title is in no row's text: it comes with the row.
+        let title = try XCTUnwrap(try strongs("H4210", limit: 1_001)
+            .first { $0.reference == "Psalms 3:1" })
+        XCTAssertEqual(title.strongsMarks, [])
+        XCTAssertEqual(title.strongsHeadings,
+                       [PSMarkedText(text: "A Psalm of David, when he fled from Absalom his son.",
+                                     marks: [0..<7])])
+        // A list cut at the cap is marked whole.
+        let start = ContinuousClock.now
+        let god = try strongs("H430", limit: 1_001)
+        print("[search-parity] H430, 1,001 rows marked, in \(ContinuousClock.now - start)")
+        XCTAssertEqual(god.count, 1_001)
+        XCTAssertEqual(god.filter { $0.strongsMarks.isEmpty && $0.strongsHeadings.isEmpty }
+                        .map(\.reference), [],
+                       "a row of H430's that is not marked")
     }
 
     // MARK: - Text normalisation (MOVED here from SwordOracleCaptureTests, step 12)
