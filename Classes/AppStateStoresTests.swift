@@ -5633,6 +5633,405 @@ final class AppStateStoresTests: XCTestCase {
                          + "re-anchored on the verse the reader had left.")
     }
 
+    // MARK: Verse landings
+
+    /// A size change before a verse scroll has landed re-issues the verse. It
+    /// does not replay an offset, or re-anchor on a verse, that the scroll view
+    /// reported on the way there.
+    ///
+    /// A `sword://` link parked at launch is rendered before the reader is laid
+    /// out, and the bars settle after the reader is. Its first report is the
+    /// top of the new chapter, row 1 at offset 0, and the height-only step that
+    /// followed re-anchored on that verse 1, after the link's scroll: the reader
+    /// opened John 3:16 at the top of John 3, 25 launches in 30 (MEASURED, iOS
+    /// 27.2, in a trace of the pane's scrolls). Reported first, the old
+    /// chapter's offset republished over the new rows was replayed by
+    /// `scrollTo(y:)` wherever the size change had moved the scroll view,
+    /// which replaced the row.
+    ///
+    /// The landing stays open after the scroll view gets there, because no
+    /// report says the landing is over, and closes when the reader moves: a
+    /// finger, a newer restore, a scroll of the system's own. After those the
+    /// size hook is what it was. The two system scrolls are seen two ways
+    /// (MEASURED, iOS 27.2): the Read tab reselected reports `.animating`, and
+    /// the status bar's scroll to the top reports no phase but writes the row
+    /// at the top back into the scroll position as it goes.
+    ///
+    /// Fails with the landing branch taken out of `restoreAfterSizeChange`
+    /// (every step up to the finger, and the last), with `systemScrollBegan()`
+    /// closing nothing (the reselect), with `scrollPosition`'s `didSet`
+    /// closing nothing (the status bar and the edge), and with what the
+    /// position held before the landing was asked for counted against it (the
+    /// last).
+    @MainActor
+    func testASizeChangeBeforeAVerseLandsReissuesTheVerse() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previousScroll = standard.string(forKey: scrollKey)
+        let previousVerse = standard.string(forKey: verseKey)
+        defer {
+            if let previousScroll {
+                standard.set(previousScroll, forKey: scrollKey)
+            } else {
+                standard.removeObject(forKey: scrollKey)
+            }
+            if let previousVerse {
+                standard.set(previousVerse, forKey: verseKey)
+            } else {
+                standard.removeObject(forKey: verseKey)
+            }
+        }
+        let chapter = ChapterDocument(verses: (1...36).map { ChapterVerse(number: $0) })
+        let laidOut = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 6636, containerHeight: 675)
+        }
+        let makePane = { () -> ReaderPaneModel in
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.versePerLine = true
+            pane.document = chapter
+            return pane
+        }
+
+        // The link parked at launch, as the trace has it: the scroll asked for,
+        // the reader laid out at the top of the chapter, and the bars settling.
+        let parked = makePane()
+        parked.scrollToVerse(16)
+        parked.scrollOffsetChanged(laidOut(0), from: parked.scrollSurface)
+        parked.topmostVerseChanged(1, from: parked.scrollSurface)
+        await sizeChange(parked, widthChanged: false)
+        XCTAssertEqual(targetRow(of: parked), 16,
+                       "The bars settling re-anchored a link parked at launch on "
+                           + "the row at the top before it landed.")
+
+        // The same, with a rotation in that window.
+        let turned = makePane()
+        turned.scrollToVerse(16)
+        turned.topmostVerseChanged(1, from: turned.scrollSurface)
+        await sizeChange(turned, widthChanged: true)
+        XCTAssertEqual(targetRow(of: turned), 16,
+                       "A rotation before the link landed re-anchored on the row "
+                           + "at the top before it.")
+
+        // The reader at verse 5 follows a link to verse 20. The new rows first
+        // report the offset the reader was at, and a size change then moves
+        // the scroll view.
+        let reader = makePane()
+        reader.scrollOffsetChanged(laidOut(600), from: reader.scrollSurface)
+        reader.topmostVerseChanged(5, from: reader.scrollSurface)
+        reader.scrollToVerse(20)
+        reader.scrollOffsetChanged(
+            ReaderScrollSample(offset: 600, contentHeight: 6650, containerHeight: 675),
+            from: reader.scrollSurface
+        )
+        reader.prepareForSizeChange()
+        reader.scrollOffsetChanged(laidOut(580), from: reader.scrollSurface)
+        reader.restoreAfterSizeChange(widthChanged: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(targetRow(of: reader), 20,
+                       "A size change before the link landed sent the reader "
+                           + "back to the offset it had been at.")
+        XCTAssertNil(reader.scrollPosition.y)
+
+        // It lands, and a size change after that moves the scroll view: the
+        // row again, and where the change left the scroll view is saved, since
+        // a scroll view the row does not move reports nothing.
+        reader.scrollOffsetChanged(laidOut(2400), from: reader.scrollSurface)
+        reader.topmostVerseChanged(20, from: reader.scrollSurface)
+        reader.prepareForSizeChange()
+        reader.scrollOffsetChanged(laidOut(2200), from: reader.scrollSurface)
+        reader.restoreAfterSizeChange(widthChanged: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(targetRow(of: reader), 20)
+        XCTAssertNil(reader.scrollPosition.y)
+        // Written on this turn and read on it: the key is not carried across the
+        // hop (see `sizeChange`). A report where the change left the scroll
+        // view saves nothing, because that is already the pane's offset.
+        standard.set("999", forKey: scrollKey)
+        reader.scrollOffsetChanged(laidOut(2200), from: reader.scrollSurface)
+        XCTAssertEqual(standard.string(forKey: scrollKey), "999",
+                       "The size change re-issued the row and kept the offset "
+                           + "from before it, so the keys held the old place.")
+
+        // A finger closes the landing: height alone replays the offset again.
+        reader.userBeganScrolling()
+        reader.scrollOffsetChanged(laidOut(1310), from: reader.scrollSurface)
+        reader.prepareForSizeChange()
+        reader.scrollOffsetChanged(laidOut(1250), from: reader.scrollSurface)
+        reader.restoreAfterSizeChange(widthChanged: false)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertNil(targetRow(of: reader),
+                     "The verse a link named outlived a finger on the reader.")
+        XCTAssertEqual(reader.scrollPosition.y, 1310)
+
+        // So does a newer restore: an offset restore in flight wins, as ever.
+        standard.set("600", forKey: scrollKey)
+        standard.set("9", forKey: verseKey)
+        let restored = makePane()
+        restored.scrollToVerse(20)
+        restored.pendingRestore = .offset(600)
+        restored.applyPendingWork()
+        await sizeChange(restored, widthChanged: true)
+        XCTAssertNil(targetRow(of: restored))
+        XCTAssertEqual(restored.scrollPosition.y, 600)
+
+        // And a scroll of the system's own, the Read tab reselected (it reports
+        // `.animating`): the reader is at the top, and that is what a rotation
+        // keeps.
+        let tapped = makePane()
+        tapped.scrollToVerse(20)
+        for _ in 0..<10 { await Task.yield() }
+        tapped.scrollOffsetChanged(laidOut(2400), from: tapped.scrollSurface)
+        tapped.topmostVerseChanged(20, from: tapped.scrollSurface)
+        tapped.systemScrollBegan()
+        tapped.scrollOffsetChanged(laidOut(0), from: tapped.scrollSurface)
+        tapped.topmostVerseChanged(1, from: tapped.scrollSurface)
+        await sizeChange(tapped, widthChanged: true)
+        XCTAssertEqual(targetRow(of: tapped), 1,
+                       "A rotation after the Read tab was reselected went back to "
+                           + "the verse a link had named.")
+
+        // The status bar tapped: it reports no phase, but SwiftUI writes the row
+        // at the top back into the scroll position as the reader goes up.
+        let topped = makePane()
+        topped.scrollToVerse(20)
+        for _ in 0..<10 { await Task.yield() }
+        topped.scrollOffsetChanged(laidOut(2400), from: topped.scrollSurface)
+        topped.topmostVerseChanged(20, from: topped.scrollSurface)
+        topped.scrollPosition.scrollTo(id: 18, anchor: .top)
+        topped.scrollOffsetChanged(laidOut(0), from: topped.scrollSurface)
+        topped.topmostVerseChanged(1, from: topped.scrollSurface)
+        await sizeChange(topped, widthChanged: true)
+        XCTAssertEqual(targetRow(of: topped), 1,
+                       "A rotation after the status bar took the reader to the "
+                           + "top went back to the verse a link had named.")
+
+        // Any other scroll written to the position is the reader leaving the
+        // landing too: an edge, here.
+        let edged = makePane()
+        edged.scrollToVerse(20)
+        for _ in 0..<10 { await Task.yield() }
+        edged.scrollOffsetChanged(laidOut(2400), from: edged.scrollSurface)
+        edged.topmostVerseChanged(20, from: edged.scrollSurface)
+        edged.scrollPosition.scrollTo(edge: .top)
+        edged.scrollOffsetChanged(laidOut(0), from: edged.scrollSurface)
+        edged.topmostVerseChanged(1, from: edged.scrollSurface)
+        await sizeChange(edged, widthChanged: true)
+        XCTAssertEqual(targetRow(of: edged), 1,
+                       "A rotation after a scroll to the top of the chapter went "
+                           + "back to the verse a link had named.")
+
+        // What the position held before the landing was asked of the scroll view
+        // says nothing about the landing.
+        let early = makePane()
+        early.scrollToVerse(16)
+        early.scrollPosition.scrollTo(id: 1, anchor: .top)
+        early.topmostVerseChanged(1, from: early.scrollSurface)
+        await sizeChange(early, widthChanged: false)
+        XCTAssertEqual(targetRow(of: early), 16,
+                       "A row in the scroll position from before the link's scroll "
+                           + "was asked for closed its landing.")
+    }
+
+    /// A verse scroll is asked for again once the new chapter's rows have
+    /// reported, once.
+    ///
+    /// The scroll is asked for from a hop, one main-queue turn after the new
+    /// document, and a turn is not a SwiftUI update: the request can reach the
+    /// scroll view ahead of the rows it names. MEASURED (iOS 27.2): with the
+    /// commentary at its record for John 3:22, a `sword://` link to Genesis
+    /// 1:1 in the commentary left the reader 751 pt into record 1, 6 links in
+    /// 30, with no scroll of the pane's after the one the link asked for.
+    /// Whatever the request did, the first report of a new chapter's rows is
+    /// of rows the scroll view has, and the row is asked for again.
+    ///
+    /// The position goes on naming the row while the scroll view rests
+    /// somewhere else (MEASURED: SwiftUI wrote back only the row asked for). A
+    /// second request for it is told from the first by the position's own
+    /// seed, which every `scrollTo` moves on: the position is equal to the one
+    /// before only if nothing was asked of it.
+    ///
+    /// Only for rows the request may not have seen: not again on a later
+    /// report, not after a finger, and not for the same chapter drawn again at
+    /// the same height.
+    ///
+    /// Fails with the re-issue taken out of `scrollOffsetChanged`.
+    @MainActor
+    func testAVerseScrollIsAskedForAgainOnceTheNewChapterHasLaidOut() async {
+        let standard = UserDefaults.standard
+        let vplKey = standard.psModuleKey(Defaults.vplPreference, BundledModules.bible)
+        let keys = [Defaults.lastRef, Defaults.bibleVersePosition,
+                    Defaults.commentaryVersePosition,
+                    "bibleScrollPosition", "commentaryScrollPosition", vplKey]
+        // By hand: `withPreservedReadingKeys` takes a synchronous closure.
+        let saved = keys.map { standard.object(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, saved) {
+                if let value {
+                    standard.set(value, forKey: key)
+                } else {
+                    standard.removeObject(forKey: key)
+                }
+            }
+        }
+        let hop = { for _ in 0..<10 { await Task.yield() } }
+        let sample = { (y: CGFloat, height: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: height, containerHeight: 675)
+        }
+        // Reading Genesis 1 at verse 20.
+        standard.set(true, forKey: vplKey)
+        standard.set("Genesis 1", forKey: Defaults.lastRef)
+        standard.set("1", forKey: Defaults.bibleVersePosition)
+        standard.set("1", forKey: Defaults.commentaryVersePosition)
+        let workspace = ReadingWorkspaceModel()
+        workspace.displayChapter("Genesis 1", polling: .bible, restore: .verse)
+        let bible = workspace.bible
+        await hop()
+        bible.scrollOffsetChanged(sample(1500, 3791), from: bible.scrollSurface)
+        bible.topmostVerseChanged(20, from: bible.scrollSurface)
+
+        // A link to John 3:16: the route persists the ref and the verse, and its
+        // redisplay renders them. Written on the turn of the redisplay, which
+        // reads them.
+        standard.set("John 3", forKey: Defaults.lastRef)
+        standard.set("16", forKey: Defaults.bibleVersePosition)
+        workspace.redisplay(pane: .bible, restore: .verse)
+        XCTAssertEqual(bible.document.verses.last?.number, 36,
+                       "The route did not render John 3.")
+        await hop()
+        XCTAssertEqual(targetRow(of: bible), 16)
+        var asked = bible.scrollPosition
+
+        // The scroll view took the request against the old rows and rests at
+        // their offset; the new rows report it there.
+        bible.scrollOffsetChanged(sample(1500, 6636), from: bible.scrollSurface)
+        await hop()
+        XCTAssertEqual(targetRow(of: bible), 16)
+        XCTAssertNotEqual(bible.scrollPosition, asked,
+                          "The first report of the new chapter's rows did not ask "
+                              + "for the verse again.")
+
+        // Once: a later report of another height is the lazy rows settling.
+        asked = bible.scrollPosition
+        bible.scrollOffsetChanged(sample(700, 6650), from: bible.scrollSurface)
+        await hop()
+        XCTAssertEqual(bible.scrollPosition, asked,
+                       "A later report of the new rows asked for the verse again.")
+
+        // The same chapter drawn again at the same height: the request has the
+        // rows the scroll view has.
+        standard.set("John 3", forKey: Defaults.lastRef)
+        standard.set("16", forKey: Defaults.bibleVersePosition)
+        workspace.redisplay(pane: .bible, restore: .verse)
+        await hop()
+        XCTAssertEqual(targetRow(of: bible), 16)
+        asked = bible.scrollPosition
+        bible.scrollOffsetChanged(sample(900, 6650), from: bible.scrollSurface)
+        await hop()
+        XCTAssertEqual(bible.scrollPosition, asked,
+                       "A redraw of the same rows asked for the verse again.")
+
+        // A finger before the new rows report: the reader's, not the link's.
+        standard.set("Genesis 2", forKey: Defaults.lastRef)
+        standard.set("4", forKey: Defaults.bibleVersePosition)
+        workspace.redisplay(pane: .bible, restore: .verse)
+        await hop()
+        XCTAssertEqual(targetRow(of: bible), 4)
+        asked = bible.scrollPosition
+        bible.userBeganScrolling()
+        bible.scrollOffsetChanged(sample(300, 3000), from: bible.scrollSurface)
+        await hop()
+        XCTAssertEqual(bible.scrollPosition, asked,
+                       "The link's verse was asked for again over a finger.")
+    }
+
+    /// A scroll the pane deferred is dropped when a newer restore is applied
+    /// before it runs.
+    ///
+    /// A hop runs a main-queue turn later, and turns queue up: a `sword://`
+    /// link parked at launch queued the launch's offset scroll, its own verse
+    /// scroll and the size hook's, which ran 190 ms later one after another
+    /// (MEASURED, iOS 27.2). Where the newer restore asks nothing of the scroll
+    /// view — an offset it is already at, a page turn's new scroll view — the
+    /// older scroll ran after it and won.
+    ///
+    /// Fails with the generation check taken out of the hops.
+    @MainActor
+    func testARestoreSupersededInTheSameTurnMovesNothing() async {
+        let standard = UserDefaults.standard
+        let scrollKey = "bibleScrollPosition"
+        let verseKey = Defaults.bibleVersePosition
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previousScroll = standard.string(forKey: scrollKey)
+        let previousVerse = standard.string(forKey: verseKey)
+        defer {
+            if let previousScroll {
+                standard.set(previousScroll, forKey: scrollKey)
+            } else {
+                standard.removeObject(forKey: scrollKey)
+            }
+            if let previousVerse {
+                standard.set(previousVerse, forKey: verseKey)
+            } else {
+                standard.removeObject(forKey: verseKey)
+            }
+        }
+        let hop = { for _ in 0..<10 { await Task.yield() } }
+        let chapter = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+        let sample = { (y: CGFloat) in
+            ReaderScrollSample(offset: y, contentHeight: 4198, containerHeight: 675)
+        }
+
+        // Measured at 2700, verse 20. A verse scroll, and then in the same turn
+        // a redraw at the offset the scroll view is at.
+        standard.set("2700", forKey: scrollKey)
+        standard.set("20", forKey: verseKey)
+        let pane = ReaderPaneModel(mode: .bible)
+        pane.versePerLine = true
+        pane.document = chapter
+        pane.scrollOffsetChanged(sample(2700), from: pane.scrollSurface)
+        pane.topmostVerseChanged(20, from: pane.scrollSurface)
+        pane.scrollToVerse(5)
+        pane.pendingRestore = .offset(2700)
+        pane.applyPendingWork()
+        await hop()
+        XCTAssertNil(targetRow(of: pane),
+                     "A verse scroll superseded in the same turn ran after the "
+                         + "restore that replaced it.")
+        XCTAssertNil(pane.scrollPosition.y)
+
+        // A page turn in the same turn as a verse scroll: the new scroll view
+        // starts at the top of the chapter.
+        let paged = ReaderPaneModel(mode: .bible)
+        paged.versePerLine = true
+        paged.document = chapter
+        paged.scrollToVerse(20)
+        paged.pendingRestore = .chapterStart
+        paged.applyPendingWork()
+        await hop()
+        XCTAssertEqual(paged.scrollPosition, ScrollPosition(idType: Int.self),
+                       "The verse scroll before a page turn was handed to the new "
+                           + "chapter's scroll view.")
+
+        // A routed switch to a commentary that has never rendered: the top of
+        // the chapter, and then the verse the link named. The verse is the
+        // scroll that runs.
+        let commentary = ReaderPaneModel(mode: .commentary)
+        commentary.versePerLine = true
+        // Row 0 is the chapter summary, a record with text of its own.
+        commentary.document = ChapterDocument(verses: [0, 1, 3].map {
+            ChapterVerse(number: $0, runs: [InlineRun(text: "The chapter, in outline.")])
+        })
+        commentary.pendingRestore = ReaderPaneModel.PaneRestore.none
+        commentary.applyPendingWork()
+        commentary.pendingRestore = .verse(1)
+        commentary.applyPendingWork()
+        await hop()
+        XCTAssertEqual(targetRow(of: commentary), 1)
+        XCTAssertNil(commentary.scrollPosition.edge)
+    }
+
     // MARK: Paging
 
     /// Paging replaces the scroll view and persists the top of the new chapter.
