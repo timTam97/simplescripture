@@ -7089,6 +7089,56 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    /// A tap on the selected Read tab outranks every scroll queued before it
+    /// (issues #31 and #30 together).
+    ///
+    /// A restore scrolls from a hop, a main-queue turn later, and turns queue
+    /// behind a busy main thread (#30 measured a link parked at launch and its
+    /// scrolls running 190 ms late). A tap in that window is the newer
+    /// instruction: the hop of the restore before it — an offset restore's
+    /// `scrollTo(y:)` or a link's row — must not run after it and take the
+    /// reader back down.
+    ///
+    /// Fails with `scrollToChapterTop()` leaving `restoreGeneration` alone.
+    @MainActor
+    func testAReselectOutranksTheScrollsQueuedBeforeIt() async {
+        let standard = UserDefaults.standard
+        let keys = ["bibleScrollPosition", Defaults.bibleVersePosition]
+        // By hand: `withPreservedPanePositionKeys` takes a synchronous closure.
+        let previous = keys.map { standard.string(forKey: $0) }
+        defer {
+            for (key, value) in zip(keys, previous) {
+                if let value { standard.set(value, forKey: key) } else { standard.removeObject(forKey: key) }
+            }
+        }
+        let makePane = { () -> ReaderPaneModel in
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.versePerLine = true
+            pane.document = ChapterDocument(verses: (1...31).map { ChapterVerse(number: $0) })
+            return pane
+        }
+
+        // A launch's offset restore, its hop still queued, then the tap.
+        let launched = makePane()
+        launched.pendingRestore = .offset(1099)
+        launched.applyPendingWork()
+        launched.scrollToChapterTop()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(targetRow(of: launched), 1,
+                       "The launch restore's queued scroll ran after the tap and "
+                           + "took the reader back to the old offset.")
+        XCTAssertNil(launched.scrollPosition.y)
+
+        // A link's verse scroll, its hop still queued, then the tap.
+        let linked = makePane()
+        linked.scrollToVerse(20)
+        linked.scrollToChapterTop()
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertEqual(targetRow(of: linked), 1,
+                       "A link's queued scroll ran after the tap and took the "
+                           + "reader back to the linked verse.")
+    }
+
     // MARK: Page-turn slide
 
     /// The scroll view a page turn leaves stays on screen until its slide ends,

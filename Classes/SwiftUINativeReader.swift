@@ -760,7 +760,9 @@ struct ChapterTextView: View {
                     // The Read tab reselected: the system's scroll to the top moves
                     // the reader off a verse landing as a finger does. MEASURED (iOS
                     // 27.2): it reports `.animating`; the pane's own scrolls are not
-                    // animated and report no phase, and a tap on the status bar
+                    // animated and report no phase — but for the reselect's own,
+                    // `scrollToChapterTop()`, which has closed the landing before it
+                    // starts — and a tap on the status bar
                     // reports none either (the pane sees that one through its
                     // scroll position — see `ReaderPaneModel.scrollPosition`).
                     pane.systemScrollBegan()

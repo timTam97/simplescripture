@@ -197,7 +197,8 @@ final class ReaderPaneModel {
     /// of the scroll view, a position that no longer names its row — another
     /// row, an edge, an offset — is the reader leaving it. The pane writes
     /// nothing else while a landing is open: every scroll of its own but the
-    /// landing's goes through `apply`, which closes it first.
+    /// landing's goes through `apply` or `scrollToChapterTop()`, which close
+    /// it first.
     var scrollPosition = ScrollPosition(idType: Int.self) {
         didSet {
             if let landing = verseLanding, landing.isRequested,
@@ -948,6 +949,12 @@ final class ReaderPaneModel {
     func scrollToChapterTop() {
         guard let first = document.verses.first?.number else { return }
         outstandingOffsetRestore = nil
+        // A newer instruction than any restore, as `apply` is to the one before
+        // it: no hop queued ahead of the tap scrolls after it, and a verse
+        // landing still open (a link opened, then this tap) is over — a size
+        // change after it must not send the reader back to the linked verse.
+        restoreGeneration &+= 1
+        verseLanding = nil
         verseToShow = 0
         lastScrollOffset = 0
         shownVerseIsMeasured = true
