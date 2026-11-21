@@ -917,6 +917,47 @@ final class ReaderPaneModel {
         apply(.verse(verse))
     }
 
+    /// The Read tab tapped while it is selected (`AppSession.tabBarSelection`):
+    /// back to the top of this chapter.
+    ///
+    /// The FIRST ROW, whatever it is — not `rowID(containing: 1)`. A
+    /// commentary's first row is its chapter summary, which verse 1
+    /// deliberately does not land on (see `rowID`); the top of the chapter is
+    /// above it. With Headings on a Bible's first row is its title, where
+    /// verse 1 lands anyway.
+    ///
+    /// Persisted here, as `.chapterStart` persists its own: a scroll view
+    /// already at the top reports nothing. "0" / "1" are the bytes the system's
+    /// scroll to the top left in the Bible's keys through its scroll reports,
+    /// and a scroll on its way reports as that one did, ending at the top.
+    ///
+    /// **Animated, unlike every other move the reader makes, because the
+    /// system's is.** The system sends the same scroll view to the top (the
+    /// pane on screen — see `ReaderScreen.readerPanes`), animated over about
+    /// 0.3 s. Not animated, this cut it off in the first frame, and the tap's
+    /// scroll became a jump. Animated, it lands at the top with no bounce.
+    /// The system's own landing is not enough without it: after a Bible ⇄
+    /// commentary round trip it came to rest 33 pt short, verse 1's first
+    /// line behind the bar (MEASURED, iOS 27.2, iPhone 18 Pro, 18 pt: 2 tries
+    /// of 2; where it goes wrong was not found).
+    ///
+    /// Ends whatever is in flight: an offset restore that has not landed (a
+    /// reselect straight after a launch), the verse its keys carried, a verse
+    /// armed for the pane's next appearance. Not deferred, as `apply` is: no
+    /// document changes in this update.
+    func scrollToChapterTop() {
+        guard let first = document.verses.first?.number else { return }
+        outstandingOffsetRestore = nil
+        verseToShow = 0
+        lastScrollOffset = 0
+        shownVerseIsMeasured = true
+        // Also ends `offsetRestoreVerse`.
+        persistPosition(verse: 1, scrollOffset: 0)
+        withAnimation {
+            scrollPosition.scrollTo(id: first, anchor: .top)
+        }
+    }
+
     /// The id of the row that displays `verse`.
     ///
     /// In verse-per-line mode every verse is its own row, so this is the identity.
@@ -1961,6 +2002,15 @@ final class ReadingWorkspaceModel {
         )
         session?.library.recordHistory(mode: mode)
         return true
+    }
+
+    // MARK: Tab reselect
+
+    /// A tap on the Read tab while Read is selected. Only the pane on screen
+    /// moves and only its position keys are written: the other pane keeps its
+    /// place, and whatever it owes, for when it is next shown.
+    func returnToTopOfChapter() {
+        activePane.scrollToChapterTop()
     }
 
     // MARK: Reference selection

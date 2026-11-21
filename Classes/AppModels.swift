@@ -1412,6 +1412,31 @@ final class AppSession {
             workspaceSelection = newValue
         }
     }
+    /// The tab bar's binding: every tap on a tab, the one already selected
+    /// included. SwiftUI writes the selection on a reselect as well, which
+    /// Search's `searchFocusRequest` relies on too.
+    ///
+    /// A reselect of Read returns the pane on screen to the top of its chapter
+    /// (issue #31). The system scrolls one scroll view to the top as well, the
+    /// first in the tab, and `ReaderScreen.readerPanes` puts the pane on screen
+    /// first. The app's own scroll is what lands it there exactly and saves it,
+    /// in either pane — see `ReaderPaneModel.scrollToChapterTop()`.
+    ///
+    /// ONLY from the tab bar. `selectedWorkspace = .read` is also how a route
+    /// lands (`open(_:)`, `apply(_:)`, a scripture link tapped in the
+    /// commentary) and how "View in Commentary" switches panes, all with Read
+    /// already selected; taken for a reselect, each would scroll away from the
+    /// verse it had just persisted.
+    var tabBarSelection: Workspace {
+        get { selectedWorkspace }
+        set {
+            if workspaceSelection == .read, newValue == .read {
+                readingWorkspace?.returnToTopOfChapter()
+            }
+            // Through the setter, so the rules for Search hold for a tap too.
+            selectedWorkspace = newValue
+        }
+    }
     private(set) var searchFocusRequest: UInt = 0
     /// The last `sword://` URL this session accepted.
     ///

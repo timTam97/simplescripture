@@ -6916,6 +6916,179 @@ final class AppStateStoresTests: XCTestCase {
         }
     }
 
+    // MARK: Read reselect
+
+    /// A tap on the selected Read tab takes the pane on screen to the top of
+    /// its chapter, saves that as its place, and leaves the other pane's alone.
+    ///
+    /// Issue #31: the commentary did not move. The top of a commentary chapter
+    /// is its summary, the first row, which a scroll to verse 1 deliberately
+    /// passes over for the record under it (`rowID(containing:)`).
+    ///
+    /// Synchronous throughout, so the host app's reader cannot save its own
+    /// place between a write and the read of it (see `sizeChange`).
+    @MainActor
+    func testReselectingReadReturnsThePaneOnScreenToTheTopOfItsChapter() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            let session = AppSession(selectedWorkspace: .read, dismissKeyboard: {})
+            let workspace = ReadingWorkspaceModel(session: session)
+            let bible = workspace.bible
+            let commentary = workspace.commentary
+            bible.versePerLine = true
+            bible.document = ChapterDocument(
+                verses: (1...31).map { ChapterVerse(number: $0) }
+            )
+            commentary.versePerLine = true
+            commentary.document = ChapterDocument(verses: [
+                ChapterVerse(number: 0, runs: [
+                    InlineRun(text: "Genesis is a name taken from the Greek"),
+                ]),
+                ChapterVerse(number: 1), ChapterVerse(number: 3),
+                ChapterVerse(number: 14),
+            ])
+            let sample = { (y: CGFloat) in
+                ReaderScrollSample(offset: y, contentHeight: 9000, containerHeight: 874)
+            }
+            @MainActor func place(_ pane: ReaderPaneModel, at offset: CGFloat, verse: Int) {
+                pane.scrollOffsetChanged(sample(offset), from: pane.scrollSurface)
+                pane.topmostVerseChanged(verse, from: pane.scrollSurface)
+            }
+            func keys(_ mode: ReadingMode) -> [String?] {
+                mode == .bible
+                    ? [standard.string(forKey: "bibleScrollPosition"),
+                       standard.string(forKey: Defaults.bibleVersePosition)]
+                    : [standard.string(forKey: "commentaryScrollPosition"),
+                       standard.string(forKey: Defaults.commentaryVersePosition)]
+            }
+            place(bible, at: 1500, verse: 20)
+            place(commentary, at: 2700, verse: 14)
+            XCTAssertEqual(keys(.bible), ["1500", "20"])
+            XCTAssertEqual(keys(.commentary), ["2700", "14"])
+
+            workspace.mode = .commentary
+            session.tabBarSelection = .read
+            XCTAssertEqual(targetRow(of: commentary), 0,
+                           "The commentary went to record 1, under its summary.")
+            XCTAssertEqual(keys(.commentary), ["0", "1"],
+                           "The commentary's top was not saved as its place.")
+            XCTAssertEqual(keys(.bible), ["1500", "20"],
+                           "The commentary's tap wrote over the Bible's place.")
+            XCTAssertNil(targetRow(of: bible),
+                         "The commentary's tap scrolled the Bible.")
+
+            place(commentary, at: 600, verse: 3)
+            workspace.mode = .bible
+            session.tabBarSelection = .read
+            XCTAssertEqual(targetRow(of: bible), 1)
+            XCTAssertEqual(keys(.bible), ["0", "1"])
+            XCTAssertEqual(keys(.commentary), ["600", "3"],
+                           "The Bible's tap wrote over the commentary's place.")
+        }
+    }
+
+    /// Only the tab bar's write of the selected tab is a reselect.
+    ///
+    /// `selectedWorkspace = .read` with Read already selected is how a
+    /// `sword://` route lands (`open(_:)`, `apply(_:)`, a scripture link in the
+    /// commentary) and how "View in Commentary" switches panes. Each had just
+    /// persisted the verse it opened; taken for a tap, it would have scrolled
+    /// away from it. Entering Read from another workspace is no reselect
+    /// either, and Search's own reselect still arrives through the same
+    /// binding.
+    @MainActor
+    func testOnlyATapOnTheSelectedReadTabIsAReselect() {
+        withPreservedReadingKeys { standard in
+            standard.set("Genesis 1", forKey: Defaults.lastRef)
+            var dismissals = 0
+            let session = AppSession(
+                selectedWorkspace: .read, dismissKeyboard: { dismissals += 1 }
+            )
+            let workspace = ReadingWorkspaceModel(session: session)
+            let bible = workspace.bible
+            bible.versePerLine = true
+            bible.document = ChapterDocument(
+                verses: (1...31).map { ChapterVerse(number: $0) }
+            )
+            // Mid-chapter, with nothing asked of the scroll view. Before each
+            // step, so a step that moves it fails on its own.
+            @MainActor func seat() {
+                let sample = ReaderScrollSample(
+                    offset: 900, contentHeight: 9000, containerHeight: 874
+                )
+                bible.scrollOffsetChanged(sample, from: bible.scrollSurface)
+                bible.topmostVerseChanged(12, from: bible.scrollSurface)
+                bible.scrollPosition = ScrollPosition(idType: Int.self)
+            }
+            @MainActor func assertUnmoved(_ message: String) {
+                XCTAssertNil(targetRow(of: bible), message)
+                XCTAssertEqual(standard.string(forKey: "bibleScrollPosition"), "900",
+                               message)
+                XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition),
+                               "12", message)
+            }
+
+            seat()
+            session.selectedWorkspace = .read
+            assertUnmoved("A route's selection of Read was taken for a tap.")
+
+            seat()
+            session.tabBarSelection = .library
+            session.tabBarSelection = .read
+            assertUnmoved("Entering Read from the Library was taken for a reselect.")
+
+            let focusRequests = session.searchFocusRequest
+            session.tabBarSelection = .search
+            XCTAssertEqual(session.searchFocusRequest, focusRequests)
+            session.tabBarSelection = .search
+            XCTAssertEqual(session.searchFocusRequest, focusRequests + 1,
+                           "Reselecting Search through the tab bar did not "
+                               + "focus its field.")
+
+            seat()
+            session.tabBarSelection = .read
+            XCTAssertEqual(dismissals, 1,
+                           "Leaving Search by the tab bar left the keyboard up.")
+            XCTAssertEqual(session.selectedWorkspace, .read)
+            assertUnmoved("Entering Read from Search was taken for a reselect.")
+        }
+    }
+
+    /// A tap straight after a launch, with its offset restore still on the
+    /// way, goes to the top and stays there: the restore is over, so the next
+    /// scroll the view reports is saved.
+    ///
+    /// Left armed, the restore would have taken every report until one landed
+    /// on the old offset for "still in flight", and saved none of them.
+    @MainActor
+    func testReturningToTheTopEndsAnOffsetRestoreStillInFlight() {
+        withPreservedPanePositionKeys { standard, scrollKey in
+            standard.set("1099", forKey: scrollKey)
+            standard.set("14", forKey: Defaults.bibleVersePosition)
+            let pane = ReaderPaneModel(mode: .bible)
+            pane.versePerLine = true
+            pane.document = ChapterDocument(
+                verses: (1...31).map { ChapterVerse(number: $0) }
+            )
+            // Armed here; its hop never runs in a synchronous test.
+            pane.pendingRestore = .offset(1099)
+            pane.applyPendingWork()
+
+            pane.scrollToChapterTop()
+            XCTAssertEqual(targetRow(of: pane), 1)
+            XCTAssertEqual(standard.string(forKey: scrollKey), "0")
+            XCTAssertEqual(standard.string(forKey: Defaults.bibleVersePosition), "1")
+
+            pane.scrollOffsetChanged(
+                ReaderScrollSample(offset: 300, contentHeight: 4198, containerHeight: 874),
+                from: pane.scrollSurface
+            )
+            XCTAssertEqual(standard.string(forKey: scrollKey), "300",
+                           "A scroll after the tap was dropped as the launch "
+                               + "restore still in flight.")
+        }
+    }
+
     // MARK: Page-turn slide
 
     /// The scroll view a page turn leaves stays on screen until its slide ends,

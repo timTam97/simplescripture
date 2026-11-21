@@ -666,6 +666,11 @@ struct ReaderScreen: View {
         }
     }
 
+    /// The pane on screen, then the other one — see `readerPanes`.
+    private var paneOrder: [ReadingMode] {
+        reading.mode == .bible ? [.bible, .commentary] : [.commentary, .bible]
+    }
+
     /// BOTH panes stay in the hierarchy, with the inactive one hidden.
     ///
     /// Not stylistic: `displayChapter` renders the polled pane and defers a
@@ -674,17 +679,33 @@ struct ReaderScreen: View {
     /// only the active pane (a plain `if`) would tear down its document and scroll
     /// position and lose the pending work.
     ///
+    /// **The pane on screen comes FIRST, so the order changes with the mode.**
+    /// A tap on the selected Read tab is SwiftUI's to answer as well as the app's
+    /// (`AppSession.tabBarSelection`): its tab coordinator pops a pushed stack or,
+    /// with none, sends the tab's content scroll view to the top, and that is the
+    /// FIRST scroll view in the tab, whichever is showing. Opacity, accessibility
+    /// and `scrollDisabled` do not enter into it. MEASURED (iOS 27.2) with the
+    /// Bible always first: with the commentary on screen the tap moved nothing
+    /// there (issue #31) and took the hidden Bible from verse 14 to the top,
+    /// and a pane's scroll reports do not ask whether it is showing: they save
+    /// where it goes over the place the reader had left it.
+    ///
+    /// A `ForEach` keyed by the mode MOVES a pane; it does not rebuild it. Each
+    /// keeps its identity, and with it its document, scroll view and deferred work
+    /// — what a conditional modifier would throw away (see the toolbar). The pane
+    /// not showing is drawn over the one that is, at opacity 0, as the commentary
+    /// always was over the Bible: a touch goes through it.
+    ///
     /// The safe area is owned by `ChapterTextView` (edge-to-edge scroll view with
     /// inset content). Do not add an `ignoresSafeArea` here — a second one at this
     /// level would inset nothing and reintroduce the tab-bar overlap.
     private var readerPanes: some View {
         ZStack {
-            ChapterTextView(pane: reading.bible)
-                .opacity(reading.mode == .bible ? 1 : 0)
-                .accessibilityHidden(reading.mode != .bible)
-            ChapterTextView(pane: reading.commentary)
-                .opacity(reading.mode == .commentary ? 1 : 0)
-                .accessibilityHidden(reading.mode != .commentary)
+            ForEach(paneOrder, id: \.self) { mode in
+                ChapterTextView(pane: mode == .bible ? reading.bible : reading.commentary)
+                    .opacity(reading.mode == mode ? 1 : 0)
+                    .accessibilityHidden(reading.mode != mode)
+            }
         }
         .onGeometryChange(for: CGSize.self, of: \.size) { old, new in
             // Rotation, or an iPad split-view resize: re-anchor each pane and SUPPRESS
