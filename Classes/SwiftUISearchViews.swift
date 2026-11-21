@@ -342,11 +342,13 @@ private struct SearchResultList: View {
                         SearchResultRowView(
                             reference: result.reference,
                             text: result.text ?? "",
-                            // Its own Strong's words, or the query's terms:
+                            // Its own Strong's marks, or the query's terms:
                             // the row's to say.
                             highlightTerms: result.highlightTerms(
                                 orQuery: highlightTerms
-                            )
+                            ),
+                            strongsMarks: result.strongsMarks,
+                            strongsHeadings: result.strongsHeadings
                         )
                         .contentShape(Rectangle())
                     }
@@ -425,16 +427,32 @@ private struct SearchResultRowView: View {
     let reference: String
     let text: String
     let highlightTerms: [SearchHighlightTerm]
+    let strongsMarks: [Range<Int>]
+    /// A Psalm's title when a Strong's search marked a word of it. The index
+    /// has no title text, so without it a row for H4210 "A Psalm" had nothing
+    /// to mark.
+    let strongsHeadings: [PSMarkedText]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(reference)
                 .font(.headline)
                 .foregroundStyle(.primary)
+            ForEach(Array(strongsHeadings.enumerated()), id: \.offset) { _, heading in
+                Text(
+                    SearchHighlightedText.make(
+                        heading.text, terms: [], marks: heading.marks
+                    )
+                )
+                .font(.body)
+                .foregroundStyle(.secondary)
+            }
             Text(
+                // The swap keeps every UTF-16 offset, so the marks still fit.
                 SearchHighlightedText.make(
                     text.replacingOccurrences(of: "\n", with: " "),
-                    terms: highlightTerms
+                    terms: highlightTerms,
+                    marks: strongsMarks
                 )
             )
             .font(.body)
@@ -474,17 +492,22 @@ enum SearchResultClipboardText {
 /// whole words, as the query matched them — and the reader asks the same
 /// function for the chapter a row opens (`ChapterTextRenderer`), so a row and
 /// its verse mark the same words. Not `private`: the tests read the marks.
+///
+/// A Strong's search has no terms; its row brings its own `marks`, UTF-16
+/// ranges of `text`, found as the reader finds the words in the chapter
+/// (`PSSearchEngine.markStrongsWords`).
 enum SearchHighlightedText {
     static func make(
         _ text: String,
-        terms: [SearchHighlightTerm]
+        terms: [SearchHighlightTerm],
+        marks: [Range<Int>] = []
     ) -> AttributedString {
         let baseFont = UIFont.preferredFont(forTextStyle: .body)
         let output = NSMutableAttributedString(
             string: text,
             attributes: [.font: baseFont]
         )
-        guard !text.isEmpty, !terms.isEmpty else {
+        guard !text.isEmpty, !terms.isEmpty || !marks.isEmpty else {
             return AttributedString(output)
         }
 
@@ -499,6 +522,18 @@ enum SearchHighlightedText {
         ]
         for range in PSSearchQuery.highlightRanges(of: terms, in: text) {
             output.addAttributes(attributes, range: NSRange(range, in: text))
+        }
+        for mark in marks {
+            // A mark past the end is a row whose text is not the one it was
+            // marked in: nothing to place it by.
+            guard mark.lowerBound >= 0, mark.upperBound <= output.length else {
+                assertionFailure("a Strong's mark runs off the end of its row's text")
+                continue
+            }
+            output.addAttributes(
+                attributes,
+                range: NSRange(location: mark.lowerBound, length: mark.count)
+            )
         }
         return AttributedString(output)
     }

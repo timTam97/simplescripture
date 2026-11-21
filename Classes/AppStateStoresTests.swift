@@ -1891,15 +1891,17 @@ final class AppStateStoresTests: XCTestCase {
             reference: "John 3:16",
             fullText: "For God so loved the world"
         )
-        result.strongsHighlightWords = ["loved"]
+        result.strongsMarks = [11..<16]
+        result.strongsHeadings = [PSMarkedText(text: "A Psalm", marks: [0..<7])]
 
         model.setResults([result])
 
         XCTAssertEqual(model.results.first?.id, "John 3:16")
         XCTAssertEqual(model.results.first?.text, "For God so loved the world")
-        XCTAssertEqual(model.results.first?.strongsHighlightWords, ["loved"])
-        // Made into terms with the row, once: whole words, as the row marks them.
-        XCTAssertEqual(model.results.first?.strongsHighlightTerms, ["loved"])
+        // The marks the query made, carried onto the row as they are.
+        XCTAssertEqual(model.results.first?.strongsMarks, [11..<16])
+        XCTAssertEqual(model.results.first?.strongsHeadings,
+                       [PSMarkedText(text: "A Psalm", marks: [0..<7])])
     }
 
     /// A SECOND "Find all occurrences" must run the new term, not re-show the
@@ -3207,155 +3209,136 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(marked(["God's"], in: luke20v25), ["God\u{2019}s"])
     }
 
-    /// A Strong's row marks the words of the verse tagged with its number: whole
-    /// words, the divine name among them, and a one-letter word as that word.
+    /// A Strong's row marks the words its number tags, each where the number
+    /// tags it: the words the chapter it opens marks (issue #34).
     ///
-    /// A Strong's search matches a lemma, so its row marks the verse's words
-    /// the index holds against that number (`word_map`). Three things were
-    /// wrong with it, on the same substring search the text terms had.
+    /// The index has no positions — its text has no markers and its word map
+    /// no places — and the row had only the tagged spellings, which it marked
+    /// wherever they stood: Psalm 10:4's supplied "*after God*" for H0430 as
+    /// well as the God the number tags, both of John 3:16's "that"s whichever
+    /// of G5620 and G2443 was searched, both of Job 30:14's "in"s for H08478.
+    /// A word of a Psalm's title, which the row's text does not hold, was
+    /// marked nowhere. `PSSearchEngine.markStrongsWords` finds them as the
+    /// reader does, in a copy of the chapter with the numbers on.
     ///
-    /// A word was marked inside longer ones. `I` is the word under G1473, and
-    /// John 14:6 had it marked in "saith", "him" and "life" as well.
+    /// What the row had right before stays: whole words — `I` under G1473 is
+    /// the word, not the i in "saith", "him" and "life" — the divine name,
+    /// which the index stores in markup (`that the <divineName>Lord</divineName>`;
+    /// a search for H3068 once listed 5,521 verses and marked a word in one),
+    /// and a row that chooses between its own marks and the query's terms by
+    /// what it holds, not by the Strong's toggle as it stands.
     ///
-    /// The divine name was marked nowhere. The index stores it in markup —
-    /// `that the <divineName>Lord</divineName>` — and no verse contains that:
-    /// a search for H3068 listed 5,521 verses and marked a word in one.
-    ///
-    /// And the row chose between its own words and the query's terms by the
-    /// Strong's toggle as it stood, not by what the row held
-    /// (`SearchResultRow.highlightTerms(orQuery:)` now).
-    ///
-    /// The word maps below are the index's own lines for these verses.
+    /// The rows are the index's: each verse's plain text as the index build
+    /// cleans it, and its word map, from the store.
     @MainActor
-    func testAStrongsRowMarksTheWordsTaggedWithItsNumber() {
-        /// What the row of `verse` marks for a search on `numbers`, through
-        /// the row's own attributed string.
-        func marked(_ numbers: Set<String>, wordMap: String, in verse: String) -> [String] {
-            let row = SearchResultRow(
-                reference: "a verse",
-                text: verse,
-                strongsHighlightWords: PSSearchEngine.surfaceWords(
-                    inWordMap: wordMap, taggedWith: numbers)
-            )
-            let text = NSAttributedString(
-                SearchHighlightedText.make(verse, terms: row.strongsHighlightTerms)
-            )
-            var out: [String] = []
-            text.enumerateAttribute(
-                .backgroundColor,
-                in: NSRange(location: 0, length: text.length)
+    func testAStrongsRowMarksEachTaggedWordWhereItsChapterDoes() throws {
+        let store = try XCTUnwrap(PSContentStore.shared)
+
+        /// The row a search for `input` lists for `ref`, marked as `runQuery`
+        /// marks it.
+        func row(_ ref: String, _ input: String,
+                 line: UInt = #line) throws -> SearchResultRow {
+            let text = PSSearchQuery.cleanDisplayText(try XCTUnwrap(
+                store.plainText(module: "KJV", osisRef: ref), ref, line: line))
+            let colon = try XCTUnwrap(ref.lastIndex(of: ":"), line: line)
+            let verse = try XCTUnwrap(Int(ref[ref.index(after: colon)...]), line: line)
+            let map = try XCTUnwrap(PSContentReader.shared.wordMaps(
+                module: "KJV", ref: String(ref[..<colon]))[verse], ref, line: line)
+            let result = PSSearchResult(reference: ref, fullText: text)
+            PSSearchEngine.markStrongsWords(
+                in: [result], wordMaps: [map],
+                numbers: Set(PSSearchQuery.strongsTokens(fromUserInput: input)),
+                module: "KJV")
+            return SearchResultRow(reference: ref, text: text,
+                                   strongsMarks: result.strongsMarks,
+                                   strongsHeadings: result.strongsHeadings)
+        }
+        /// `text` as a row draws it, with what is marked in brackets.
+        func drawn(_ text: String, terms: [SearchHighlightTerm] = [],
+                   marks: [Range<Int>]) -> String {
+            let string = NSAttributedString(
+                SearchHighlightedText.make(text, terms: terms, marks: marks))
+            var out = ""
+            string.enumerateAttribute(
+                .backgroundColor, in: NSRange(location: 0, length: string.length)
             ) { value, range, _ in
-                if value != nil {
-                    out.append((text.string as NSString).substring(with: range))
-                }
+                let piece = (string.string as NSString).substring(with: range)
+                out += value != nil ? "[\(piece)]" : piece
             }
             return out
         }
+        /// The verse of the row for `input` at `ref`, as the row draws it.
+        func marked(_ ref: String, _ input: String,
+                    line: UInt = #line) throws -> String {
+            let row = try row(ref, input, line: line)
+            return drawn(row.text ?? "", terms: row.highlightTerms(orQuery: []),
+                         marks: row.strongsMarks)
+        }
 
-        let john14v6 = "Jesus saith unto him, I am the way, the truth, and the life:"
-            + " no man cometh unto the Father, but by me."
-        let john14v6Words = [
-            "Jesus\tG3588 G2424 \u{03BF} \u{03B9}\u{03B7}\u{03C3}\u{03BF}\u{03C5}\u{03C2}",
-            "saith\tG3004 \u{03BB}\u{03B5}\u{03B3}\u{03B5}\u{03B9}",
-            "unto him\tG846 \u{03B1}\u{03C5}\u{03C4}\u{03C9}",
-            "I\tG1473 \u{03B5}\u{03B3}\u{03C9}",
-            "am\tG1510 \u{03B5}\u{03B9}\u{03BC}\u{03B9}",
-            "the way\tG3588 G3598 \u{03B7} \u{03BF}\u{03B4}\u{03BF}\u{03C2}",
-            "the truth\tG3588 G225 \u{03B7} \u{03B1}\u{03BB}\u{03B7}\u{03B8}\u{03B5}\u{03B9}\u{03B1}",
-            "and\tG2532 \u{03BA}\u{03B1}\u{03B9}",
-            "the life\tG3588 G2222 \u{03B7} \u{03B6}\u{03C9}\u{03B7}",
-            "no man\tG3762 \u{03BF}\u{03C5}\u{03B4}\u{03B5}\u{03B9}\u{03C2}",
-            "cometh\tG2064 \u{03B5}\u{03C1}\u{03C7}\u{03B5}\u{03C4}\u{03B1}\u{03B9}",
-            "unto\tG4314 \u{03C0}\u{03C1}\u{03BF}\u{03C2}",
-            "the Father\tG3588 G3962 \u{03C4}\u{03BF}\u{03BD} \u{03C0}\u{03B1}\u{03C4}\u{03B5}\u{03C1}\u{03B1}",
-            "but\tG3361 \u{03BC}\u{03B7}",
-            "by\tG1223 \u{03B4}\u{03B9}",
-            "me\tG1700 \u{03B5}\u{03BC}\u{03BF}\u{03C5}",
-        ].joined(separator: "\n")
+        // The first God is the translators' (italic); H0430 tags the second.
+        XCTAssertTrue(try marked("Psalms 10:4", "H430")
+            .hasSuffix("will not seek after God: [God] is not in all his thoughts."))
+        // John 3:16 has "that" twice: G5620 "so loved the world, that", G2443
+        // "that whosoever". Each search marks its own.
+        XCTAssertTrue(try marked("John 3:16", "G2443")
+            .contains("the world, that he gave his only begotten Son, [that] whosoever"))
+        XCTAssertTrue(try marked("John 3:16", "G5620")
+            .contains("the world, [that] he gave his only begotten Son, that whosoever"))
+        // "breaking in of waters: in the desolation": H08478 is the second in.
+        XCTAssertTrue(try marked("Job 30:14", "H08478")
+            .contains("breaking in of waters: [in] the desolation"))
+        // "find them, even them that contended": H0582 is the second them.
+        XCTAssertTrue(try marked("Isaiah 41:12", "H582")
+            .contains("not find them, even [them] that contended"))
 
-        // One letter, and the word only: not the i in "saith", "him", "life".
-        XCTAssertEqual(marked(["G1473"], wordMap: john14v6Words, in: john14v6), ["I"])
-        // A tagged run of words is marked whole.
-        XCTAssertEqual(marked(["G846"], wordMap: john14v6Words, in: john14v6), ["unto him"])
-        // Every run of words under the number, in the verse's order.
-        XCTAssertEqual(
-            marked(["G3588"], wordMap: john14v6Words, in: john14v6),
-            ["Jesus", "the way", "the truth", "the life", "the Father"]
-        )
-        // No word of the verse carries the number: nothing to mark.
-        XCTAssertEqual(marked(["G9999"], wordMap: john14v6Words, in: john14v6), [])
-
-        // The divine name, which the index stores in markup.
-        let genesis2v4 = "These are the generations of the heavens and of the earth when"
-            + " they were created, in the day that the LORD God made the earth and the"
-            + " heavens,"
-        let genesis2v4Words = [
-            "These\tH0428 H428",
-            "the generations\tH08435 H8435",
-            "of the heavens\tH08064 H8064",
-            "and of the earth\tH0776 H776",
-            "when they were created\tH01254 H1254",
-            "in the day\tH03117 H3117",
-            "that the <divineName>Lord</divineName>\tH03068 H3068",
-            "God\tH0430 H430",
-            "made\tH06213 H6213",
-            "the earth\tH0776 H776",
-            "and the heavens\tH08064 H8064",
-        ].joined(separator: "\n")
-        let lord: Set<String> = ["H03068", "H3068"]
-
-        XCTAssertEqual(
-            PSSearchEngine.surfaceWords(inWordMap: genesis2v4Words, taggedWith: lord),
-            ["that the Lord"],
-            "the surface word still carries the index's markup"
-        )
-        XCTAssertEqual(marked(lord, wordMap: genesis2v4Words, in: genesis2v4),
-                       ["that the LORD"])
+        // The divine name, which the index stores in markup, marked whole.
+        XCTAssertTrue(try marked("Genesis 2:4", "H3068")
+            .contains("in the day [that the LORD] God made"))
         // Two runs of words under one number, each where it is in the verse.
-        XCTAssertEqual(
-            marked(["H0776", "H776"], wordMap: genesis2v4Words, in: genesis2v4),
-            ["and of the earth", "the earth"]
-        )
+        XCTAssertTrue(try marked("Genesis 2:4", "H776")
+            .contains("heavens [and of the earth] when they were created, in the day"
+                      + " that the LORD God made [the earth] and the heavens"))
+        // One letter, and the word only.
+        let john14v6 = try marked("John 14:6", "G1473")
+        XCTAssertTrue(john14v6.hasPrefix("Jesus saith unto him, [I] am the way"), john14v6)
+        XCTAssertEqual(john14v6.filter { $0 == "[" }.count, 1, john14v6)
+        // A tagged run of words is marked whole.
+        XCTAssertTrue(try marked("John 14:6", "G846").hasPrefix("Jesus saith [unto him], I am"))
 
-        // A word of a Psalm's title is in the word map and not in the row's
-        // text. It marks nothing, and the name beside it is still found.
-        let psalms3v1 = "LORD, how are they increased that trouble me! many are they that"
-            + " rise up against me."
-        let psalms3v1Words = [
-            "A Psalm\tH04210 H4210",
-            "of David\tH01732 H1732",
-            "<divineName>Lord</divineName>\tH03068 H3068",
-            "how are they increased\tH07231 H7231",
-        ].joined(separator: "\n")
-        XCTAssertEqual(marked(["H04210", "H4210"], wordMap: psalms3v1Words, in: psalms3v1), [])
-        XCTAssertEqual(marked(lord, wordMap: psalms3v1Words, in: psalms3v1), ["LORD"])
+        // A word of a Psalm's title is in its first verse's word map and not
+        // in the row's text, so the row brings the title with its marks.
+        let psalm = try row("Psalms 3:1", "H4210")
+        XCTAssertEqual(psalm.strongsMarks, [])
+        XCTAssertEqual(psalm.strongsHeadings.map(\.text),
+                       ["A Psalm of David, when he fled from Absalom his son."])
+        if let title = psalm.strongsHeadings.first {
+            XCTAssertTrue(drawn(title.text, marks: title.marks).hasPrefix("[A Psalm] of David"))
+        }
+        XCTAssertTrue(psalm.isMarkedByStrongs)
+        // A number that tags nothing of the title brings no title.
+        let lord = try row("Psalms 3:1", "H3068")
+        XCTAssertEqual(lord.strongsHeadings, [])
+        XCTAssertTrue(drawn(lord.text ?? "", marks: lord.strongsMarks).hasPrefix("[LORD], how"))
 
-        // Which terms a row marks is the row's to say: its own words when it
-        // has any — a Strong's search has no terms, and whatever the list holds
-        // is some other query's — and the query's terms when it has none, as
-        // every row of a text search does.
+        // Which terms a row marks is the row's to say: none of the query's
+        // when a Strong's search marked it — a Strong's search has no terms,
+        // and whatever the list holds is some other query's — and the query's
+        // when it holds no marks, as every row of a text search does.
         let query: [SearchHighlightTerm] = ["the", SearchHighlightTerm("lov", matchesPrefix: true)]
-        let strongsRow = SearchResultRow(
-            reference: "Genesis 2:4",
-            text: genesis2v4,
-            strongsHighlightWords: PSSearchEngine.surfaceWords(
-                inWordMap: genesis2v4Words, taggedWith: lord)
-        )
-        XCTAssertEqual(strongsRow.highlightTerms(orQuery: []), ["that the Lord"])
-        XCTAssertEqual(strongsRow.highlightTerms(orQuery: query), ["that the Lord"])
-        let textRow = SearchResultRow(
-            reference: "Genesis 2:4", text: genesis2v4, strongsHighlightWords: [])
-        XCTAssertEqual(textRow.strongsHighlightTerms, [])
+        let strongsRow = try row("Genesis 2:4", "H3068")
+        XCTAssertTrue(strongsRow.isMarkedByStrongs)
+        XCTAssertEqual(strongsRow.highlightTerms(orQuery: query), [])
+        XCTAssertEqual(psalm.highlightTerms(orQuery: query), [],
+                       "a row marked in its title alone is still a Strong's row")
+        let textRow = SearchResultRow(reference: "Genesis 2:4", text: strongsRow.text)
+        XCTAssertFalse(textRow.isMarkedByStrongs)
         XCTAssertEqual(textRow.highlightTerms(orQuery: query), query)
         XCTAssertEqual(textRow.highlightTerms(orQuery: []), [])
         // A Strong's row whose word map has no word for the number (683 of
-        // G3588's rows) has nothing of its own to mark and nothing to borrow.
-        let bare = SearchResultRow(
-            reference: "John 14:6",
-            text: john14v6,
-            strongsHighlightWords: PSSearchEngine.surfaceWords(
-                inWordMap: john14v6Words, taggedWith: ["G9999"])
-        )
+        // G3588's rows) has nothing of its own to mark, and a Strong's search
+        // has no terms to lend it.
+        let bare = try row("John 14:6", "G9999")
+        XCTAssertFalse(bare.isMarkedByStrongs)
         XCTAssertEqual(bare.highlightTerms(orQuery: []), [])
     }
 

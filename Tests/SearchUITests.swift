@@ -256,7 +256,48 @@ final class SearchUITests: SimpleScriptureUITestCase {
         )
     }
 
+    /// A Strong's row whose number tags a word of a Psalm's title shows the
+    /// title, above the verse (issue #34).
+    ///
+    /// The index holds no title text, and the row a search for H4210 ("A
+    /// Psalm") listed for Psalms 3:1 was the verse alone, "LORD, how are they
+    /// increased…", with nothing marked, as were all 57 of H4210's rows. The
+    /// row now brings the title it marks (`PSSearchResult.strongsHeadings`).
+    /// The marks are attributes, which no XCUITest can see
+    /// (`testAStrongsRowMarksEachTaggedWordWhereItsChapterDoes` pins them); the
+    /// title is text, in the row's label.
+    @MainActor
+    func testAStrongsRowShowsTheTitleItsNumberTags() throws {
+        _ = search(for: "H4210")
+        turnOnStrongsSearch()
+
+        let row = app.buttons["search.result.Psalms 3:1"]
+        XCTAssertTrue(row.waitForExistence(timeout: 15),
+                      "H4210 lists no Psalms 3:1.")
+        XCTAssertTrue(
+            row.label.contains("A Psalm of David, when he fled from Absalom his son."),
+            "The row for Psalms 3:1 shows no title: \"\(row.label)\"."
+        )
+        XCTAssertTrue(row.label.contains("LORD, how are they increased"),
+                      "The row for Psalms 3:1 lost its verse: \"\(row.label)\".")
+    }
+
     // MARK: - Helpers
+
+    /// Turns on the Strong's option in the search options menu, which the
+    /// field's text is then searched as. It is not saved, so every launch
+    /// starts with it off.
+    @MainActor
+    private func turnOnStrongsSearch() {
+        let options = app.buttons["search.options"]
+        XCTAssertTrue(options.waitForExistence(timeout: 5))
+        options.tap()
+        // A menu row exposes its label, not an identifier.
+        let strongs = app.descendants(matching: .any)["Strong's Numbers"].firstMatch
+        XCTAssertTrue(strongs.waitForExistence(timeout: 5),
+                      "The search options offer no Strong's Numbers.")
+        strongs.tap()
+    }
 
     /// Opens Search and types `query` into its field, which is returned still
     /// holding the keyboard focus.

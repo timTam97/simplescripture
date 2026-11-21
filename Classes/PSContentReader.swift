@@ -219,12 +219,27 @@ final class PSContentReader: NSObject {
     ///
     /// `PSChapterDocumentParityTests` asserts this agrees with `chapterBody` on
     /// text, verse identity, `entryCount` and every link target.
+    ///
+    /// `onlyVerses` builds those slots and no others — in a Bible a slot is its
+    /// verse — for a caller that wants a few verses of many chapters rather than
+    /// a chapter: a Strong's search marks its rows through a copy of every
+    /// chapter they are in (`PSSearchEngine.markStrongsWords`), and built whole,
+    /// those copies took up to three times as long: 92–313 ms against 54–103
+    /// for a list of 1,001 (MEASURED 2026-11-21, `-O`).
+    /// Every other slot is handed to the builder empty, which it skips as it
+    /// skips any empty slot, so a verse keeps its number and its headings and
+    /// `entryCount` is the chapter's. One thing differs: a verse that repeats
+    /// the one before it is built, where the whole chapter skips it. The KJV
+    /// has none — `testTheReadersWordsAreTheWordsTheSearchMatched` finds every
+    /// verse of the index in the chapter at both option endpoints. Nil, the
+    /// render path, builds the chapter.
     func chapterDocument(module: String,
                          ref: String,
                          kind: PSChapterAssembler.ModuleKind,
                          options: PSChapterExpander.Options? = nil,
                          applyBookmarkHighlights: Bool = true,
-                         reportFailures: Bool = true) -> ChapterDocument? {
+                         reportFailures: Bool = true,
+                         onlyVerses: Set<Int>? = nil) -> ChapterDocument? {
         guard let store, let resolver else {
             PSContentStore.fail("reader is unavailable", report: reportFailures)
             return nil
@@ -259,8 +274,15 @@ final class PSContentReader: NSObject {
             ? PSRefHelper.createRefString(ref)
             : nil
 
+        var slots = records.records
+        if let onlyVerses {
+            for slot in slots.indices where !onlyVerses.contains(slot) {
+                slots[slot] = ""
+            }
+        }
+
         return PSChapterDocumentBuilder.build(
-            records: records.records,
+            records: slots,
             headings: headings,
             config: config,
             options: opts,

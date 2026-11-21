@@ -457,8 +457,8 @@ final class PSSearchQuery: NSObject {
     /// letter or digit in it (`--`) matches nothing and is left out.
     ///
     /// Empty for a Strong's search: the match is a lemma, not text in the
-    /// verse. A result row marks the verse's tagged words instead
-    /// (`PSSearchResult.strongsHighlightWords`).
+    /// verse. A result row marks the verse's tagged words instead, each where
+    /// the number tags it (`PSSearchResult.strongsMarks`).
     class func highlightTerms(fromUserInput raw: String,
                               matchType: PSSearchType,
                               fuzzy: Bool,
@@ -758,8 +758,8 @@ final class PSSearchQuery: NSObject {
     /// So every line is found in turn, each from where the one before it
     /// ended, and only the lines tagged with the number are marked. John 3:16
     /// has "that" under G5620 and again under G2443, and a search for either
-    /// marks the one it tagged; the result row, which has only the surface
-    /// words, marks both (`PSSearchEngine.surfaceWords`).
+    /// marks the one it tagged — in the chapter, and in the result row, which
+    /// is marked by this walk too (`PSSearchEngine.markStrongsWords`).
     ///
     /// **A line is found only where the chapter's own Strong's marker for one of
     /// its numbers follows it** (`tagged`, the same texts read with the numbers
@@ -1014,7 +1014,7 @@ struct PSWordMapLine: Equatable {
     /// As the verse prints it, with the column's markup taken off. The column
     /// carries one tag, around the divine name (`that the
     /// <divineName>Lord</divineName>`), and with it on the surface is in no
-    /// verse — see `PSSearchEngine.surfaceWords`.
+    /// verse — see `lines(in:)`.
     let surface: String
     let lemmas: [String]
 
@@ -1026,6 +1026,17 @@ struct PSWordMapLine: Equatable {
 
     /// The lines of a `word_map`, in order. A line with no tab, no surface once
     /// its markup is off, or no lemmas is not one.
+    ///
+    /// **The surface is read as words, with its markup taken off.** The column
+    /// carries one tag, around the divine name: Genesis 2:4 has `that the
+    /// <divineName>Lord</divineName>` for H3068, where the verse reads "that
+    /// the LORD God made". Read as stored, the surface is in no verse, tags and
+    /// all. MEASURED on the KJV index (6,878 of 349,514 lines carry the tag):
+    /// before the markup came off, a search for H3068 listed 5,521 verses and
+    /// marked a word in one of them; H3069 in none of 295.
+    ///
+    /// Read-side only. The column is as the store ships it and as the index
+    /// digest pins it.
     static func lines(in map: String) -> [PSWordMapLine] {
         var lines: [PSWordMapLine] = []
         for line in map.components(separatedBy: "\n") {
@@ -1033,9 +1044,15 @@ struct PSWordMapLine: Equatable {
             let lemmas = line[tab.upperBound...]
                 .components(separatedBy: " ")
                 .filter { !$0.isEmpty }
-            let surface = String(line[line.startIndex..<tab.lowerBound])
-                .replacingOccurrences(of: "<[^>]*>", with: "",
-                                      options: .regularExpression)
+            var surface = String(line[line.startIndex..<tab.lowerBound])
+            // Only a surface with a tag in it goes through the expression,
+            // which 6,878 of the 349,514 lines have. MEASURED 2026-11-21
+            // (`-O`): reading the 1,001 word maps a Strong's search lists took
+            // 18–25 ms with every surface through it, 11–15 ms like this.
+            if surface.contains("<") {
+                surface = surface.replacingOccurrences(of: "<[^>]*>", with: "",
+                                                       options: .regularExpression)
+            }
             if surface.isEmpty || lemmas.isEmpty { continue }
             lines.append(PSWordMapLine(surface: surface, lemmas: lemmas))
         }

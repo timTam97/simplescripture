@@ -1900,8 +1900,10 @@ final class PSChapterDocumentParityTests: XCTestCase {
     /// Through the reader's own steps (`ChapterTextRenderer.annotatingStrongs` over
     /// the chapter built with the numbers on, then the jacket the row views
     /// draw), so this is what the reader shows. Most of the cases are verses
-    /// where marking the row's words wherever they stand would mark one too
-    /// many (`PSSearchEngine.surfaceWords`, which the row has).
+    /// where marking the tagged words wherever they stand would mark one too
+    /// many, as the result row did before issue #34
+    /// (`testAStrongsRowMarksEachTaggedWordWhereItsChapterDoes` holds the row
+    /// to the same cases).
     @MainActor
     func testAStrongsResultsChapterMarksEachTaggedWordWhereItStands() throws {
         let reader = PSContentReader.shared
@@ -1980,6 +1982,188 @@ final class PSChapterDocumentParityTests: XCTestCase {
         XCTAssertFalse(try drawn("Genesis 1", 1, ["G2316"]).contains("["))
         XCTAssertEqual(try drawn("Genesis 1", 1, ["H0430", "H430"]),
                        "In the beginning [God] created the heaven and the earth.")
+    }
+
+    /// A Strong's search's row marks what the chapter it opens marks: the same
+    /// words, at the same places, in the verse and in its title (issue #34).
+    ///
+    /// The row is marked from the index (`PSSearchEngine.markStrongsWords`):
+    /// the verse's text as the index holds it, with no markers, and its word
+    /// map, walked through a copy of the listed verses built with the numbers
+    /// on. The reader is marked from the chapter as drawn, numbers off, walked
+    /// through the whole chapter built with them on
+    /// (`ChapterTextRenderer.annotatingStrongs`). This holds the two to each
+    /// other over every verse of the chapter at once — every number in it
+    /// searched for, so every line with a number is marked — compared by the
+    /// places among each text's words that the marks cover. Not by string: the
+    /// reader parts "L" + small "ORD" into two marks, and the row has one.
+    ///
+    /// Before, the row marked each tagged spelling wherever it stood, and a
+    /// word of a Psalm's title nowhere. MEASURED 2026-11-21, a search for each
+    /// number of each verse: of the KJV's 318,036 (verse, number) pairs, the
+    /// row marked words the number does not tag in 10,228 (3.2%) — always as
+    /// well as the ones it does — and in 422 the number tags a word of the
+    /// verse's title, which was not marked.
+    ///
+    /// The default tier walks the sample chapters; `PSDOC_EXHAUSTIVE=1` walks
+    /// every chapter.
+    func testAStrongsRowMarksWhatItsChapterMarks() throws {
+        let store = try store()
+        let resolver = try resolver()
+        let refs: [String] = Self.isExhaustive
+            ? resolver.books.flatMap { book in
+                (1...book.chapterCount).map { "\(book.name) \($0)" }
+            }
+            : Self.sampleRefs
+
+        // The index's rows, as the build makes them, by chapter.
+        var wanted = Set<String>()
+        for ref in refs {
+            let (book, chapter) = try XCTUnwrap(resolver.resolve(ref: ref), ref)
+            wanted.insert("\(book.osisName) \(chapter)")
+        }
+        var rows: [String: [(ref: String, verse: Int, text: String, map: String)]] = [:]
+        let cursor = store.verseCursor(module: "KJV")
+        while let row = cursor.next() {
+            let ref = row.osisRef
+            guard let colon = ref.lastIndex(of: ":"),
+                  let space = ref[..<colon].lastIndex(of: " "),
+                  let chapter = Int(ref[ref.index(after: space)..<colon]),
+                  let verse = Int(ref[ref.index(after: colon)...]) else {
+                return XCTFail("cannot read the reference of an index row: \(ref)")
+            }
+            let key = "\(row.bookOsis) \(chapter)"
+            guard wanted.contains(key) else { continue }
+            let plain = PSSearchQuery.cleanDisplayText(row.textPlain)
+            if plain.isEmpty { continue }
+            rows[key, default: []].append((ref, verse, plain, row.wordMap))
+        }
+        XCTAssertFalse(cursor.failed, "the store's verse cursor stopped early")
+
+        /// The places among `text`'s words that `ranges` cover, in order. A
+        /// range that ends where the next begins is one: the reader's marks
+        /// part at a run.
+        func places(_ ranges: [Range<String.Index>], in text: String) -> [Int] {
+            var merged: [Range<String.Index>] = []
+            for range in ranges.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+                if let last = merged.last, last.upperBound == range.lowerBound {
+                    merged[merged.count - 1] = last.lowerBound..<range.upperBound
+                } else {
+                    merged.append(range)
+                }
+            }
+            var out = Set<Int>()
+            for range in merged {
+                let first = SearchHighlightTerm(String(text[..<range.lowerBound])).tokens.count
+                let count = SearchHighlightTerm(String(text[range])).tokens.count
+                out.formUnion(first..<(first + count))
+            }
+            return out.sorted()
+        }
+        /// A row's marks, UTF-16 offsets, as ranges of its text.
+        func rowRanges(_ marks: [Range<Int>], in text: String) -> [Range<String.Index>] {
+            marks.compactMap {
+                Range(NSRange(location: $0.lowerBound, length: $0.count), in: text)
+            }
+        }
+        /// The reader's marks, unicode-scalar offsets of the runs as drawn, as
+        /// ranges of that text.
+        func readerRanges(_ marks: [Range<Int>], in text: String) -> [Range<String.Index>] {
+            let scalars = text.unicodeScalars
+            return marks.map {
+                let start = scalars.index(scalars.startIndex, offsetBy: $0.lowerBound)
+                return start..<scalars.index(start, offsetBy: $0.count)
+            }
+        }
+
+        let reader = PSContentReader.shared
+        var marks = 0
+        var titleMarks = 0
+        for ref in refs {
+            let (book, chapter) = try XCTUnwrap(resolver.resolve(ref: ref), ref)
+            let chapterRows = try XCTUnwrap(rows["\(book.osisName) \(chapter)"], ref)
+            let on = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOn, applyBookmarkHighlights: false), ref)
+            let off = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOff, applyBookmarkHighlights: false), ref)
+
+            // Every number the chapter's markers carry, so every line is marked.
+            var numbers = Set<String>()
+            for verse in on.verses {
+                for runs in verse.headings.filter(\.isCanonical).map(\.runs) + [verse.runs] {
+                    for marked in ChapterTextRenderer.strongsTaggedWords(of: runs)
+                        .markers.values {
+                        numbers.formUnion(marked)
+                    }
+                }
+            }
+
+            // The row's side, as `runQuery` marks the rows it lists.
+            let results = chapterRows.map {
+                PSSearchResult(reference: $0.ref, fullText: $0.text)
+            }
+            PSSearchEngine.markStrongsWords(
+                in: results, wordMaps: chapterRows.map(\.map),
+                numbers: numbers, module: "KJV")
+
+            // The reader's side, as a Strong's result's chapter is drawn.
+            let drawn = ChapterTextRenderer.annotatingStrongs(
+                highlighting: numbers, linkingWords: false,
+                wordMaps: reader.wordMaps(module: "KJV", ref: ref),
+                taggedIn: on, in: off)
+            let verses = Dictionary(drawn.verses.map { ($0.number, $0) },
+                                    uniquingKeysWith: { first, _ in first })
+
+            for (row, result) in zip(chapterRows, results) {
+                let label = row.ref
+                let verse = try XCTUnwrap(verses[row.verse], label)
+                XCTAssertFalse(verse.runs.contains(where: \.isMarker),
+                               "\(label): the chapter drawn with every option off has a marker")
+                let shown = verse.runs.map(\.text).joined()
+                let rowPlaces = places(rowRanges(result.strongsMarks, in: row.text),
+                                       in: row.text)
+                let readerPlaces = places(readerRanges(verse.strongsMarks, in: shown),
+                                          in: shown)
+                guard rowPlaces == readerPlaces else {
+                    return XCTFail("""
+                        \(label): the row marks other words than its chapter.
+                          row:    \(rowPlaces) of "\(row.text)"
+                          reader: \(readerPlaces)
+                        """)
+                }
+                marks += result.strongsMarks.count
+
+                // The title, where the number tags a word of it.
+                let titles = verse.headings.filter { $0.isCanonical && !$0.strongsMarks.isEmpty }
+                guard result.strongsHeadings.count == titles.count else {
+                    return XCTFail("""
+                        \(label): the row has \(result.strongsHeadings.count) marked titles, \
+                        its chapter \(titles.count).
+                        """)
+                }
+                for (heading, title) in zip(result.strongsHeadings, titles) {
+                    let text = title.runs.map(\.text).joined()
+                    XCTAssertEqual(SearchHighlightTerm(heading.text).tokens,
+                                   SearchHighlightTerm(text).tokens,
+                                   "\(label): the row's title is not its chapter's")
+                    XCTAssertEqual(
+                        places(rowRanges(heading.marks, in: heading.text), in: heading.text),
+                        places(readerRanges(title.strongsMarks, in: text), in: text),
+                        "\(label): the row marks other words of its title than its chapter")
+                    marks += heading.marks.count
+                    titleMarks += heading.marks.count
+                }
+            }
+        }
+        // Every line with a number, as `testTheReaderMarksTheWordsAStrongsNumberTags`
+        // counts them: 2,823 in the sample chapters, 8 of them in titles.
+        XCTAssertEqual(marks, Self.isExhaustive ? 349_513 : 2_823)
+        if !Self.isExhaustive {
+            XCTAssertEqual(titleMarks, 6 + 2,
+                           "Psalms 3's title is six lines of its map, Psalms 23's two")
+        }
     }
 
     // MARK: - Underlined Words' links
