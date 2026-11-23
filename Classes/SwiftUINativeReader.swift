@@ -150,11 +150,12 @@ enum ChapterTextRenderer {
     /// Painting the bookmark colour over the finished string would repaint the whole
     /// verse and erase every match. It lives here rather than in the two row views
     /// so there is one copy and one order.
-    static func text(for verse: ChapterVerse, style: Style) -> AttributedString {
+    static func text(for verse: ChapterVerse, style: Style,
+                     flashing flash: Int? = nil) -> AttributedString {
         var out = attributed(runs: verse.runs, style: style)
         // Underlined Words' links go on first: the bookmark colour and the
         // jackets paint over them as over any text.
-        linkStrongsWords(verse.strongsWords, in: &out)
+        linkStrongsWords(verse.strongsWords, flashing: flash, in: &out)
         if let colour = verse.highlightColour,
            let background = Color(bookmarkRGBAString: colour),
            let last = out.characters.lastIndex(where: { !$0.isWhitespace }) {
@@ -202,7 +203,8 @@ enum ChapterTextRenderer {
     /// Here rather than in `ParagraphRow` so the join can be read without a view
     /// host. Pinned by `testFlowedVersesAreSpacedAndNumbersStayWithTheirVerse`.
     static func flowedPieces(
-        for paragraph: ChapterParagraph, style: Style, tappable: Bool
+        for paragraph: ChapterParagraph, style: Style, tappable: Bool,
+        flashing flash: Int? = nil
     ) -> [(verse: Int, text: AttributedString)] {
         var pieces: [(verse: Int, text: AttributedString)] = []
         for verse in paragraph.verses {
@@ -212,7 +214,7 @@ enum ChapterTextRenderer {
             }
             // The bookmark highlight is applied UNDER the search jacket — see
             // `text(for:style:)`.
-            piece += text(for: verse, style: style)
+            piece += text(for: verse, style: style, flashing: flash)
             pieces.append((verse: verse.number, text: piece))
         }
         var gap = AttributedString(" ")
@@ -434,6 +436,7 @@ enum ChapterTextRenderer {
         }
 
         var annotated = document
+        var nextWordID = 0
         for index in annotated.verses.indices {
             var verse = annotated.verses[index]
             verse.strongsMarks = []
@@ -480,9 +483,12 @@ enum ChapterTextRenderer {
                                         pieces.append(range)
                                     }
                                 }
+                                let id = nextWordID
+                                nextWordID += 1
                                 links += pieces.map {
                                     StrongsWordLink(range: $0, numbers: word.numbers,
-                                                    isUnderlined: underliningWords)
+                                                    isUnderlined: underliningWords,
+                                                    id: id)
                                 }
                             }
                         }
@@ -516,6 +522,7 @@ enum ChapterTextRenderer {
     /// underline is grey whatever the text's colour, a lighter mark than the
     /// text so a page of tagged words still reads as text.
     static func linkStrongsWords(_ words: [StrongsWordLink],
+                                 flashing flash: Int? = nil,
                                  in text: inout AttributedString) {
         guard !words.isEmpty else { return }
         guard words.allSatisfy({ $0.range.lowerBound >= 0 }),
@@ -525,7 +532,8 @@ enum ChapterTextRenderer {
             return
         }
         for word in words where !word.range.isEmpty {
-            guard let url = InlineLink.strongsWord(numbers: word.numbers).url else {
+            guard let url = InlineLink.strongsWordURL(numbers: word.numbers,
+                                                      id: word.id) else {
                 continue
             }
             // Indices made at the point of use, one word at a time: each
@@ -544,6 +552,12 @@ enum ChapterTextRenderer {
                     pattern: .solid, color: .secondary
                 )
             }
+            // The word just tapped (`ReaderPaneModel.flashStrongsWord`). Drawn
+            // here, with the link, so the bookmark colour and the search jacket
+            // go over it as over the underline.
+            if word.id == flash {
+                text[start..<end].backgroundColor = Color.accentColor.opacity(0.35)
+            }
         }
     }
 
@@ -558,13 +572,14 @@ enum ChapterTextRenderer {
     ///
     /// All the heading text in the corpus already arrives bold from its title token;
     /// inserting it here is what stops a heading depending on that.
-    static func text(for heading: ChapterHeading, style: Style) -> AttributedString {
+    static func text(for heading: ChapterHeading, style: Style,
+                     flashing flash: Int? = nil) -> AttributedString {
         var out = attributed(runs: heading.runs.map { run in
             var run = run
             run.style.insert(.bold)
             return run
         }, style: style)
-        linkStrongsWords(heading.strongsWords, in: &out)
+        linkStrongsWords(heading.strongsWords, flashing: flash, in: &out)
         // A Psalm's title is tagged like its verses, and a Strong's result
         // marks it too. A text search never matches it: the index has no
         // title text.
@@ -863,6 +878,9 @@ private extension View {
                 // `sword://` scripture links arrive here.
                 return .systemAction
             }
+            if let word = InlineLink.strongsWordID(of: url) {
+                pane.flashStrongsWord(word)
+            }
             pane.handle(link: link)
             return .handled
         })
@@ -1024,7 +1042,8 @@ private struct ParagraphRow: View {
     private var flowed: Text {
         var out = Text("")
         for piece in ChapterTextRenderer.flowedPieces(
-            for: paragraph, style: style, tappable: pane.mode == .bible
+            for: paragraph, style: style, tappable: pane.mode == .bible,
+            flashing: pane.flashedStrongsWord
         ) {
             let verseText = Text(piece.text).customAttribute(
                 VerseTextAttribute(verse: piece.verse)
@@ -1069,7 +1088,8 @@ private struct VerseRow: View {
             )
             out += AttributedString(" ")
         }
-        out += ChapterTextRenderer.text(for: verse, style: style)
+        out += ChapterTextRenderer.text(for: verse, style: style,
+                                        flashing: pane.flashedStrongsWord)
         return out
     }
 }
@@ -1084,7 +1104,8 @@ private struct HeadingRow: View {
     let style: ChapterTextRenderer.Style
 
     var body: some View {
-        Text(ChapterTextRenderer.text(for: heading, style: style))
+        Text(ChapterTextRenderer.text(for: heading, style: style,
+                                      flashing: pane.flashedStrongsWord))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, style.fontSize * 0.7)
             .padding(.bottom, style.fontSize * 0.3)

@@ -2419,14 +2419,14 @@ final class PSChapterDocumentParityTests: XCTestCase {
         let god = try XCTUnwrap(painted.range(of: "God"))
         XCTAssertEqual(painted[god].backgroundColor, .yellow)
         XCTAssertEqual(
-            painted[god].link,
-            InlineLink.strongsWord(numbers: ["H0430"]).url
+            painted[god].link.flatMap { InlineLink(url: $0) },
+            .strongsWord(numbers: ["H0430"])
         )
         let created = try XCTUnwrap(painted.range(of: "created"))
         XCTAssertNotNil(painted[created].backgroundColor)
         XCTAssertEqual(
-            painted[created].link,
-            InlineLink.strongsWord(numbers: ["H0853", "H01254"]).url
+            painted[created].link.flatMap { InlineLink(url: $0) },
+            .strongsWord(numbers: ["H0853", "H01254"])
         )
     }
 

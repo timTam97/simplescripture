@@ -4327,7 +4327,12 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(strongs, "strongsPreference_KJV")
         XCTAssertEqual(underline, "strongsUnderlinePreference_KJV")
 
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults), .off)
+        // Nothing stored: the reader has never chosen, and gets the default.
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
+                       .invisible)
+        defaults.set(false, forKey: strongs)
+        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults), .off,
+                       "An explicit Off wins over the default")
         defaults.set(true, forKey: strongs)
         XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
                        .numbers)

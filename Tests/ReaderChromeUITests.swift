@@ -334,7 +334,7 @@ final class ReaderChromeUITests: SimpleScriptureUITestCase {
             app.buttons["reading.reference-picker"].waitForExistence(timeout: 20),
             "SimpleScripture did not finish initialization."
         )
-        let word = app.links["pslink://strongsword/H07225"]
+        let word = strongsWordLink("pslink://strongsword/H07225")
         let marker = app.links["pslink://strongs/Hebrew/07225"]
 
         chooseStrongsDisplay("Underlined Words")

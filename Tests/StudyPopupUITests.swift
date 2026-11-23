@@ -154,7 +154,7 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
     @MainActor
     func testUnderlinedWordOpensItsLexiconEntry() throws {
         openGenesis1WithStrongsNumbers(underlined: true)
-        let word = app.links["pslink://strongsword/H07225"]
+        let word = strongsWordLink("pslink://strongsword/H07225")
         XCTAssertTrue(
             word.waitForExistence(timeout: 10),
             "Genesis 1:1's \"In the beginning\" is not a link in Underlined Words"
@@ -183,7 +183,7 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
     @MainActor
     func testAWordWithSeveralNumbersOffersEach() throws {
         openGenesis1WithStrongsNumbers(underlined: true)
-        let word = app.links["pslink://strongsword/H0853/H01254"]
+        let word = strongsWordLink("pslink://strongsword/H0853/H01254")
         XCTAssertTrue(
             word.waitForExistence(timeout: 10),
             "Genesis 1:1's \"created\" is not one link to H0853 and H01254"

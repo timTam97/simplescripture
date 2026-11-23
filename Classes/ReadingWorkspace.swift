@@ -1177,6 +1177,28 @@ final class ReaderPaneModel {
         route(link)
     }
 
+    /// The Strong's word (`StrongsWordLink.id`) being flashed after a tap, nil
+    /// when none is. The rows read it, so setting it redraws them with the word
+    /// highlighted.
+    var flashedStrongsWord: Int?
+    @ObservationIgnored private var strongsFlashGeneration = 0
+
+    /// How long a tapped word stays highlighted.
+    static let strongsFlashDuration: Duration = .milliseconds(450)
+
+    /// Highlights the word a tap landed on for a moment, so the reader can see
+    /// which one it was. A second tap before the first has faded moves it.
+    func flashStrongsWord(_ id: Int) {
+        strongsFlashGeneration += 1
+        let generation = strongsFlashGeneration
+        flashedStrongsWord = id
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.strongsFlashDuration)
+            guard let self, self.strongsFlashGeneration == generation else { return }
+            self.flashedStrongsWord = nil
+        }
+    }
+
     /// Writes the verse and scroll offset this pane is showing, and retitles the
     /// chrome. The persisted offset is `"%d"` of a `CGFloat` — a truncated integer
     /// in a string.

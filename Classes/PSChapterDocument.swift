@@ -71,6 +71,26 @@ enum InlineLink: Equatable, Hashable {
     /// renderer attaches it to the word. Never empty.
     case strongsWord(numbers: [String])
 
+    /// The link a word in Underlined Words / Invisible carries: `url`, with the
+    /// word's own place in the chapter as a query (`?at=<id>`,
+    /// `StrongsWordLink.id`). `InlineLink(url:)` ignores the query, so the
+    /// link means what `.strongsWord(numbers:)` does; the query is how a tap
+    /// says which of a chapter's equal words it landed on.
+    static func strongsWordURL(numbers: [String], id: Int) -> URL? {
+        guard let url = InlineLink.strongsWord(numbers: numbers).url,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.queryItems = [URLQueryItem(name: "at", value: String(id))]
+        return components.url
+    }
+
+    /// The word a `strongsWordURL` names, nil for any other link.
+    static func strongsWordID(of url: URL) -> Int? {
+        guard url.scheme == "pslink", url.host == "strongsword" else { return nil }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+        return items?.first { $0.name == "at" }?.value.flatMap { Int($0) }
+    }
+
     /// A compact URL for this link.
     ///
     /// SwiftUI only makes a span of `Text` tappable through
@@ -233,6 +253,11 @@ struct StrongsWordLink: Equatable, Hashable {
     /// Whether the word is drawn underlined: Underlined Words yes, Invisible
     /// (`StrongsDisplay.invisible`) no. Either way it is a link.
     var isUnderlined = true
+    /// Which word this is among the document's, so that a tap can say which
+    /// instance it landed on (`InlineLink.strongsWordURL(numbers:id:)`), and
+    /// the reader flash that one. Set by `annotatingStrongs`, counting from 0
+    /// over the chapter; both halves of a word a marker splits share it.
+    var id = 0
 }
 
 /// One verse row: the unit the `LazyVStack` renders and scrolls to.

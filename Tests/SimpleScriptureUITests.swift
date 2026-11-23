@@ -20,6 +20,15 @@ import XCTest
 class SimpleScriptureUITestCase: XCTestCase {
     var app: XCUIApplication!
 
+    /// The link a word carries in Underlined Words or Invisible. Its identifier is
+    /// its `pslink://strongsword/…` URL with the word's place in the chapter as a
+    /// query (`?at=n`), so a word is found by the numbers it opens.
+    func strongsWordLink(_ numbersURL: String) -> XCUIElement {
+        app.links.matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", numbersURL + "?")
+        ).firstMatch
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
 
