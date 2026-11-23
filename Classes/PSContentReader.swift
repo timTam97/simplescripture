@@ -389,13 +389,15 @@ final class PSContentReader: NSObject {
     }
 }
 
-/// How a module's Strong's numbers are shown: the reader's three-way choice.
+/// How a module's Strong's numbers are shown: the reader's four-way choice.
 ///
-/// **Two per-module keys, not one.** `strongsPreference` (Bool) is whether
+/// **Three per-module keys, not one.** `strongsPreference` (Bool) is whether
 /// Strong's is shown at all, exactly as it always was, so every saved value and
 /// every `-strongsPreference_KJV YES` launch argument keeps its meaning.
 /// `strongsUnderlinePreference` (Bool, absent reads as off) picks underlined
 /// words over the numbers, and means nothing while the first is off.
+/// `strongsInvisiblePreference` (Bool, absent reads as off) makes those words
+/// links with no underline, and wins over the underline key.
 enum StrongsDisplay: String, CaseIterable, Identifiable {
     /// No markers and no links.
     case off
@@ -406,6 +408,12 @@ enum StrongsDisplay: String, CaseIterable, Identifiable {
     /// stand on (John 3:16's leading articles) is not reachable this way;
     /// Numbers shows it.
     case words
+    /// As `words`, in every respect but one: the words are links and carry no
+    /// underline, so nothing on the page says they can be tapped.
+    case invisible
+
+    /// Whether the tagged words are drawn as links (`words`, `invisible`).
+    var linksWords: Bool { self == .words || self == .invisible }
 
     var id: String { rawValue }
 
@@ -415,6 +423,7 @@ enum StrongsDisplay: String, CaseIterable, Identifiable {
         case .off: "PreferencesStrongsDisplayOff"
         case .numbers: "PreferencesStrongsDisplayNumbers"
         case .words: "PreferencesStrongsDisplayWords"
+        case .invisible: "PreferencesStrongsDisplayInvisible"
         }
     }
 
@@ -423,6 +432,9 @@ enum StrongsDisplay: String, CaseIterable, Identifiable {
         guard defaults.psBool(Defaults.strongsPreference, forModule: module) else {
             return .off
         }
+        if defaults.psBool(Defaults.strongsInvisiblePreference, forModule: module) {
+            return .invisible
+        }
         return defaults.psBool(Defaults.strongsUnderlinePreference, forModule: module)
             ? .words
             : .numbers
@@ -430,8 +442,8 @@ enum StrongsDisplay: String, CaseIterable, Identifiable {
 
     /// Writes both keys `current(forModule:)` reads. Off clears the underline
     /// key too: it is not read while Strong's is off, but left on it would make
-    /// Underlined Words of anything that later turns `strongsPreference` on by
-    /// itself — a seeded container, a `-strongsPreference_KJV YES` argument —
+    /// Underlined Words (or Invisible) of anything that later turns
+    /// `strongsPreference` on by itself — a seeded container, a `-strongsPreference_KJV YES` argument —
     /// where that has always meant the numbers.
     static func write(_ display: StrongsDisplay,
                       forModule module: String,
@@ -439,6 +451,9 @@ enum StrongsDisplay: String, CaseIterable, Identifiable {
         defaults.psSet(display != .off, forPref: Defaults.strongsPreference, module: module)
         defaults.psSet(display == .words,
                        forPref: Defaults.strongsUnderlinePreference,
+                       module: module)
+        defaults.psSet(display == .invisible,
+                       forPref: Defaults.strongsInvisiblePreference,
                        module: module)
     }
 }

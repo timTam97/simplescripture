@@ -399,7 +399,8 @@ enum ChapterTextRenderer {
     ///    `ChapterHeading.strongsMarks`) — every word in the chapter its verse's
     ///    word map tags with one of `numbers`, each at its own place;
     ///  * with `linkingWords`, every word the word map tags, linked to its
-    ///    numbers (`strongsWords`): Underlined Words mode.
+    ///    numbers (`strongsWords`): Underlined Words mode, or Invisible's
+    ///    (`underliningWords` false) with no underline drawn.
     ///
     /// With no `numbers` and no `linkingWords`, the annotations come off.
     ///
@@ -419,6 +420,7 @@ enum ChapterTextRenderer {
     /// 0 is the intro, which has no word map.
     static func annotatingStrongs(highlighting numbers: Set<String>,
                                   linkingWords: Bool,
+                                  underliningWords: Bool = true,
                                   wordMaps: [Int: String],
                                   taggedIn tagged: ChapterDocument,
                                   in document: ChapterDocument) -> ChapterDocument {
@@ -479,7 +481,8 @@ enum ChapterTextRenderer {
                                     }
                                 }
                                 links += pieces.map {
-                                    StrongsWordLink(range: $0, numbers: word.numbers)
+                                    StrongsWordLink(range: $0, numbers: word.numbers,
+                                                    isUnderlined: underliningWords)
                                 }
                             }
                         }
@@ -536,9 +539,11 @@ enum ChapterTextRenderer {
                 text[range].foregroundColor = .primary
             }
             text[start..<end].link = url
-            text[start..<end].underlineStyle = Text.LineStyle(
-                pattern: .solid, color: .secondary
-            )
+            if word.isUnderlined {
+                text[start..<end].underlineStyle = Text.LineStyle(
+                    pattern: .solid, color: .secondary
+                )
+            }
         }
     }
 

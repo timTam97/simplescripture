@@ -178,6 +178,7 @@ typedef enum {
 		// from attributeValueForEntryData: && getChapter:
 #define DefaultsStrongsPreference					@"strongsPreference"
 #define DefaultsStrongsUnderlinePreference			@"strongsUnderlinePreference"
+#define DefaultsStrongsInvisiblePreference			@"strongsInvisiblePreference"
 #define DefaultsMorphPreference						@"morphPreference"
 #define DefaultsScriptRefsPreference				@"scriptRefsPreference"
 #define DefaultsFootnotesPreference					@"footnotesPreference"

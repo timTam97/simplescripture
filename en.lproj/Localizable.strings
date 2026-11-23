@@ -285,10 +285,11 @@
 // Commentary tabs). These rows replaced the buried per-module preferences screen.
 "PreferencesMorphTagsTitle" = "Morphological Tags";
 "VoiceOverDisplaySettingsButton" = "Display Settings";
-// The Strong's Numbers row is a submenu of three choices (`StrongsDisplay`).
+// The Strong's Numbers row is a submenu of four choices (`StrongsDisplay`).
 "PreferencesStrongsDisplayOff" = "Off";
 "PreferencesStrongsDisplayNumbers" = "Numbers";
 "PreferencesStrongsDisplayWords" = "Underlined Words";
+"PreferencesStrongsDisplayInvisible" = "Invisible";
 // The study popup's selector for a word with several Strong's numbers (VoiceOver
 // reads it; the segments show the numbers).
 "StrongsWordNumbersPicker" = "Strong's Numbers";

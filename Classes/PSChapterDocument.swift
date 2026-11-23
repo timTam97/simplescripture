@@ -230,6 +230,9 @@ struct ChapterHeading: Equatable, Hashable {
 struct StrongsWordLink: Equatable, Hashable {
     var range: Range<Int>
     var numbers: [String]
+    /// Whether the word is drawn underlined: Underlined Words yes, Invisible
+    /// (`StrongsDisplay.invisible`) no. Either way it is a link.
+    var isUnderlined = true
 }
 
 /// One verse row: the unit the `LazyVStack` renders and scrolls to.

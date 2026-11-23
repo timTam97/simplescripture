@@ -88,6 +88,10 @@ enum Defaults {
     /// With `strongsPreference` on: underline the words the numbers tag instead
     /// of showing the numbers (`StrongsDisplay`). Absent reads as off.
     static let strongsUnderlinePreference  = "strongsUnderlinePreference"
+    /// With `strongsPreference` on: link the words the numbers tag exactly as
+    /// Underlined Words does, but draw no underline (`StrongsDisplay.invisible`).
+    /// Wins over `strongsUnderlinePreference`. Absent reads as off.
+    static let strongsInvisiblePreference  = "strongsInvisiblePreference"
     static let morphPreference             = "morphPreference"
     static let scriptRefsPreference        = "scriptRefsPreference"
     static let footnotesPreference         = "footnotesPreference"

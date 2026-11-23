@@ -135,11 +135,12 @@ final class LaunchCoordinator {
         // `testResetClearsEveryDisplayToggleTheReaderOffers`, which takes its keys
         // from `ReaderDisplayToggle.toggles` (every key a row writes,
         // `preferences`): a new row, or a new key behind one, has to be added here
-        // too. The Strong's row writes two (`StrongsDisplay`).
+        // too. The Strong's row writes three (`StrongsDisplay`).
         let modulePreferences = [
             Defaults.redLetterPreference,
             Defaults.strongsPreference,
             Defaults.strongsUnderlinePreference,
+            Defaults.strongsInvisiblePreference,
             Defaults.morphPreference,
             Defaults.greekAccentsPreference,
             Defaults.hvpPreference,

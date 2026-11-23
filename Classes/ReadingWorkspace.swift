@@ -255,17 +255,16 @@ final class ReaderPaneModel {
     }
 
     /// `document` with its Strong's annotations: `searchHighlightStrongs`'
-    /// words marked, and in Underlined Words mode (`StrongsDisplay.words`)
-    /// every tagged word linked to its numbers. Both come off when they no
-    /// longer apply.
+    /// words marked, and in Underlined Words or Invisible mode
+    /// (`StrongsDisplay.linksWords`) every tagged word linked to its numbers.
+    /// Both come off when they no longer apply.
     ///
     /// The store is read only to annotate: a chapter drawn with neither costs
     /// nothing here, and one with nothing on it is returned as it is. With
     /// both, the word maps and the tagged copy are read once.
     private func annotatingStrongs(_ document: ChapterDocument) -> ChapterDocument {
-        let linkingWords = moduleName.map {
-            StrongsDisplay.current(forModule: $0) == .words
-        } ?? false
+        let display = moduleName.map { StrongsDisplay.current(forModule: $0) }
+        let linkingWords = display?.linksWords ?? false
         guard !searchHighlightStrongs.isEmpty || linkingWords else {
             let isAnnotated = document.verses.contains {
                 !$0.strongsMarks.isEmpty || !$0.strongsWords.isEmpty
@@ -307,6 +306,7 @@ final class ReaderPaneModel {
         return ChapterTextRenderer.annotatingStrongs(
             highlighting: Set(searchHighlightStrongs),
             linkingWords: linkingWords,
+            underliningWords: display != .invisible,
             wordMaps: wordMaps,
             taggedIn: tagged,
             in: document
@@ -1704,7 +1704,7 @@ final class ReadingWorkspaceModel {
         pane.rebuildDisplayToggles()
     }
 
-    /// Writes a Strong's choice (`StrongsDisplay`, two per-module keys) and
+    /// Writes a Strong's choice (`StrongsDisplay`, three per-module keys) and
     /// re-renders, as `applyDisplayToggle` does for a flip.
     private func applyStrongsDisplay(
         _ display: StrongsDisplay,

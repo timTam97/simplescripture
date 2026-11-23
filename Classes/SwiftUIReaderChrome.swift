@@ -37,14 +37,15 @@ private enum ReaderFeature {
 }
 
 /// One row of the per-tab display menu: a boolean toggle over a per-module
-/// preference key, or (Strong's) a choice among `StrongsDisplay`'s three.
+/// preference key, or (Strong's) a choice among `StrongsDisplay`'s four.
 struct ReaderDisplayToggle: Identifiable, Equatable {
     /// How the row is drawn and what it writes.
     enum Control: Equatable {
         /// A checkmark row that flips `preference`.
         case toggle
-        /// A submenu of Off / Numbers / Underlined Words, over `preference`
-        /// and `Defaults.strongsUnderlinePreference` (`StrongsDisplay`).
+        /// A submenu of Off / Numbers / Underlined Words / Invisible, over
+        /// `preference`, `Defaults.strongsUnderlinePreference` and
+        /// `Defaults.strongsInvisiblePreference` (`StrongsDisplay`).
         case strongsDisplay
     }
 
@@ -65,7 +66,8 @@ struct ReaderDisplayToggle: Identifiable, Equatable {
     var preferences: [String] {
         switch control {
         case .toggle: [preference]
-        case .strongsDisplay: [preference, Defaults.strongsUnderlinePreference]
+        case .strongsDisplay: [preference, Defaults.strongsUnderlinePreference,
+                                 Defaults.strongsInvisiblePreference]
         }
     }
 
@@ -950,7 +952,7 @@ private struct ReaderDisplayToggleButton: View {
     }
 }
 
-/// The Strong's row: a submenu of Off / Numbers / Underlined Words, with the
+/// The Strong's row: a submenu of Off / Numbers / Underlined Words / Invisible, with the
 /// current choice under its title. A binding whose setter goes through the
 /// host's write-then-redisplay path, as `ReaderDisplayToggleButton` does,
 /// rather than one that owns the pref keys.
