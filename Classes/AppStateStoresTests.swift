@@ -4219,12 +4219,13 @@ final class AppStateStoresTests: XCTestCase {
             "KJV earns six rows in this order, with no cross-references row."
         )
         XCTAssertFalse(kjv.contains { $0.id == "xref" })
-        // Strong's is a choice of three (`StrongsDisplay`) over two keys; every
+        // Strong's is a choice of four (`StrongsDisplay`) over three keys; every
         // other row is a flip of one.
         XCTAssertEqual(kjv.map(\.control),
                        [.strongsDisplay, .toggle, .toggle, .toggle, .toggle, .toggle])
         XCTAssertEqual(kjv.first?.preferences,
-                       [Defaults.strongsPreference, Defaults.strongsUnderlinePreference])
+                       [Defaults.strongsPreference, Defaults.strongsUnderlinePreference,
+                        Defaults.strongsInvisiblePreference])
         // Each row must carry the same unsuffixed pref name the UIKit menu wrote,
         // because the persisted key is "<pref>_<ModuleName>".
         XCTAssertEqual(
