@@ -279,15 +279,18 @@ final class PersistedFormatTests: XCTestCase {
         XCTAssertEqual(swift, "a_b_c_d")
     }
 
-    /// The Strong's choice's two keys, as they are saved (`StrongsDisplay`).
+    /// The Strong's choice's three keys, as they are saved (`StrongsDisplay`).
     /// `strongsPreference` is the key every saved Strong's setting is already
-    /// under; `strongsUnderlinePreference` joined it for Underlined Words.
+    /// under; `strongsUnderlinePreference` joined it for Underlined Words, and
+    /// `strongsInvisiblePreference` for Invisible.
     func testModuleKey_strongsDisplayKeysAreTheirWireStrings() {
         let defaults = UserDefaults.standard
         XCTAssertEqual(defaults.psModuleKey(Defaults.strongsPreference, "KJV"),
                        "strongsPreference_KJV")
         XCTAssertEqual(defaults.psModuleKey(Defaults.strongsUnderlinePreference, "KJV"),
                        "strongsUnderlinePreference_KJV")
+        XCTAssertEqual(defaults.psModuleKey(Defaults.strongsInvisiblePreference, "KJV"),
+                       "strongsInvisiblePreference_KJV")
     }
 
     // MARK: - HistoryStore iCloud merge / cap / dedup

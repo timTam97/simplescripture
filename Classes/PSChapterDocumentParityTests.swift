@@ -2430,6 +2430,152 @@ final class PSChapterDocumentParityTests: XCTestCase {
         )
     }
 
+    /// Invisible links the words Underlined Words does, to the same numbers,
+    /// and draws no underline; each word's link names the word itself
+    /// (`?at=<id>`), which is what a tap flashes; and the flash is drawn over
+    /// everything else on the word.
+    @MainActor
+    func testInvisibleLinksTheSameWordsWithNoUnderlineAndATapFlashesItsOwn() throws {
+        let reader = PSContentReader.shared
+        let style = ChapterTextRenderer.Style.current()
+
+        /// `ref` with the words linked, red letter and headings on, the
+        /// markers off: underlined, or not.
+        func chapter(_ ref: String, underlined: Bool,
+                     line: UInt = #line) throws -> ChapterDocument {
+            var options = PSChapterExpander.Options.allOff
+            options.redLetter = true
+            options.headings = true
+            let shown = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: options, applyBookmarkHighlights: false), ref, line: line)
+            let tagged = try XCTUnwrap(reader.chapterDocument(
+                module: "KJV", ref: ref, kind: .bible,
+                options: .allOn, applyBookmarkHighlights: false), ref, line: line)
+            return ChapterTextRenderer.annotatingStrongs(
+                highlighting: [], linkingWords: true, underliningWords: underlined,
+                wordMaps: reader.wordMaps(module: "KJV", ref: ref),
+                taggedIn: tagged, in: shown)
+        }
+        /// Every text of `document` as drawn, a verse's headings ahead of it.
+        func texts(_ document: ChapterDocument,
+                   flashing flash: Int? = nil) -> [AttributedString] {
+            document.verses.flatMap { verse in
+                verse.headings.map {
+                    ChapterTextRenderer.text(for: $0, style: style, flashing: flash)
+                } + [ChapterTextRenderer.text(for: verse, style: style, flashing: flash)]
+            }
+        }
+        /// Every word link of `document`, a verse's headings ahead of it.
+        func words(_ document: ChapterDocument) -> [StrongsWordLink] {
+            document.verses.flatMap { $0.headings.flatMap(\.strongsWords) + $0.strongsWords }
+        }
+
+        for ref in ["Genesis 1", "John 3", "Psalms 3"] {
+            let underlined = try chapter(ref, underlined: true)
+            let invisible = try chapter(ref, underlined: false)
+            let linked = words(underlined)
+            XCTAssertFalse(linked.isEmpty, ref)
+            XCTAssertTrue(linked.allSatisfy(\.isUnderlined), ref)
+            XCTAssertEqual(words(invisible), linked.map {
+                var word = $0
+                word.isUnderlined = false
+                return word
+            }, "\(ref): Invisible linked other words than Underlined Words")
+
+            // One id per word, counted from 0 in reading order; the pieces
+            // of a word share it.
+            var ids: [Int] = []
+            for word in linked where ids.last != word.id { ids.append(word.id) }
+            XCTAssertEqual(ids, Array(0..<ids.count), ref)
+
+            // Drawn: the same links, the underline only in Underlined Words,
+            // and each link names its own word.
+            let drawnUnderlined = texts(underlined)
+            let drawnInvisible = texts(invisible)
+            func links(_ texts: [AttributedString]) -> [[URL?]] {
+                texts.map { text in text.runs[\.link].map { link, _ in link } }
+            }
+            XCTAssertEqual(links(drawnInvisible), links(drawnUnderlined), ref)
+            var linkedIDs = Set<Int>()
+            for text in drawnUnderlined {
+                for run in text.runs {
+                    let piece = String(text[run.range].characters)
+                    guard let url = run.link else {
+                        XCTAssertNil(run.underlineStyle, "\(ref): \(piece)")
+                        continue
+                    }
+                    guard case .strongsWord? = InlineLink(url: url) else { continue }
+                    XCTAssertNotNil(run.underlineStyle, "\(ref): \(piece)")
+                    linkedIDs.insert(try XCTUnwrap(InlineLink.strongsWordID(of: url),
+                                                   "\(ref): \(url)"))
+                }
+            }
+            XCTAssertEqual(linkedIDs, Set(ids), ref)
+            for text in drawnInvisible {
+                for run in text.runs {
+                    XCTAssertNil(run.underlineStyle,
+                                 "\(ref): Invisible underlined \(String(text[run.range].characters))")
+                }
+            }
+
+            // The flash lands on its own word, every piece of it, and on no other.
+            let id = try XCTUnwrap(ids.dropFirst(ids.count / 2).first)
+            for text in texts(invisible, flashing: id) {
+                for run in text.runs {
+                    let isFlashed = run.backgroundColor == ChapterTextRenderer.strongsFlashColour
+                    let url = run.link
+                    XCTAssertEqual(isFlashed, url.flatMap(InlineLink.strongsWordID(of:)) == id,
+                                   "\(ref): \(String(text[run.range].characters))")
+                }
+            }
+        }
+
+        // A link's URL carries its word, and still means the numbers alone.
+        let url = try XCTUnwrap(InlineLink.strongsWordURL(numbers: ["H0853", "H01254"], id: 7))
+        XCTAssertEqual(url.absoluteString, "pslink://strongsword/H0853/H01254?at=7")
+        XCTAssertEqual(InlineLink(url: url), .strongsWord(numbers: ["H0853", "H01254"]))
+        XCTAssertEqual(InlineLink.strongsWordID(of: url), 7)
+        XCTAssertNil(InlineLink.strongsWordID(of: try XCTUnwrap(
+            InlineLink.strongs(type: "Hebrew", value: "0430").url)))
+
+        // Over a bookmark colour and a search jacket, the flash still shows,
+        // with the body colour for the black they draw; Christ's words stay red.
+        let genesis = try chapter("Genesis 1", underlined: false)
+        var bookmarked = try XCTUnwrap(genesis.verses.first { $0.number == 1 })
+        bookmarked.highlightColour = "rgba(255,0,0,0.5)"
+        var searched = style
+        searched.highlightTerms = ["God"]
+        func flashed(_ word: String, in verse: ChapterVerse,
+                     style: ChapterTextRenderer.Style,
+                     line: UInt = #line) throws -> AttributedString {
+            let plain = ChapterTextRenderer.text(for: verse, style: style)
+            let range = try XCTUnwrap(plain.range(of: word), word, line: line)
+            let id = try XCTUnwrap(plain[range].link.flatMap(InlineLink.strongsWordID(of:)),
+                                   word, line: line)
+            let drawn = ChapterTextRenderer.text(for: verse, style: style, flashing: id)
+            return AttributedString(drawn[try XCTUnwrap(drawn.range(of: word), line: line)])
+        }
+        for word in ["God", "created"] {
+            let drawn = try flashed(word, in: bookmarked, style: searched)
+            for run in drawn.runs {
+                XCTAssertEqual(run.backgroundColor, ChapterTextRenderer.strongsFlashColour,
+                               "\(word): the bookmark colour or the jacket hid the flash")
+                XCTAssertEqual(run.foregroundColor, .primary, word)
+            }
+        }
+        let unflashed = ChapterTextRenderer.text(for: bookmarked, style: searched)
+        let heaven = try XCTUnwrap(unflashed.range(of: "heaven"))
+        XCTAssertNotEqual(unflashed[heaven].backgroundColor,
+                          ChapterTextRenderer.strongsFlashColour)
+        let john = try XCTUnwrap(try chapter("John 3", underlined: false)
+            .verses.first { $0.number == 16 })
+        for run in try flashed("loved", in: john, style: style).runs {
+            XCTAssertEqual(run.backgroundColor, ChapterTextRenderer.strongsFlashColour)
+            XCTAssertEqual(run.foregroundColor, .wordOfChrist)
+        }
+    }
+
     // MARK: - The flowed paragraph's join
 
     /// Flowing verses have a space between them, and a verse number cannot be

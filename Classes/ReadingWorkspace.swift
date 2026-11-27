@@ -1181,20 +1181,21 @@ final class ReaderPaneModel {
     /// when none is. The rows read it, so setting it redraws them with the word
     /// highlighted.
     var flashedStrongsWord: Int?
-    @ObservationIgnored private var strongsFlashGeneration = 0
+    /// The wait that ends the flash showing; internal so a test can await it.
+    @ObservationIgnored private(set) var strongsFlashFade: Task<Void, Never>?
 
     /// How long a tapped word stays highlighted.
     static let strongsFlashDuration: Duration = .milliseconds(450)
 
     /// Highlights the word a tap landed on for a moment, so the reader can see
-    /// which one it was. A second tap before the first has faded moves it.
+    /// which one it was. A second tap before the first has faded moves it, and
+    /// the first one's fade is cancelled, so it cannot end the second early.
     func flashStrongsWord(_ id: Int) {
-        strongsFlashGeneration += 1
-        let generation = strongsFlashGeneration
+        strongsFlashFade?.cancel()
         flashedStrongsWord = id
-        Task { @MainActor [weak self] in
+        strongsFlashFade = Task { @MainActor [weak self] in
             try? await Task.sleep(for: Self.strongsFlashDuration)
-            guard let self, self.strongsFlashGeneration == generation else { return }
+            guard !Task.isCancelled, let self else { return }
             self.flashedStrongsWord = nil
         }
     }

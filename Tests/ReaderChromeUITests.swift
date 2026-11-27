@@ -308,21 +308,25 @@ final class ReaderChromeUITests: SimpleScriptureUITestCase {
         dismissMenu()
     }
 
-    /// The Strong's row offers Off, Numbers and Underlined Words, says which
-    /// is chosen, and the reader follows each choice: the markers with
-    /// Numbers, the words as links with Underlined Words, neither with Off.
+    /// The Strong's row offers Off, Numbers, Underlined Words and Invisible,
+    /// says which is chosen, and the reader follows each choice: the markers
+    /// with Numbers, the words as links with Underlined Words and Invisible,
+    /// neither with Off.
     ///
     /// Chosen through the menu, so the keys are not launch arguments (an
-    /// argument would shadow the menu's writes), and the test ends on Off:
-    /// a fresh clone's choice, and the one every other test expects unless it
-    /// passes its own. MEASURED (iOS 27.2): before the words' text was keyed
-    /// on whether it links them (`ChapterRunsText.linksWords`), Off to
-    /// Underlined Words drew the underlines with no link in the hierarchy,
-    /// and back to Off left all 73 of Genesis 1's.
+    /// argument would shadow the menu's writes), and the test ends on
+    /// Invisible: what a fresh clone shows, so a test that runs after this one
+    /// on its clone sees what it would on any other. MEASURED (iOS 27.2):
+    /// before the words' text was keyed on whether it links them
+    /// (`ChapterRunsText.linksWords`), Off to Underlined Words drew the
+    /// underlines with no link in the hierarchy, and back to Off left all 73
+    /// of Genesis 1's. Underlined Words to Invisible changes the underline
+    /// alone, not the key, so the word is tapped after it: its link has to be
+    /// live, not one left over in the hierarchy.
     ///
     /// The place is a launch argument: the test pages nowhere.
     @MainActor
-    func testStrongsChoiceSwitchesBetweenNumbersAndUnderlinedWords() throws {
+    func testStrongsChoiceSwitchesAmongItsFourDisplays() throws {
         app.terminate()
         app.launchArguments += [
             "-lastRef", "Genesis 1",
@@ -352,18 +356,41 @@ final class ReaderChromeUITests: SimpleScriptureUITestCase {
         XCTAssertTrue(marker.waitForNonExistence(timeout: 10),
                       "Off left the markers")
         XCTAssertFalse(word.exists, "Off left the words linked")
-        // Off straight from Underlined Words takes the links off too.
+
+        // Invisible from Off puts the links in, and Off takes them out again.
+        chooseStrongsDisplay("Invisible", from: "Off")
+        XCTAssertTrue(word.waitForExistence(timeout: 10),
+                      "Invisible did not make \"In the beginning\" a link")
+        XCTAssertFalse(marker.exists, "Invisible drew the numbers")
+        chooseStrongsDisplay("Off", from: "Invisible")
+        XCTAssertTrue(word.waitForNonExistence(timeout: 10),
+                      "Off from Invisible left the words' links in the hierarchy")
+
+        // Underlined Words to Invisible keeps the links, and they still work.
         chooseStrongsDisplay("Underlined Words", from: "Off")
         XCTAssertTrue(word.waitForExistence(timeout: 10))
-        chooseStrongsDisplay("Off", from: "Underlined Words")
-        XCTAssertTrue(word.waitForNonExistence(timeout: 10),
-                      "Off from Underlined Words left the words' links in the hierarchy")
+        chooseStrongsDisplay("Invisible", from: "Underlined Words")
+        XCTAssertTrue(word.waitForExistence(timeout: 10),
+                      "Underlined Words to Invisible took the words' links away")
+        XCTAssertFalse(marker.exists, "Invisible drew the numbers")
 
         // The row reads the choice it was left on.
         openReadingOverflowMenu()
         XCTAssertTrue(strongsDisplayRow.waitForExistence(timeout: 5))
-        XCTAssertEqual(strongsDisplayRow.label, "Strong's Numbers, Off")
+        XCTAssertEqual(strongsDisplayRow.label, "Strong's Numbers, Invisible")
         dismissMenu()
+
+        word.tap()
+        let popup = app.descendants(matching: .any)["study.popup"]
+        XCTAssertTrue(popup.firstMatch.waitForExistence(timeout: 10),
+                      "a word's link did not open the study popup after Underlined "
+                      + "Words to Invisible")
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "H7225")
+            ).firstMatch.exists,
+            "the study popup did not open on H7225"
+        )
     }
 
     // MARK: - Helpers

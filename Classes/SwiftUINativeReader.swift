@@ -149,13 +149,14 @@ enum ChapterTextRenderer {
     /// top**, so yellow paints over the bookmark colour on the matching words only.
     /// Painting the bookmark colour over the finished string would repaint the whole
     /// verse and erase every match. It lives here rather than in the two row views
-    /// so there is one copy and one order.
+    /// so there is one copy and one order. The word a tap has just landed on
+    /// (`flash`, `ReaderPaneModel.flashedStrongsWord`) goes over all of them.
     static func text(for verse: ChapterVerse, style: Style,
                      flashing flash: Int? = nil) -> AttributedString {
         var out = attributed(runs: verse.runs, style: style)
         // Underlined Words' links go on first: the bookmark colour and the
         // jackets paint over them as over any text.
-        linkStrongsWords(verse.strongsWords, flashing: flash, in: &out)
+        linkStrongsWords(verse.strongsWords, in: &out)
         if let colour = verse.highlightColour,
            let background = Color(bookmarkRGBAString: colour),
            let last = out.characters.lastIndex(where: { !$0.isWhitespace }) {
@@ -180,6 +181,7 @@ enum ChapterTextRenderer {
         // A Strong's result's words: the same jacket, over the bookmark colour
         // for the same reason.
         jacket(verse.strongsMarks, in: &out)
+        flashStrongsWord(flash, among: verse.strongsWords, in: &out)
         return out
     }
 
@@ -510,8 +512,10 @@ enum ChapterTextRenderer {
         return annotated
     }
 
-    /// Link and underline each of `words` (`ChapterVerse.strongsWords`) in
-    /// `text`, which is `attributed(runs:)` of the runs they were found in.
+    /// Link each of `words` (`ChapterVerse.strongsWords`) in `text`, which is
+    /// `attributed(runs:)` of the runs they were found in, and underline those
+    /// that are drawn underlined (`StrongsWordLink.isUnderlined`: Underlined
+    /// Words' are, Invisible's are not).
     ///
     /// **Applied straight after `attributed(runs:)`, before the bookmark colour
     /// and the search jacket**, which paint over it as they paint over any text.
@@ -522,7 +526,6 @@ enum ChapterTextRenderer {
     /// underline is grey whatever the text's colour, a lighter mark than the
     /// text so a page of tagged words still reads as text.
     static func linkStrongsWords(_ words: [StrongsWordLink],
-                                 flashing flash: Int? = nil,
                                  in text: inout AttributedString) {
         guard !words.isEmpty else { return }
         guard words.allSatisfy({ $0.range.lowerBound >= 0 }),
@@ -552,11 +555,39 @@ enum ChapterTextRenderer {
                     pattern: .solid, color: .secondary
                 )
             }
-            // The word just tapped (`ReaderPaneModel.flashStrongsWord`). Drawn
-            // here, with the link, so the bookmark colour and the search jacket
-            // go over it as over the underline.
-            if word.id == flash {
-                text[start..<end].backgroundColor = Color.accentColor.opacity(0.35)
+        }
+    }
+
+    /// The background a tapped word is flashed with (`flashStrongsWord`).
+    static let strongsFlashColour = Color.accentColor.opacity(0.35)
+
+    /// The word a tap has just landed on (`ReaderPaneModel.flashStrongsWord`),
+    /// every piece of it, among `words` (the text's `strongsWords`).
+    ///
+    /// **Painted last, over the bookmark colour and the search jackets.** It
+    /// is there to say which word the tap hit, and under either it said
+    /// nothing: both paint a whole background, and a bookmarked verse is one
+    /// from its first character to its last. Both also draw the text black for
+    /// their light backgrounds; the flash replaces the background, so black
+    /// goes back to the body colour, or dark mode draws black on a dark tint.
+    /// Any other colour the text has (Christ's words, supplied words) stays.
+    static func flashStrongsWord(_ id: Int?, among words: [StrongsWordLink],
+                                 in text: inout AttributedString) {
+        guard let id else { return }
+        let count = text.unicodeScalars.count
+        for word in words where word.id == id && !word.range.isEmpty {
+            guard word.range.lowerBound >= 0, word.range.upperBound <= count else {
+                assertionFailure("a flashed Strong's word runs off the end of its text")
+                continue
+            }
+            let start = text.index(text.startIndex,
+                                   offsetByUnicodeScalars: word.range.lowerBound)
+            let end = text.index(start, offsetByUnicodeScalars: word.range.count)
+            text[start..<end].backgroundColor = strongsFlashColour
+            let black = text[start..<end].runs[\.foregroundColor]
+                .compactMap { colour, range in colour == .black ? range : nil }
+            for range in black {
+                text[range].foregroundColor = .primary
             }
         }
     }
@@ -579,11 +610,12 @@ enum ChapterTextRenderer {
             run.style.insert(.bold)
             return run
         }, style: style)
-        linkStrongsWords(heading.strongsWords, flashing: flash, in: &out)
+        linkStrongsWords(heading.strongsWords, in: &out)
         // A Psalm's title is tagged like its verses, and a Strong's result
         // marks it too. A text search never matches it: the index has no
         // title text.
         jacket(heading.strongsMarks, in: &out)
+        flashStrongsWord(flash, among: heading.strongsWords, in: &out)
         return out
     }
 

@@ -51,6 +51,7 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
             "-strongsPreference_KJV", "YES",
             // Numbers, whatever a test before this one left the choice on.
             "-strongsUnderlinePreference_KJV", "NO",
+            "-strongsInvisiblePreference_KJV", "NO",
             "-headingsPreference_KJV", "YES",
             "-vplPreference_KJV", "YES",
         ]
@@ -153,7 +154,7 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
     /// numbers the chapter's markers carry for it: "In the beginning" is H07225.
     @MainActor
     func testUnderlinedWordOpensItsLexiconEntry() throws {
-        openGenesis1WithStrongsNumbers(underlined: true)
+        openGenesis1WithStrongsNumbers(shownAs: .underlinedWords)
         let word = strongsWordLink("pslink://strongsword/H07225")
         XCTAssertTrue(
             word.waitForExistence(timeout: 10),
@@ -182,7 +183,7 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
     /// markers stand, and the particle's comes first.
     @MainActor
     func testAWordWithSeveralNumbersOffersEach() throws {
-        openGenesis1WithStrongsNumbers(underlined: true)
+        openGenesis1WithStrongsNumbers(shownAs: .underlinedWords)
         let word = strongsWordLink("pslink://strongsword/H0853/H01254")
         XCTAssertTrue(
             word.waitForExistence(timeout: 10),
@@ -209,14 +210,61 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
         XCTAssertTrue(popup.firstMatch.exists, "choosing a number closed the popup")
     }
 
+    /// In Invisible mode a tagged word is the same link to its entry as in
+    /// Underlined Words, drawn with no underline, and the numbers are not
+    /// drawn. A tap still opens its entry.
+    ///
+    /// The underline is an attribute, which no XCUITest can see; the unit test
+    /// `testInvisibleLinksTheSameWordsWithNoUnderlineAndATapFlashesItsOwn`
+    /// pins its absence.
+    @MainActor
+    func testInvisibleWordOpensItsLexiconEntry() throws {
+        openGenesis1WithStrongsNumbers(shownAs: .invisible)
+        let word = strongsWordLink("pslink://strongsword/H07225")
+        XCTAssertTrue(
+            word.waitForExistence(timeout: 10),
+            "Genesis 1:1's \"In the beginning\" is not a link in Invisible"
+        )
+        XCTAssertEqual(word.label, "In the beginning")
+        XCTAssertFalse(app.links["pslink://strongs/Hebrew/07225"].exists,
+                       "Invisible drew the H07225 marker")
+        word.tap()
+
+        let popup = app.descendants(matching: .any)["study.popup"]
+        XCTAssertTrue(popup.firstMatch.waitForExistence(timeout: 10),
+                      "tapping a word in Invisible did not open the study popup")
+        XCTAssertTrue(
+            app.staticTexts.matching(
+                NSPredicate(format: "label CONTAINS %@", "H7225")
+            ).firstMatch.exists,
+            "the study popup did not open on H7225"
+        )
+    }
+
     // MARK: - Helpers
 
-    /// Relaunches at the top of Genesis 1 with the KJV's Strong's numbers showing.
+    /// What `openGenesis1WithStrongsNumbers` shows, each a full set of the
+    /// three keys `StrongsDisplay` reads.
+    enum StrongsShown {
+        case numbers, underlinedWords, invisible
+
+        var launchArguments: [String] {
+            [
+                "-strongsPreference_KJV", "YES",
+                "-strongsUnderlinePreference_KJV", self == .underlinedWords ? "YES" : "NO",
+                "-strongsInvisiblePreference_KJV", self == .invisible ? "YES" : "NO",
+            ]
+        }
+    }
+
+    /// Relaunches at the top of Genesis 1 with the KJV's Strong's numbers
+    /// shown as `shown`: the numbers, or the words they tag as links.
     ///
-    /// By launch argument, so the two lexicon tests need nothing from the
-    /// container or from the test before them. Strong's numbers are off until
-    /// someone turns them on, which is every fresh install and every simulator
-    /// clone `xcodebuild` makes, and there both used to skip and report green.
+    /// By launch argument, so the lexicon tests need nothing from the
+    /// container or from the test before them. The numbers are not shown until
+    /// someone chooses them (every fresh install and every simulator clone
+    /// `xcodebuild` makes has Invisible), and with them off the marker tests
+    /// used to skip and report green.
     /// An argument shadows its key for the run and writes nothing; a tap on the
     /// menu's toggle would leave the numbers on for every later test and run.
     ///
@@ -229,15 +277,14 @@ final class StudyPopupUITests: SimpleScriptureUITestCase {
     /// flowing with the numbers on, every element query took 2.2 s where it
     /// takes 0.35 s, and the four taps to Genesis 1 took 31 s.
     ///
-    /// `underlined` picks Underlined Words over the numbers, by argument too,
-    /// and either way: a run that left the choice on Underlined Words must not
-    /// take the markers away from the tests that tap them.
+    /// `shown` picks Underlined Words or Invisible over the numbers, by
+    /// argument too, and all three keys every time: a run that left the
+    /// choice on either must not take the markers away from the tests that
+    /// tap them.
     @MainActor
-    private func openGenesis1WithStrongsNumbers(underlined: Bool = false) {
+    private func openGenesis1WithStrongsNumbers(shownAs shown: StrongsShown = .numbers) {
         app.terminate()
-        app.launchArguments += [
-            "-strongsPreference_KJV", "YES",
-            "-strongsUnderlinePreference_KJV", underlined ? "YES" : "NO",
+        app.launchArguments += shown.launchArguments + [
             "-lastRef", "Genesis 1",
             "-bibleScrollPosition", "0",
             "-bibleVersePosition", "1",

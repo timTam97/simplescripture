@@ -431,16 +431,18 @@ enum StrongsDisplay: String, CaseIterable, Identifiable {
     /// `current(forModule:defaults:)`): the words are links, drawn plain.
     static let initial: StrongsDisplay = .invisible
 
-    /// The module's choice. **With neither `strongsPreference` nor
-    /// `strongsInvisiblePreference` stored, it is `initial`**: a first launch,
-    /// or after a reset (which removes both). Every choice the menu offers
-    /// writes `strongsPreference`, Off included, so an explicit choice always
-    /// wins. A `-strongsPreference_KJV YES` seed with the invisible key absent
-    /// still reads as the numbers, as it always has.
+    /// The module's choice. **With no `strongsPreference` stored, it is
+    /// `initial`**: a first launch, or after a reset (which removes all three
+    /// keys). Every choice the menu offers writes `strongsPreference`, Off
+    /// included, so an explicit choice always wins, and the other two keys
+    /// mean nothing until it is stored and on. A `-strongsPreference_KJV YES`
+    /// seed with the other two absent still reads as the numbers, as it always
+    /// has.
     static func current(forModule module: String,
                         defaults: UserDefaults = .standard) -> StrongsDisplay {
-        if defaults.object(forKey: defaults.psModuleKey(Defaults.strongsPreference, module)) == nil,
-           defaults.object(forKey: defaults.psModuleKey(Defaults.strongsInvisiblePreference, module)) == nil {
+        guard defaults.object(
+            forKey: defaults.psModuleKey(Defaults.strongsPreference, module)
+        ) != nil else {
             return initial
         }
         guard defaults.psBool(Defaults.strongsPreference, forModule: module) else {
@@ -454,11 +456,12 @@ enum StrongsDisplay: String, CaseIterable, Identifiable {
             : .numbers
     }
 
-    /// Writes both keys `current(forModule:)` reads. Off clears the underline
-    /// key too: it is not read while Strong's is off, but left on it would make
-    /// Underlined Words (or Invisible) of anything that later turns
-    /// `strongsPreference` on by itself — a seeded container, a `-strongsPreference_KJV YES` argument —
-    /// where that has always meant the numbers.
+    /// Writes the three keys `current(forModule:)` reads. Off clears the
+    /// underline and invisible keys too: neither is read while Strong's is off,
+    /// but left on either would make Underlined Words (or Invisible) of
+    /// anything that later turns `strongsPreference` on by itself — a seeded
+    /// container, a `-strongsPreference_KJV YES` argument — where that has
+    /// always meant the numbers.
     static func write(_ display: StrongsDisplay,
                       forModule module: String,
                       defaults: UserDefaults = .standard) {

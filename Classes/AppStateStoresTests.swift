@@ -1586,9 +1586,10 @@ final class AppStateStoresTests: XCTestCase {
             store: store
         )
         XCTAssertFalse(toggles.isEmpty)
-        // Every key a row writes: the Strong's row writes two (`StrongsDisplay`).
+        // Every key a row writes: the Strong's row writes three (`StrongsDisplay`).
         let preferences = toggles.flatMap(\.preferences)
         XCTAssertTrue(preferences.contains(Defaults.strongsUnderlinePreference))
+        XCTAssertTrue(preferences.contains(Defaults.strongsInvisiblePreference))
         for preference in preferences {
             defaults.psSet(
                 false,
@@ -1625,6 +1626,12 @@ final class AppStateStoresTests: XCTestCase {
                 Defaults.vplPreference,
                 forModule: BundledModules.bible
             )
+        )
+        // Strong's was Off (every key written false) and is the default again:
+        // the reader has not chosen since the reset.
+        XCTAssertEqual(
+            StrongsDisplay.current(forModule: BundledModules.bible, defaults: defaults),
+            .invisible
         )
     }
 
@@ -4313,59 +4320,83 @@ final class AppStateStoresTests: XCTestCase {
         XCTAssertEqual(chrome.strongsDisplay, .off)
     }
 
-    /// The Strong's choice reads every saved boolean as it always read, and
-    /// writes the two keys it reads.
+    /// The Strong's choice reads every saved boolean as it always read, writes
+    /// the three keys it reads, and is Invisible until the reader chooses.
     ///
     /// `strongsPreference` keeps its meaning — Strong's shown at all — so a saved
     /// `true`, and the `-strongsPreference_KJV YES` launch argument the
-    /// XCUITests pass, still mean the numbers. The underline key means nothing
-    /// while it is off.
-    func testStrongsDisplayReadsAndWritesBothKeys() {
+    /// XCUITests pass, still mean the numbers. The underline and invisible keys
+    /// mean nothing while it is off or absent, and the invisible key wins over
+    /// the underline key. Absent, it is the reader never having chosen (a first
+    /// launch, or after a reset): `StrongsDisplay.initial`, Invisible.
+    func testStrongsDisplayReadsAndWritesItsThreeKeys() {
         let module = BundledModules.bible
         let strongs = defaults.psModuleKey(Defaults.strongsPreference, module)
         let underline = defaults.psModuleKey(Defaults.strongsUnderlinePreference, module)
+        let invisible = defaults.psModuleKey(Defaults.strongsInvisiblePreference, module)
         XCTAssertEqual(strongs, "strongsPreference_KJV")
         XCTAssertEqual(underline, "strongsUnderlinePreference_KJV")
+        XCTAssertEqual(invisible, "strongsInvisiblePreference_KJV")
+        func current() -> StrongsDisplay {
+            StrongsDisplay.current(forModule: module, defaults: defaults)
+        }
+        func stored() -> [Bool?] {
+            [strongs, underline, invisible].map { defaults.object(forKey: $0) as? Bool }
+        }
 
         // Nothing stored: the reader has never chosen, and gets the default.
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
-                       .invisible)
+        XCTAssertEqual(StrongsDisplay.initial, .invisible)
+        XCTAssertEqual(current(), .invisible)
+        // The other two keys alone are no choice.
+        defaults.set(true, forKey: underline)
+        XCTAssertEqual(current(), .invisible)
+        defaults.set(false, forKey: invisible)
+        XCTAssertEqual(current(), .invisible)
+        defaults.removeObject(forKey: underline)
+        defaults.removeObject(forKey: invisible)
+
         defaults.set(false, forKey: strongs)
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults), .off,
-                       "An explicit Off wins over the default")
+        XCTAssertEqual(current(), .off, "An explicit Off wins over the default")
         defaults.set(true, forKey: strongs)
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
-                       .numbers)
+        XCTAssertEqual(current(), .numbers)
         // As a launch argument writes it: the string "YES".
         defaults.set("YES", forKey: strongs)
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
-                       .numbers)
+        XCTAssertEqual(current(), .numbers)
         defaults.set(true, forKey: underline)
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
-                       .words)
+        XCTAssertEqual(current(), .words)
+        defaults.set(true, forKey: invisible)
+        XCTAssertEqual(current(), .invisible, "The underline key won over the invisible key")
+        defaults.set(false, forKey: underline)
+        XCTAssertEqual(current(), .invisible)
+        defaults.set("NO", forKey: invisible)
+        XCTAssertEqual(current(), .numbers, "A NO argument for the invisible key is the numbers")
+        defaults.set(true, forKey: invisible)
+        defaults.set(true, forKey: underline)
         defaults.set(false, forKey: strongs)
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
-                       .off, "The underline key alone shows nothing.")
+        XCTAssertEqual(current(), .off, "The underline and invisible keys alone show nothing.")
 
         StrongsDisplay.write(.numbers, forModule: module, defaults: defaults)
-        XCTAssertEqual(defaults.object(forKey: strongs) as? Bool, true)
-        XCTAssertEqual(defaults.object(forKey: underline) as? Bool, false)
+        XCTAssertEqual(stored(), [true, false, false])
         StrongsDisplay.write(.words, forModule: module, defaults: defaults)
-        XCTAssertEqual(defaults.object(forKey: strongs) as? Bool, true)
-        XCTAssertEqual(defaults.object(forKey: underline) as? Bool, true)
+        XCTAssertEqual(stored(), [true, true, false])
+        StrongsDisplay.write(.invisible, forModule: module, defaults: defaults)
+        XCTAssertEqual(stored(), [true, false, true])
         StrongsDisplay.write(.off, forModule: module, defaults: defaults)
-        XCTAssertEqual(defaults.object(forKey: strongs) as? Bool, false)
-        XCTAssertEqual(defaults.object(forKey: underline) as? Bool, false,
-                       "Off left the underline on for the next thing to turn Strong's on")
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults), .off)
+        XCTAssertEqual(stored(), [false, false, false],
+                       "Off left a key on for the next thing to turn Strong's on")
+        XCTAssertEqual(current(), .off)
         defaults.set(true, forKey: strongs)
-        XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
-                       .numbers, "Strong's turned on after Off is the numbers")
+        XCTAssertEqual(current(), .numbers, "Strong's turned on after Off is the numbers")
         for display in StrongsDisplay.allCases {
             StrongsDisplay.write(display, forModule: module, defaults: defaults)
-            XCTAssertEqual(StrongsDisplay.current(forModule: module, defaults: defaults),
-                           display)
+            XCTAssertEqual(current(), display)
         }
+
+        // A reset removes all three (`LaunchCoordinator.resetPreferences`).
+        for key in [strongs, underline, invisible] {
+            defaults.removeObject(forKey: key)
+        }
+        XCTAssertEqual(current(), .invisible)
     }
 
     /// The accessibility-identifier prefix keeps the UIKit menu's per-tab spelling
@@ -6802,16 +6833,20 @@ final class AppStateStoresTests: XCTestCase {
 
     /// Underlined Words draws the chapter with no Strong's markers and links
     /// every word they tag to its numbers, with a Strong's search's marks on
-    /// top; Numbers puts the markers back and takes the links off.
+    /// top; Invisible links the same words with no underline, and is what a
+    /// reader who has never chosen gets; Numbers puts the markers back and
+    /// takes the links off.
     ///
     /// The pane reads the choice at every render (`annotatingStrongs`), from
-    /// `UserDefaults.standard` as the reader does, so the two keys are put back
-    /// as they were.
+    /// `UserDefaults.standard` as the reader does, so the three keys are put
+    /// back as they were: all three, or a stored invisible key left behind
+    /// turns the host's reader from the default to Off.
     @MainActor
     func testUnderlinedWordsHideTheNumbersAndLinkTheWords() throws {
         try withSearchResultRoute { standard, workspace in
             let module = BundledModules.bible
-            let keys = [Defaults.strongsPreference, Defaults.strongsUnderlinePreference]
+            let keys = [Defaults.strongsPreference, Defaults.strongsUnderlinePreference,
+                        Defaults.strongsInvisiblePreference]
                 .map { standard.psModuleKey($0, module) }
             let saved = keys.map { standard.object(forKey: $0) }
             defer {
@@ -6843,7 +6878,35 @@ final class AppStateStoresTests: XCTestCase {
                             .allSatisfy { !$0.strongsWords.isEmpty },
                           "A verse of Genesis 1 has no word linked.")
 
+            XCTAssertTrue(pane.document.verses.allSatisfy {
+                $0.strongsWords.allSatisfy(\.isUnderlined)
+            }, "An Underlined Words link is drawn with no underline.")
+            let underlined = pane.document.verses.map(\.strongsWords)
+
+            // Invisible: the same links, word for word and id for id, none
+            // underlined. So is a reader who has never chosen.
+            @MainActor func checkInvisible(_ message: String) {
+                XCTAssertFalse(showsMarkers(), message)
+                let words = pane.document.verses.map(\.strongsWords)
+                XCTAssertEqual(words.map { $0.map(\.range) },
+                               underlined.map { $0.map(\.range) }, message)
+                XCTAssertEqual(words.map { $0.map(\.numbers) },
+                               underlined.map { $0.map(\.numbers) }, message)
+                XCTAssertEqual(words.map { $0.map(\.id) },
+                               underlined.map { $0.map(\.id) }, message)
+                XCTAssertTrue(words.allSatisfy { $0.allSatisfy { !$0.isUnderlined } },
+                              message)
+            }
+            StrongsDisplay.write(.invisible, forModule: module, defaults: standard)
+            workspace.redisplay(pane: .bible, restore: .verse)
+            checkInvisible("Invisible")
+            for key in keys { standard.removeObject(forKey: key) }
+            workspace.redisplay(pane: .bible, restore: .verse)
+            checkInvisible("Nothing chosen")
+
             // A Strong's search's marks go on with the links, from the same walk.
+            StrongsDisplay.write(.words, forModule: module, defaults: standard)
+            workspace.redisplay(pane: .bible, restore: .verse)
             pane.searchHighlightStrongs = PSSearchQuery.strongsTokens(fromUserInput: "H430")
             XCTAssertFalse(pane.document.verses.first { $0.number == 1 }?
                             .strongsMarks.isEmpty ?? true)
@@ -6886,6 +6949,32 @@ final class AppStateStoresTests: XCTestCase {
             XCTAssertEqual(workspace.studyPopup?.content.reference, "G2316")
             workspace.studyPopup = nil
         }
+    }
+
+    /// A tapped word is flashed for `strongsFlashDuration` and then let go; a
+    /// second tap moves the flash, and the first tap's fade cannot end the
+    /// second one early.
+    @MainActor
+    func testATappedWordFlashesUntilItFades() async throws {
+        let pane = ReaderPaneModel(mode: .bible)
+        XCTAssertNil(pane.flashedStrongsWord)
+
+        pane.flashStrongsWord(3)
+        XCTAssertEqual(pane.flashedStrongsWord, 3)
+        let first = try XCTUnwrap(pane.strongsFlashFade)
+        let started = ContinuousClock.now
+        pane.flashStrongsWord(5)
+        XCTAssertEqual(pane.flashedStrongsWord, 5)
+        // The first fade was cancelled: it returns at once, and leaves the
+        // second word flashing.
+        await first.value
+        XCTAssertEqual(pane.flashedStrongsWord, 5,
+                       "The first tap's fade ended the second tap's flash.")
+
+        await pane.strongsFlashFade?.value
+        XCTAssertNil(pane.flashedStrongsWord, "The flash did not fade.")
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - started,
+                                    ReaderPaneModel.strongsFlashDuration)
     }
 
     /// A reset leaves the result's chapter too, by the one path that is not a
